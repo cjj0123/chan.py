@@ -5,11 +5,16 @@ from Plot.AnimatePlotDriver import CAnimateDriver
 from Plot.PlotDriver import CPlotDriver
 
 if __name__ == "__main__":
-    code = "sz.000001"
-    begin_time = "2018-01-01"
+    code = "hk.00700"
+    begin_time = "2026-02-04"
     end_time = None
-    data_src = DATA_SRC.BAO_STOCK
-    lv_list = [KL_TYPE.K_DAY]
+    #data_src = DATA_SRC.BAO_STOCK
+    data_src = DATA_SRC.AKSHARE
+    lv_list = [
+        KL_TYPE.K_30M, 
+        KL_TYPE.K_5M, 
+        KL_TYPE.K_1M
+    ]
 
     config = CChanConfig({
         "bi_strict": True,
@@ -65,8 +70,7 @@ if __name__ == "__main__":
     chan = CChan(
         code=code,
         begin_time=begin_time,
-        end_time=end_time,
-        data_src=data_src,
+        data_src=DATA_SRC.AKSHARE,
         lv_list=lv_list,
         config=config,
         autype=AUTYPE.QFQ,
