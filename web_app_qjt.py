@@ -88,6 +88,7 @@ def plot_chan_level(raw_code, lv_type, level_name):
         st.caption(f"⚡ 1分钟线: 使用 AkShare (代码: {clean_code})，最近5天")
 
     try:
+        # 1. 定义配置 (保持不变)
         config = CChanConfig({
             "bi_strict": True,
             "zs_combine": True,
@@ -96,57 +97,87 @@ def plot_chan_level(raw_code, lv_type, level_name):
             "strategy_para": {
                 "use_qjt": True,         # 开启区间套
                 "strict_open": True,     # 严格开仓
-                
-                # 【设置止损止盈】
-                "max_sl_rate": 0.05,     # 最大止损率 (5%)
-                "max_profit_rate": 0.10, # 最大止盈率 (10%)
-                # 也可以扩展支持追踪止损
-                # "trailing_stop": True 
+                "max_sl_rate": 0.05,     # 止损
+                "max_profit_rate": 0.10, # 止盈
             }
         })
 
-        plot_config = {
-            "plot_kline": True,
-            "plot_bi": show_bi,
-            "plot_seg": show_seg,
-            "plot_zs": show_zs,
-            "plot_bsp": show_bsp,
-            "plot_macd": True,
-        }
+        # ==========================================
+        # 【修正步骤 A】: 先初始化 CChan 获取数据
+        # ==========================================
         
-        plot_para = {
-            "seg": {"width": 2, "color": "red"},
-            "bi": {"show_num": False},
-            "figure": {"w": 14, "h": 8}
-        }
+        # ⚠️ 关键：区间套(QJT)必须至少有两个级别。
+        # 如果您选择的是30分钟(K_30M)，必须同时传入5分钟(K_5M)作为次级别
+        # 这里做一个简单的自动判断逻辑示例：
+        req_lv_list = [lv_type]
+        if lv_type == KL_TYPE.K_30M:
+            req_lv_list.append(KL_TYPE.K_5M)
+        elif lv_type == KL_TYPE.K_DAY:
+            req_lv_list.append(KL_TYPE.K_30M)
+        # 如果是其他级别，建议手动指定，否则区间套无法计算(只会返回None)
 
         chan = CChan(
             code=clean_code,
             begin_time=current_begin_time,
             end_time=current_end_time,
-            data_src=current_src,
-            lv_list=[lv_type], 
+            data_src=current_src, # 确保这里是 DATA_SRC.FUTU
+            lv_list=req_lv_list,  # 使用包含次级别的列表
             config=config,
             autype=AUTYPE.QFQ
         )
         
+        # 数据基础校验
         if not chan[lv_type]:
-            return f"Error: {level_name} 数据为空。可能是代码错误或非交易日。"
+            return f"Error: {clean_code} 数据为空。可能是代码错误或非交易日。"
+        # CKLine_List 本身表现得就像一个列表，直接计算长度即可
+        if len(chan[lv_type]) < 5: 
+             return f"Error: 数据量太少 ({len(chan[lv_type] )}根)，无法作图。"
 
-        if len(chan[lv_type]) < 5:
-             return f"Error: 数据量太少 ({len(chan[lv_type])}根)，无法作图。"
+        # ==========================================
+        # 【修正步骤 B】: 数据有了之后，再定义绘图
+        # ==========================================
+        plot_config = {
+            "plot_kline": True,
+            "plot_bi": show_bi,
+            "plot_seg": show_seg,
+            "plot_zs": show_zs,
+            "plot_bsp": show_bsp,     # 基础买卖点
+            "plot_macd": True,
+            "plot_cbsp": True,        # 【关键】显示区间套虚线箭头
+        }
+        
+        plot_para = {
+            "figure": {"width": 20, "h": 10},
+            "cbsp": {
+                "plot_cover": True,   # 显示平仓信号
+                "fontsize": 14,
+                "buy_color": 'r',
+                "sell_color": 'g',
+            }
+        }
 
-        CPlotDriver(chan, plot_config=plot_config, plot_para=plot_para)
-        return plt.gcf()
+        # 3. 启动绘图 (此时 chan 已有值，不会报错)
+        plot_driver = CPlotDriver(
+            chan, 
+            plot_config=plot_config, 
+            plot_para=plot_para
+        )
+
+        # 4. 返回图表对象给 Streamlit
+        # 如果是在 web_app.py 中，通常返回 figure 对象
+        return plot_driver.figure
 
     except Exception as e:
+        import traceback
+        traceback.print_exc() # 在后台打印详细错误堆栈
+        
         err_msg = str(e)
         if "index out of range" in err_msg or "NoneType" in err_msg:
-            return (f"❌ 数据获取失败 (IndexError)。\n"
-                    f"建议：\n"
-                    f"1. 确认代码 {clean_code} 是否正确。\n"
-                    f"2. 如果是刚上市新股，可能无历史数据。\n"
-                    f"3. 检查网络连接。")
+            return (f"❌ 数据获取失败 (IndexError/NoneType)。\n"
+                    f"建议检查：\n"
+                    f"1. 股票代码 {clean_code} 是否支持富途获取。\n"
+                    f"2. 富途 OpenD 是否已开启并登录。\n"
+                    f"3. 对应级别的K线数据是否已下载或订阅。")
         return f"系统错误: {err_msg}"
 
 # --- 主界面 Tabs ---
