@@ -68,12 +68,6 @@ class CChanConfig:
         })
         self.boll_n = conf.get("boll_n", 20)
 
-        # ▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼▼
-        # 【核心修复】添加对策略参数的读取，解决 unknown para 报错
-        self.cbsp_strategy = conf.get("cbsp_strategy", None)
-        self.strategy_para = conf.get("strategy_para", {})
-        # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
-
         self.set_bsp_config(conf)
 
         conf.check()
