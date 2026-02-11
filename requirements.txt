@@ -1,0 +1,6 @@
+streamlit
+matplotlib
+pandas
+futu-api
+baostock
+akshare

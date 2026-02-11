@@ -1,21 +1,11 @@
-import os
+from futu import *
 
-print("=== 当前工作目录 ===")
-cwd = os.getcwd()
-print(cwd)
+quote_ctx = OpenQuoteContext(host='127.0.0.1', port=11111)  # 创建行情对象
+print(quote_ctx.get_market_snapshot('HK.00700'))  # 获取港股 HK.00700 的快照数据
+quote_ctx.close() # 关闭对象，防止连接条数用尽
 
-print("\n=== 当前目录下的文件/文件夹 ===")
-files = os.listdir(cwd)
-print(files)
 
-# 检查是否有 Data 或 data 文件夹
-data_dir = None
-if "Data" in files: data_dir = "Data"
-elif "data" in files: data_dir = "data"
+trd_ctx = OpenSecTradeContext(host='127.0.0.1', port=11111)  # 创建交易对象
+print(trd_ctx.place_order(price=500.0, qty=100, code="HK.00700", trd_side=TrdSide.BUY, trd_env=TrdEnv.SIMULATE))  # 模拟交易，下单（如果是真实环境交易，在此之前需要先解锁交易密码）
 
-if data_dir:
-    print(f"\n=== 发现 '{data_dir}' 文件夹，里面的内容 ===")
-    print(os.listdir(os.path.join(cwd, data_dir)))
-else:
-    print("\n❌ 严重错误：当前目录下没有发现 'Data' 或 'data' 文件夹！")
-    print("请确保 web_app.py 放在 Chan.py 所在的同一个文件夹里。")
+trd_ctx.close()  # 关闭对象，防止连接条数用尽
