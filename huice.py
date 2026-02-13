@@ -1,102 +1,186 @@
+import sys
 import os
-import glob
 import pandas as pd
 from Chan import CChan
 from ChanConfig import CChanConfig
 from Common.CEnum import DATA_SRC, KL_TYPE, AUTYPE
-import DataAPI 
-from web_app_qjtFUTU import CFutuStockDriver_V3
+# 假设您之前的驱动和策略都在正确位置
+from DataAPI.CommonStockAPI import CCommonStockApi  # 您的CFutuStockDriver_V6
+from CustomBuySellPoint.StrategySecondTheorem import CStrategySecondTheorem
 
-# --- 劫持逻辑保持不变 ---
-class SimpleDriver:
-    def __init__(self, df): self.df = df
-    def get_full_data(self, *args, **kwargs): return self.df
+# -----------------------------------------------------------
+# 1. 简单的回测账户类
+# -----------------------------------------------------------
+class BacktestAccount:
+    def __init__(self, initial_cash=100000.0):
+        self.cash = initial_cash
+        self.stock_cnt = 0
+        self.trades = [] # 记录交易明细
 
-CURRENT_DF = None
-def patched_get_stock_api(*args, **kwargs): return SimpleDriver(CURRENT_DF)
-DataAPI.CreateStockAPI = patched_get_stock_api
-_original_get_stock_api = patched_get_stock_api
+    def buy(self, price, time, code):
+        if self.cash > 0:
+            # 全仓买入 (简化逻辑)
+            self.stock_cnt = int(self.cash / price)
+            cost = self.stock_cnt * price
+            self.cash -= cost
+            print(f"[{time}] 🔵 买入 {code}: 价格 {price}, 数量 {self.stock_cnt}")
+            self.trades.append({"action": "buy", "price": price, "time": time})
 
-def run_backtest_scanner():
-    global CURRENT_DF
-    SCAN_LEVEL = KL_TYPE.K_5M
-    CACHE_DIR = os.path.join(os.getcwd(), "stock_cache")
-    INITIAL_CASH = 100000.0
-    COMMISSION = 0.0003
-    
-    config = CChanConfig()
-    config.bs_type = '1,1p,2,2s,3a,3b,1s,2s,3s'
-    config.zs_algo = 'normal'
-    config.bi_strict = False
-    
-    print(f"{'='*70}\n🚀 缠论回测系统(终极兼容版) | 初始资金: {INITIAL_CASH}\n{'='*70}")
+    def sell(self, price, time, code):
+        if self.stock_cnt > 0:
+            # 全仓卖出
+            revenue = self.stock_cnt * price
+            self.cash += revenue
+            print(f"[{time}] 🔴 卖出 {code}: 价格 {price}, 余额 {self.cash:.2f}")
+            self.trades.append({"action": "sell", "price": price, "time": time})
+            self.stock_cnt = 0
 
-    cache_files = glob.glob(os.path.join(CACHE_DIR, f"*{SCAN_LEVEL.name}*.parquet"))
-    
-    for file_path in cache_files:
-        code = os.path.basename(file_path).split(f"_{SCAN_LEVEL.name}")[0]
+# -----------------------------------------------------------
+# 2. 回测主逻辑
+# -----------------------------------------------------------
+def run_backtest(code):
+    # 配置：开启逐步回放 trigger_step
+    config = CChanConfig({
+        "bi_strict": True,
+        "trigger_step": True,  # <--- 关键：开启回放模式
+        "skip_step": 0,        # 可以跳过前面一部分K线不回测
+        "cbsp_strategy": CStrategySecondTheorem, # 您的策略
+        "strategy_para": {"strict_open": True}
+    })
+
+    # 初始化数据源 (这里沿用您之前写好的本地驱动注入逻辑)
+    # ... (此处省略注入代码，假设已注入 CFutuStockDriver_V6) ...
+    # 1. 补充必要的导入 (如果文件头部没有的话)
+from DataAPI.CommonStockAPI import CCommonStockApi
+from KLine.KLine_Unit import CKLine_Unit
+from Common.CEnum import DATA_FIELD
+from Common.CTime import CTime
+import pandas as pd
+from datetime import datetime
+import Chan  # 用于注入
+
+class CFutuStockDriver_V6(CCommonStockApi):
+    def __init__(self, code, k_type, begin_date, end_date, autype):
+        super(CFutuStockDriver_V6, self).__init__(code, k_type, begin_date, end_date, autype)
+        self.code = code
+        self.k_type = k_type
+        self.cache_dir = "stock_cache"  # 确保这个文件夹就在当前目录下
+
+    def get_kl_data(self):
+        # 根据级别匹配文件名后缀 (支持 30M 和 日线)
+        lv_suffix = "K_30M" if self.k_type == KL_TYPE.K_30M else "K_DAY"
+        file_path = os.path.join(self.cache_dir, f"{self.code}_{lv_suffix}.parquet")
+
+        if not os.path.exists(file_path):
+            print(f"⚠️ [回测警告] 缺失数据文件: {file_path}")
+            return
+
         try:
-            # 1. 读取并暴力清洗数据
-            raw_df = pd.read_parquet(file_path)
-            raw_df.columns = [c.lower() for c in raw_df.columns]
-            
-            # --- 🌟 关键：强制寻找并转换时间列 ---
-            t_col = next((c for c in ['time', 'date', 'item_time', 'timestamp'] if c in raw_df.columns), raw_df.columns[0])
-            
-            # 构建标准的 OHLCVT 结构
-            clean_df = pd.DataFrame()
-            # 尝试将时间转换为 datetime 类型，这是大多数回测引擎最喜欢的格式
-            clean_df['time'] = pd.to_datetime(raw_df[t_col])
-            clean_df['open'] = raw_df['open'].astype(float)
-            clean_df['high'] = raw_df['high'].astype(float)
-            clean_df['low'] = raw_df['low'].astype(float)
-            clean_df['close'] = raw_df['close'].astype(float)
-            clean_df['volume'] = raw_df['volume'].astype(float) if 'volume' in raw_df.columns else 0.0
-            
-            # 排序，确保时间轴正确
-            clean_df = clean_df.sort_values('time').reset_index(drop=True)
-            
-            CURRENT_DF = clean_df
-
-            # 2. 实例化
-            chan = CChan(
-                code=code,
-                begin_time=str(clean_df['time'].iloc[0]),
-                data_src=DATA_SRC.FUTU, 
-                lv_list=[SCAN_LEVEL],
-                config=config,
-                autype=AUTYPE.QFQ
-            )
-
-            mg_data = chan[SCAN_LEVEL]
-            bsp_list = sorted(mg_data.bs_point_lst.lst, key=lambda x: x.klu.idx)
-            
-            # --- 3. 模拟交易 ---
-            cash, hold_share, entry_price = INITIAL_CASH, 0, 0
-            trades_count, win_count = 0, 0
-
-            for bsp in bsp_list:
-                # 获取信号发生时的价格 (使用 K 线收盘价)
-                price = bsp.klu.klu_list[-1].close
-                bsp_type = bsp.type2str()
-                
-                if hold_share == 0 and bsp.is_buy and "3" in bsp_type:
-                    hold_share = (cash * (1 - COMMISSION)) / price
-                    cash, entry_price = 0, price
-                    trades_count += 1
-                elif hold_share > 0 and not bsp.is_buy:
-                    cash = hold_share * price * (1 - COMMISSION)
-                    if price > entry_price: win_count += 1
-                    hold_share = 0
-
-            final_val = cash if hold_share == 0 else hold_share * mg_data.lst[-1].close
-            ret = (final_val - INITIAL_CASH) / INITIAL_CASH
-            wr = (win_count / trades_count) if trades_count > 0 else 0
-
-            print(f"[{code:<10}] 收益: {ret:>7.2%} | 胜率: {wr:>6.1%} | 交易数: {trades_count}")
-
+            df = pd.read_parquet(file_path)
         except Exception as e:
-            print(f"[{code:<10}] ❌ 出错: {e}")
+            print(f"❌ 读取错误: {e}")
+            return
+
+        # --- 数据清洗与标准化 ---
+        # 1. 统一列名小写
+        df.columns = [c.lower() for c in df.columns]
+        
+        # 2. 映射常用列名
+        col_map = {
+            'time_key': 'time', 'code': 'code',
+            'vol': 'volume', 'amount': 'turnover'
+        }
+        df.rename(columns=col_map, inplace=True)
+        
+        # 3. 按时间正序排列
+        if 'time' in df.columns:
+            df.sort_values("time", inplace=True)
+        
+        # --- 逐行转换 ---
+        for _, row in df.iterrows():
+            # A. 时间解析 (兼容字符串和datetime对象)
+            raw_time = row['time']
+            dt_obj = None
+            if isinstance(raw_time, str):
+                time_str = raw_time.replace("/", "-")
+                if len(time_str) <= 10: time_str += " 00:00:00"
+                if len(time_str) == 16: time_str += ":00"
+                dt_obj = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
+            elif isinstance(raw_time, pd.Timestamp):
+                dt_obj = raw_time.to_pydatetime()
+            elif isinstance(raw_time, datetime):
+                dt_obj = raw_time
+            else:
+                dt_obj = pd.to_datetime(raw_time).to_pydatetime()
+
+            # B. 构造 CTime 对象 (必须)
+            final_time = CTime(dt_obj.year, dt_obj.month, dt_obj.day, dt_obj.hour, dt_obj.minute)
+
+            # C. 构造 K线单元
+            item_dict = {
+                DATA_FIELD.FIELD_TIME: final_time,
+                DATA_FIELD.FIELD_OPEN: float(row['open']),
+                DATA_FIELD.FIELD_HIGH: float(row['high']),
+                DATA_FIELD.FIELD_LOW: float(row['low']),
+                DATA_FIELD.FIELD_CLOSE: float(row['close']),
+                DATA_FIELD.FIELD_VOLUME: float(row.get('volume', 0.0)),
+                DATA_FIELD.FIELD_TURNOVER: float(row.get('turnover', 0.0)),
+                DATA_FIELD.FIELD_TURNRATE: 0.0
+            }
+
+            yield CKLine_Unit(item_dict)
+
+    def SetBasciInfo(self):
+        self.name = self.code
+
+# 💉【关键步骤】强制替换 CChan 的数据获取接口
+# 这样无论 data_src 填什么，都会执行上面的 CFutuStockDriver_V6
+Chan.CChan.GetStockAPI = lambda self: CFutuStockDriver_V6
+
+    # 初始化 CChan
+    # 注意：这里不需要 load_stock_data，初始化时就会建立生成器
+chan = CChan(
+        code=code,
+        begin_time="2023-01-01", # 回测开始时间
+        end_time="2023-12-31",
+        data_src=DATA_SRC.BAO_STOCK, # 占位符，实际用您注入的驱动
+        lv_list=[KL_TYPE.K_30M],
+        config=config,
+        autype=AUTYPE.QFQ
+    )
+
+account = BacktestAccount(100000)
+
+    # --- 逐K线回放循环 ---
+    # chan 是一个生成器，每次 yield 都会返回当前的 CChan 对象快照
+for snapshot_chan in chan:
+        kl_data = snapshot_chan[KL_TYPE.K_30M] # 获取当前级别的快照
+        
+        # 获取最新的 K 线时间 (用于日志)
+        current_klu = kl_data[-1][-1]
+        
+        # 检查策略是否产生信号
+        # cbsp_strategy 是在 ChanConfig 中配置的策略实例
+        # 我们可以检查 snapshot_chan.cbsp 列表是否有新信号
+        
+        # 更好的方法是直接调用策略的 update (框架内部已调用)，
+        # 我们只需要检查是否产生了新的 cbsp (自定义买卖点)
+        if hasattr(kl_data, 'cbsp_lst') and len(kl_data.cbsp_lst) > 0:
+            last_cbsp = kl_data.cbsp_lst[-1]
+            
+            # 必须判断信号是否是"当前K线"刚刚产生的
+            if last_cbsp.klu.idx == current_klu.idx:
+                
+                if last_cbsp.is_buy and account.stock_cnt == 0:
+                    account.buy(current_klu.close, current_klu.time, code)
+                    
+                elif not last_cbsp.is_buy and account.stock_cnt > 0:
+                    account.sell(current_klu.close, current_klu.time, code)
+
+    # 结束汇报
+print(f"最终权益: {account.cash:.2f}")
 
 if __name__ == "__main__":
-    run_backtest_scanner()
+    # 记得在此处注入您的 CFutuStockDriver_V6
+    # ...
+    run_backtest("HK.00700")
