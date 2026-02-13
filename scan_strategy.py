@@ -1,119 +1,130 @@
-# 文件位置: /workspaces/chan.py/scan_strategy.py
-import sys
 import os
-import time
+import glob
+import pandas as pd
 from datetime import datetime
-
-# 1. 确保根目录在 Python 路径中 (防止 ModuleNotFoundError)
-sys.path.append(os.path.abspath("."))
-
 from Chan import CChan
 from ChanConfig import CChanConfig
 from Common.CEnum import DATA_SRC, KL_TYPE, AUTYPE
-# 导入您自定义的第二定理策略
-from CustomBuySellPoint.StrategySecondTheorem import CStrategySecondTheorem
+from web_app_qjtFUTU import CFutuStockDriver_V3 
 
-def run_scanner():
-    print(f"🚀 开始执行选股扫描 - {datetime.now()}")
+def run_offline_scanner():
+    # --- 1. 时间窗口设置 ---
+    SEARCH_START = "2026-02-01 09:30:00" 
+    SEARCH_END   = "2026-02-12 16:00:00"
+    start_dt = datetime.strptime(SEARCH_START, "%Y-%m-%d %H:%M:%S")
+    end_dt   = datetime.strptime(SEARCH_END, "%Y-%m-%d %H:%M:%S")
+
+    SCAN_LEVEL = KL_TYPE.K_5M
+    # ⚠️ 请确保这个路径相对于你运行脚本的位置是正确的
+    CACHE_DIR = os.path.join(os.getcwd(), "stock_cache") 
+    VALID_STOCKS = []
     
-    # -----------------------------------------------------------
-    # 【配置区域】
-    # -----------------------------------------------------------
-    # A. 定义股票池 (示例代码，实战可接入板块数据接口)
-    # 注意：Futu 接口有频率限制，模拟盘建议先用少量股票测试
-    stock_pool = [
-        "HK.00700", # 腾讯
-        "HK.03690", # 美团
-        "HK.09988", # 阿里
-        "HK.01810", # 小米
-        "HK.00981", # 中芯国际
+    print(f"🚀 扫描器启动...")
+    print(f"当前工作目录: {os.getcwd()}")
+    print(f"检查缓存目录: {CACHE_DIR} (是否存在: {os.path.exists(CACHE_DIR)})")
 
-    ]
+    # --- 2. 这里的匹配逻辑要非常鲁棒 ---
+    # 尝试匹配所有包含 K_5M 的 parquet 文件
+    search_pattern = os.path.join(CACHE_DIR, "*.parquet")
+    all_files = glob.glob(search_pattern)
     
-    # B. 策略配置
-    config = CChanConfig({
-        "bi_strict": True,          # 严格笔
-        "zs_combine": True,         # 中枢合并
-        "cbsp_strategy": CStrategySecondTheorem, # 挂载第二定理策略
-        "strategy_para": {
-            "strict_open": True,    # 严格开仓
-        }
-    })
+    # 过滤出符合级别的标的
+    cache_files = [f for f in all_files if SCAN_LEVEL.name in f]
+    
+    print(f"📂 目录内文件总数: {len(all_files)} | 匹配 {SCAN_LEVEL.name} 级别的标的数: {len(cache_files)}")
 
-    # C. 扫描级别 (30分钟抓趋势)
-    scan_lv = KL_TYPE.K_30M
-    # -----------------------------------------------------------
+    if not cache_files:
+        print("❌ 错误：未找到任何可扫描的缓存文件！请检查 stock_cache 文件夹内的文件名。")
+        return
+    
+    # --- 🔥 核心配置修正：必须在这里打开开关 ---
+    config = CChanConfig()
+    config.bs_type = '1,2,3a,3b'    # 必须明确指定
+    config.zs_algo = 'normal'       # 笔中枢，确保 5M 级别有足够的信号源
+    config.bi_strict = True         # 保持默认的笔严谨度
+    
+    # 🌟 关键：指定计算哪些买卖点
+    # 1=一买, 2=二买, 3a=中枢破坏三买, 3b=中枢回踩三买
+    config.bs_type = '1,1p,2,2s,3a,3b' 
+    
+    # 🌟 关键：中枢算法
+    # 'normal' = 标准笔中枢 (建议5分钟级别用这个，信号多)
+    # 'segment' = 线段中枢 (如果你想看大级别的三买，用这个，但信号会少)
+    config.zs_algo = 'normal'  
+    
+    # 笔的严格程度
+    config.bi_strict = True # 也可以设为 False 试试，False 信号更多
 
-    valid_stocks = []
-
-    for code in stock_pool:
+    # ... 进入循环 ...
+    for file_path in cache_files:
+        filename = os.path.basename(file_path)
+        code = filename.split(f"_{SCAN_LEVEL.name}")[0]
+        
         try:
-            print(f"正在分析: {code} ...", end="", flush=True)
-            
-            # 初始化计算 (获取最近数据)
-            # 这里的 lv_list 必须包含 scan_lv
             chan = CChan(
                 code=code,
-                begin_time=None,        # None 表示取最近数据
-                end_time=None,
-                #data_src=DATA_SRC.FUTU, # 必须确保富途 OpenD 已开启
-                data_src=DATA_SRC.AKSHARE,
-                lv_list=[scan_lv],      
+                begin_time="2024-01-01", 
+                data_src=DATA_SRC.FUTU,
+                lv_list=[SCAN_LEVEL],
                 config=config,
                 autype=AUTYPE.QFQ
             )
 
-            # 核心检查逻辑
-            # 1. 获取该级别数据对象
-            kl_data = chan[scan_lv]
+            mg_data = chan[SCAN_LEVEL]
             
-            # 2. 检查是否有买卖点列表
-            if not hasattr(kl_data, 'bs_point_lst') or len(kl_data.bs_point_lst) == 0:
-                print(" [无信号]")
-                continue
+            # --- 1. 强制触发全量计算 (包含买卖点) ---
+            if hasattr(mg_data, 'cal_seg_and_zs'):
+                mg_data.cal_seg_and_zs()
+            if hasattr(mg_data, 'cal_bs_point'):
+                mg_data.cal_bs_point()
 
-            # 3. 获取最后一个买卖点
-            last_bsp = kl_data.bs_point_lst[-1]
-            last_klu = kl_data[-1][-1] # 最后一根K线
+            # --- 2. 信号提取：全量属性扫描 ---
+            bsp_obj = mg_data.bs_point_lst
+            actual_list = []
+            
+            # 自动探测真正存放信号的列表
+            for attr in ['items', 'lst', 'points', 'bsp_list']:
+                if hasattr(bsp_obj, attr):
+                    val = getattr(bsp_obj, attr)
+                    actual_list = val() if callable(val) else val
+                    if actual_list: break
+            
+            # 如果还是空，尝试从对象的内部字典暴力翻找第一个 list
+            if not actual_list:
+                for v in bsp_obj.__dict__.values():
+                    if isinstance(v, list) and len(v) > 0:
+                        actual_list = v
+                        break
 
-            # 4. 判断是否为目标信号 (3类买点)
-            # 注意：这里我们利用 bsp.type2str() 判断是否包含 "3"
-            # 并且必须是买点 (is_buy=True)
-            if last_bsp.is_buy and "3" in last_bsp.type2str():
+            # --- 3. 结果打印 ---
+            bi_cnt = len(mg_data.bi_list)
+            zs_cnt = len(mg_data.zs_list)
+            print(f"[{code}] ✅ 加载:K线={len(mg_data.lst):<5} | 笔={bi_cnt:<3} | 中枢={zs_cnt:<2} | 信号={len(actual_list)}")
+            
+            latest_signals = actual_list[-5:]  # 只看最近的几个信号，避免过多历史干扰
+            # --- 4. 终极修正判定 (解决 CKLine 属性报错) ---
+            last_kl = mg_data.lst[-1]
+            # 探测最后一根K线的时间
+            now_time = getattr(last_kl, 'date', getattr(last_kl, 'time', "Unknown"))
+            
+            # --- 实验：暂时放宽条件，看能不能抓到二买或一买 ---
+            for bsp in latest_signals:
+                bsp_type = bsp.type2str()
+                dist = abs(len(mg_data.lst) - bsp.klu.idx)
                 
-                # 5. 时效性检查：必须是最近 3 根K线内触发的才算数
-                # 否则可能是很久以前的买点，现在已经过气了
-                dist = len(kl_data) - 1 - last_bsp.klu.idx
-                
-                if dist <= 3:
-                    print(f" 🔥【发现猎物】 {last_bsp.type2str()} @ 价格 {last_bsp.price}")
-                    valid_stocks.append({
-                        "code": code,
-                        "type": last_bsp.type2str(),
-                        "price": last_bsp.price,
-                        "time": last_klu.time
-                    })
-                else:
-                    print(f" [信号太久远: {dist}根K线前]")
-            else:
-                print(" [不符合策略]")
+                # 判定：将 "3" 改为 "2" 或 "1"，看看能不能出结果
+                if bsp.is_buy and ("1" in bsp_type or "2" in bsp_type):
+                    if dist < 500: # 搜索最近 3 天
+                        bsp_time = getattr(bsp.klu, 'date', "N/A")
+                        print(f" 🔥【命中信号】{code} | 类型:{bsp_type:<3} | 距今:{dist}线")
+                        VALID_STOCKS.append({"code": code, "type": bsp_type})
+                        break
+            
 
         except Exception as e:
-            print(f" ❌ 出错: {e}")
-            # 如果是 Futu 连接错误，可能需要中断
-            if "Connection" in str(e):
-                break
+            print(f" ❌ {code} 运行出错: {e}")
 
-    # -----------------------------------------------------------
-    # 【结果汇报】
-    # -----------------------------------------------------------
-    print("\n" + "="*30)
-    print(f"📊 扫描结束，共发现 {len(valid_stocks)} 只标的")
-    print("="*30)
-    for stock in valid_stocks:
-        print(f"🎯 代码: {stock['code']} | 类型: {stock['type']} | 价格: {stock['price']}")
-    
-    return valid_stocks
+    print(f"🚀 扫描完成！共发现 {len(VALID_STOCKS)} 个符合条件的标的。")
 
 if __name__ == "__main__":
-    run_scanner()
+    run_offline_scanner() 

@@ -41,7 +41,7 @@ try:
     from KLine.KLine_Unit import CKLine_Unit
     from Plot.PlotDriver import CPlotDriver
     from ChanConfig import CChanConfig
-    from CustomBuySellPoint.CustomStrategy import CCustomStrategy  # 必须导入自带策略类
+    #from CustomBuySellPoint.CustomStrategy import CCustomStrategy  # 必须导入自带策略类
     from Common.CEnum import KL_TYPE
 except ImportError as e:
     st.error(f"❌ 核心库组件丢失: {e}")
