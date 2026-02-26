@@ -392,20 +392,20 @@ class FutuHKVisualTrading:
                         "grid": None  # 去掉网格线
                     },
                     "bi": {
-                        "color": "#FFD700",  # 金黄色 (Gold) - 笔/线段，更醒目
+                        "color": "#FFFF00",  # 黄色 (Yellow) - 笔
                         "show_num": False
                     },
                     "zs": {
-                        "color": "#FF4500",  # 橙红色 - 中枢边框，更醒目
-                        "linewidth": 3  # 加粗边框
+                        "color": "#4169E1",  # 皇家蓝 (Royal Blue) - 中枢边框
+                        "linewidth": 2
                     },
                     "bsp": {
-                        "fontsize": 14,  # 买卖点标记字体大小
-                        "buy_color": "red",   # 买点红色
-                        "sell_color": "green"  # 卖点绿色
+                        "fontsize": 12,
+                        "buy_color": "red",
+                        "sell_color": "green"
                     },
                     "macd": {
-                        "width": 0.6  # MACD柱状图宽度
+                        "width": 0.6
                     }
                 }
             )
@@ -418,53 +418,12 @@ class FutuHKVisualTrading:
             plt.close('all')
             chart_paths.append(chart_30m_path)
             
-            # 获取5分钟数据并生成图表
-            end_time = datetime.now()
-            start_time = end_time - timedelta(days=7)  # 5分钟图看一周
+            # 注意：5分钟图仅用于Gemini辅助判断背驰，不保存到文件
+            # 系统以30分钟图为交易决策依据
+            logger.info(f"{code} 30分钟图已生成（主交易周期），5分钟数据仅用于辅助分析")
             
-            chan_5m = CChan(
-                code=code,
-                begin_time=start_time.strftime("%Y-%m-%d"),
-                end_time=end_time.strftime("%Y-%m-%d %H:%M:%S"),
-                data_src=DATA_SRC.FUTU,
-                lv_list=[KL_TYPE.K_5M],
-                config=self.chan_config
-            )
-            
-            plot_5m = CPlotDriver(
-                chan_5m,
-                plot_config={
-                    "plot_kline": True,
-                    "plot_bi": True,
-                    "plot_zs": True,
-                    "plot_bsp": True,
-                    "plot_macd": True  # 新增：副图显示MACD
-                },
-                plot_para={
-                    "figure": {
-                        "w": 16,
-                        "h": 12,
-                        "macd_h": 0.25,
-                        "grid": None  # 去掉网格线
-                    },
-                    "bi": {
-                        "color": "#FFD700",  # 金黄色 (Gold) - 笔/线段，更醒目
-                        "show_num": False
-                    },
-                    "zs": {
-                        "color": "#FF4500",  # 橙红色 - 中枢边框，更醒目
-                        "linewidth": 3  # 加粗边框
-                    },
-                    "bsp": {
-                        "fontsize": 14,  # 买卖点标记字体加大
-                        "buy_color": "red",  # 买点红色
-                        "sell_color": "green"  # 卖点绿色
-                    },
-                    "macd": {
-                        "width": 0.6
-                    }
-                }
-            )
+            # 返回只有30分钟图的路径列表
+            return chart_paths
             
             # 自定义MACD颜色
             self._customize_macd_colors(plot_5m)
