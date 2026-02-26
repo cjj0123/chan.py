@@ -611,7 +611,9 @@ class FutuHKVisualTrading:
             # 记录信号类型（买入或卖出）
             bsp_type = chan_result.get('bsp_type', '未知')
             is_buy = chan_result.get('is_buy_signal', False)
-            logger.info(f"{code} 信号类型: {bsp_type}, 是否买入: {is_buy}")
+            # 添加 b/s 前缀，明确显示买点或卖点
+            bsp_type_display = f"{'b' if is_buy else 's'}{bsp_type}"
+            logger.info(f"{code} 信号类型: {bsp_type_display}, 是否买入: {is_buy}")
             
             # ====== 持仓过滤逻辑 ======
             # 查询当前持仓数量
