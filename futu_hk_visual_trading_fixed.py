@@ -453,14 +453,58 @@ class FutuHKVisualTrading:
                         logger.error(f"❌ 买入下单失败 {code}")
                 else:
                     # 卖出信号处理
-                    logger.info(f"{code} 卖出信号 ({bsp_type})，暂不执行卖出操作")
-                    # TODO: 实现卖出逻辑
+                    # 卖出阈值：视觉评分 >= 50 分（5分以上）就执行卖出
+                    SELL_SCORE_THRESHOLD = 50
+                    
+                    if score >= SELL_SCORE_THRESHOLD:
+                        logger.info(f"{code} 卖出信号 ({bsp_type}) 且视觉评分高达 {score}/100，强烈建议卖出！")
+                        
+                        # 获取当前持仓数量
+                        sell_quantity = self.get_position_quantity(code)
+                        if sell_quantity <= 0:
+                            logger.warning(f"{code} 无持仓，无法卖出")
+                            continue
+                        
+                        logger.info(f"{code} 满足卖出条件 - 价格: {current_price}, 数量: {sell_quantity}, 评分: {score}")
+                        
+                        # 执行卖出交易
+                        if self.execute_trade(code, 'SELL', sell_quantity, current_price):
+                            logger.info(f"✅ 成功下单卖出 {code}")
+                        else:
+                            logger.error(f"❌ 卖出下单失败 {code}")
+                    else:
+                        logger.info(f"{code} 卖出信号 ({bsp_type}) 但视觉评分 {score}/100 低于阈值 {SELL_SCORE_THRESHOLD}，暂不卖出")
                     
             except Exception as e:
                 logger.error(f"视觉评分异常 {code}: {e}")
                 continue
         
         logger.info("扫描交易完成")
+
+    def get_position_quantity(self, code: str) -> int:
+        """
+        获取股票持仓数量
+        
+        Args:
+            code: 股票代码
+            
+        Returns:
+            持仓数量（0表示未持仓）
+        """
+        try:
+            ret, data = self.trd_ctx.position_list_query(trd_env=self.trd_env)
+            if ret == RET_OK and not data.empty:
+                # 查找对应股票的持仓
+                position = data[data['code'] == code]
+                if not position.empty:
+                    qty = int(position.iloc[0]['qty'])
+                    logger.info(f"{code} 当前持仓: {qty} 股")
+                    return qty
+            logger.debug(f"{code} 无持仓")
+            return 0
+        except Exception as e:
+            logger.error(f"获取持仓异常 {code}: {e}")
+            return 0
 
 def main():
     """主函数"""
