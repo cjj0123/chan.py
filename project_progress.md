@@ -21,5 +21,46 @@
 4.  **卖点处理**: 触发缠论卖点信号时，**全仓卖出**。
 
 ## 最后更新
-- **日期**: 2026-02-26
-- **操作**: 同步最新阈值与执行逻辑，移除冗余信息。
+- **日期**: 2026-02-27
+- **操作**: 添加避坑指南 - Apple Notes 图片插入方法
+
+---
+
+## 避坑指南
+
+### 1. Apple Notes 图片插入 (appscript 方法)
+
+**问题**: 使用 `memo` CLI 或 AppleScript 无法将图片正确插入到备忘录中。
+
+**解决方案**: 使用 Python 的 `appscript` 库直接操作 Apple Notes。
+
+```python
+from appscript import app, mactypes, k
+
+# 连接到 Notes 应用
+notes = app('Notes')
+
+# 获取或创建文件夹
+folder_name = "量化交易报告"
+try:
+    folder = notes.folders[folder_name]
+except:
+    notes.make(new=k.folder, with_properties={k.name: folder_name})
+    folder = notes.folders[folder_name]
+
+# 获取目标笔记
+note_title = "缠论图表测试 - HK.00700 - 2026-02-27"
+note = folder.notes[note_title]
+
+# 添加图片附件
+image_path = "/path/to/chart.png"
+note.make(new=k.attachment, at=note.end, with_data=mactypes.File(image_path))
+```
+
+**关键要点**:
+- 使用 `mactypes.File()` 包装文件路径
+- 使用 `k.attachment` 指定附件类型
+- 使用 `at=note.end` 将附件添加到笔记末尾
+- 需要安装 `appscript`: `pip install appscript`
+
+**参考文档**: [appscript 官方文档](https://appscript.sourceforge.io/)
