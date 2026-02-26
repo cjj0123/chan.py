@@ -1,18 +1,20 @@
 """
-Gemini 视觉评分模块 - 使用 Google Generative AI SDK
+Gemini 视觉评分模块 - 使用 Google GenAI SDK (新版)
 """
 import os
 import json
 import random
 from PIL import Image
 
-# 尝试导入 google.generativeai
+# 尝试导入 google.genai (新版)
 try:
-    import google.generativeai as genai
+    from google import genai
+    from google.genai import types
     GENAI_AVAILABLE = True
 except ImportError:
     GENAI_AVAILABLE = False
-    print("⚠️ google.generativeai 未安装，将使用 Mock 模式")
+    print("⚠️ google.genai 未安装，将使用 Mock 模式")
+    print("   安装命令: pip install google-genai")
 
 # 从环境变量获取 Google API 密钥
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -77,30 +79,26 @@ Output Requirement: Return ONLY a valid JSON object. No other text.
 class VisualJudge:
     def __init__(self, use_mock=False):
         self.use_mock = use_mock
-        self.model = None
+        self.client = None
         
-        # 初始化 Gemini 模型
+        # 初始化 Gemini 客户端
         if GENAI_AVAILABLE and GOOGLE_API_KEY and not use_mock:
             try:
-                genai.configure(api_key=GOOGLE_API_KEY)
-                self.model = genai.GenerativeModel(
-                    'gemini-2.5-pro',
-                    generation_config={"response_mime_type": "application/json"}
-                )
-                print("✅ Gemini 模型初始化成功")
+                self.client = genai.Client(api_key=GOOGLE_API_KEY)
+                print("✅ Gemini 客户端初始化成功 (google.genai)")
             except Exception as e:
-                print(f"⚠️ Gemini 模型初始化失败: {e}")
+                print(f"⚠️ Gemini 客户端初始化失败: {e}")
                 self.use_mock = True
         else:
             if not GENAI_AVAILABLE:
-                print("⚠️ google.generativeai 不可用")
+                print("⚠️ google.genai 不可用")
             elif not GOOGLE_API_KEY:
                 print("⚠️ GOOGLE_API_KEY 未设置")
             self.use_mock = True
 
     def call_gemini_api(self, image_paths):
-        """调用 Google Gemini API 进行视觉分析"""
-        if self.use_mock or not self.model:
+        """调用 Google Gemini API 进行视觉分析 (使用新版 SDK)"""
+        if self.use_mock or not self.client:
             return None
         
         try:
@@ -121,8 +119,19 @@ class VisualJudge:
             
             print("   🤖 调用 Gemini-2.5-pro 分析中...")
             
-            # 发送请求
-            response = self.model.generate_content([MASTER_PROMPT] + images)
+            # 构建内容
+            contents = [MASTER_PROMPT, images[0], images[1]]
+            
+            # 发送请求 (新版 SDK 语法)
+            response = self.client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    temperature=0.1,
+                    max_output_tokens=2048,
+                    response_mime_type="application/json"
+                )
+            )
             
             # 解析 JSON 响应
             result = json.loads(response.text)
