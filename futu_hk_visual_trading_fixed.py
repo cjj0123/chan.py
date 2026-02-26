@@ -71,7 +71,7 @@ class FutuHKVisualTrading:
             "bi_strict": False,
             "one_bi_zs": True,
             "bs_type": '1,1p,2,2s,3a,3b',
-            "macd": True  # 启用MACD计算，用于副图显示
+            "macd": {"fast": 12, "slow": 26, "signal": 9}  # 启用MACD计算
         })
         
         # 视觉评分器
