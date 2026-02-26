@@ -418,12 +418,53 @@ class FutuHKVisualTrading:
             plt.close('all')
             chart_paths.append(chart_30m_path)
             
-            # 注意：5分钟图仅用于Gemini辅助判断背驰，不保存到文件
-            # 系统以30分钟图为交易决策依据
-            logger.info(f"{code} 30分钟图已生成（主交易周期），5分钟数据仅用于辅助分析")
+            # 获取5分钟数据并生成图表（用于Gemini辅助判断背驰）
+            end_time = datetime.now()
+            start_time = end_time - timedelta(days=14)  # 延长到14天，确保有足够K线形成中枢
             
-            # 返回只有30分钟图的路径列表
-            return chart_paths
+            chan_5m = CChan(
+                code=code,
+                begin_time=start_time.strftime("%Y-%m-%d"),
+                end_time=end_time.strftime("%Y-%m-%d %H:%M:%S"),
+                data_src=DATA_SRC.FUTU,
+                lv_list=[KL_TYPE.K_5M],
+                config=self.chan_config
+            )
+            
+            plot_5m = CPlotDriver(
+                chan_5m,
+                plot_config={
+                    "plot_kline": True,
+                    "plot_bi": True,
+                    "plot_zs": True,
+                    "plot_bsp": True,
+                    "plot_macd": True
+                },
+                plot_para={
+                    "figure": {
+                        "w": 16,
+                        "h": 12,
+                        "macd_h": 0.25,
+                        "grid": None
+                    },
+                    "bi": {
+                        "color": "#FFFF00",
+                        "show_num": False
+                    },
+                    "zs": {
+                        "color": "#4169E1",
+                        "linewidth": 2
+                    },
+                    "bsp": {
+                        "fontsize": 12,
+                        "buy_color": "red",
+                        "sell_color": "green"
+                    },
+                    "macd": {
+                        "width": 0.6
+                    }
+                }
+            )
             
             # 自定义MACD颜色
             self._customize_macd_colors(plot_5m)
