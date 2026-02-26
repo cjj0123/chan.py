@@ -306,9 +306,46 @@ class FutuHKVisualTrading:
             logger.error(f"CChan分析异常 {code}: {e}")
             return None
     
+    def _customize_macd_colors(self, plot_driver):
+        """
+        自定义MACD颜色 - 使用鲜艳的红绿色提高AI识别度
+        """
+        try:
+            # 遍历所有axes，找到MACD副图
+            for ax in plot_driver.figure.axes:
+                # 检查是否是MACD图（通过是否有bar来判断）
+                for container in ax.containers:
+                    if hasattr(container, 'get_label') and 'macd' in str(container.get_label()).lower():
+                        # 设置MACD柱状图颜色
+                        for i, bar in enumerate(container):
+                            if bar.get_height() >= 0:
+                                bar.set_color('#FF0000')  # 鲜艳红色（正值）
+                            else:
+                                bar.set_color('#00FF00')  # 鲜艳绿色（负值）
+                            bar.set_alpha(0.9)  # 高透明度
+                
+                # 修改DIF和DEA线颜色
+                for line in ax.lines:
+                    label = str(line.get_label()).lower()
+                    if 'dif' in label:
+                        line.set_color('#FFA500')  # 橙色DIF线
+                        line.set_linewidth(1.5)
+                    elif 'dea' in label:
+                        line.set_color('#0000FF')  # 蓝色DEA线
+                        line.set_linewidth(1.5)
+        except Exception as e:
+            logger.warning(f"自定义MACD颜色失败: {e}")
+    
     def generate_charts(self, code: str, chan_30m) -> List[str]:
         """
-        生成技术图表
+        生成技术图表（AI视觉优化版）
+        
+        优化点：
+        1. 副图加入MACD
+        2. MACD颜色鲜艳（红绿柱高对比度）
+        3. 画笔线宽加粗到2.0
+        4. 中枢半透明填充(alpha=0.3)
+        5. 淡化网格线
         
         Args:
             code: 股票代码
@@ -322,21 +359,45 @@ class FutuHKVisualTrading:
         safe_code = code.replace('.', '_').replace('-', '_')
         
         try:
-            # 生成30分钟图
+            # 生成30分钟图（AI视觉优化配置）
             plot_30m = CPlotDriver(
                 chan_30m,
                 plot_config={
                     "plot_kline": True,
                     "plot_bi": True,
                     "plot_zs": True,
-                    "plot_bsp": True
+                    "plot_bsp": True,
+                    "plot_macd": True  # 新增：副图显示MACD
                 },
                 plot_para={
-                    "figure": {"w": 14, "h": 8}
+                    "figure": {
+                        "w": 16,  # 增加宽度
+                        "h": 12,  # 增加高度容纳MACD副图
+                        "macd_h": 0.25,  # MACD副图占25%高度
+                        "grid": None  # 去掉网格线
+                    },
+                    "bi": {
+                        "color": "#FFD700",  # 金黄色画笔，更醒目
+                        "linewidth": 2.0,  # 笔线加粗
+                        "show_num": False
+                    },
+                    "zs": {
+                        "color": "#FF8C00",  # 深橙色中枢边框
+                        "linewidth": 2,
+                        "facecolor": "#FFA500",  # 橙色填充
+                        "alpha": 0.3  # 半透明，不遮挡K线
+                    },
+                    "macd": {
+                        "width": 0.6  # MACD柱状图宽度
+                    }
                 }
             )
+            
+            # 自定义MACD颜色（覆盖默认颜色）
+            self._customize_macd_colors(plot_30m)
+            
             chart_30m_path = f"{self.charts_dir}/{safe_code}_{timestamp}_30M.png"
-            plt.savefig(chart_30m_path, bbox_inches='tight', dpi=100)
+            plt.savefig(chart_30m_path, bbox_inches='tight', dpi=120, facecolor='white')
             plt.close('all')
             chart_paths.append(chart_30m_path)
             
@@ -359,14 +420,38 @@ class FutuHKVisualTrading:
                     "plot_kline": True,
                     "plot_bi": True,
                     "plot_zs": True,
-                    "plot_bsp": True
+                    "plot_bsp": True,
+                    "plot_macd": True  # 新增：副图显示MACD
                 },
                 plot_para={
-                    "figure": {"w": 14, "h": 8}
+                    "figure": {
+                        "w": 16,
+                        "h": 12,
+                        "macd_h": 0.25,
+                        "grid": None  # 去掉网格线
+                    },
+                    "bi": {
+                        "color": "#FFD700",  # 金黄色画笔
+                        "linewidth": 2.0,  # 笔线加粗
+                        "show_num": False
+                    },
+                    "zs": {
+                        "color": "#FF8C00",  # 深橙色中枢边框
+                        "linewidth": 2,
+                        "facecolor": "#FFA500",  # 橙色填充
+                        "alpha": 0.3  # 半透明
+                    },
+                    "macd": {
+                        "width": 0.6
+                    }
                 }
             )
+            
+            # 自定义MACD颜色
+            self._customize_macd_colors(plot_5m)
+            
             chart_5m_path = f"{self.charts_dir}/{safe_code}_{timestamp}_5M.png"
-            plt.savefig(chart_5m_path, bbox_inches='tight', dpi=100)
+            plt.savefig(chart_5m_path, bbox_inches='tight', dpi=120, facecolor='white')
             plt.close('all')
             chart_paths.append(chart_5m_path)
             
