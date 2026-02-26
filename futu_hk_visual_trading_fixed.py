@@ -308,31 +308,46 @@ class FutuHKVisualTrading:
     
     def _customize_macd_colors(self, plot_driver):
         """
-        自定义MACD颜色 - 使用鲜艳的红绿色提高AI识别度
+        自定义MACD颜色 - AI视觉优化版
+        红柱: 上涨动能 (鲜红 #FF0000)
+        绿柱: 下跌动能 (鲜绿 #00FF00)
+        DIF线: 快线 (白色 #FFFFFF)
+        DEA线: 慢线 (黄色 #FFFF00)
         """
         try:
             # 遍历所有axes，找到MACD副图
             for ax in plot_driver.figure.axes:
-                # 检查是否是MACD图（通过是否有bar来判断）
+                # 设置MACD柱状图颜色
                 for container in ax.containers:
-                    if hasattr(container, 'get_label') and 'macd' in str(container.get_label()).lower():
-                        # 设置MACD柱状图颜色
-                        for i, bar in enumerate(container):
-                            if bar.get_height() >= 0:
-                                bar.set_color('#FF0000')  # 鲜艳红色（正值）
-                            else:
-                                bar.set_color('#00FF00')  # 鲜艳绿色（负值）
-                            bar.set_alpha(0.9)  # 高透明度
+                    if hasattr(container, '__iter__'):  # bar容器
+                        for bar in container:
+                            if hasattr(bar, 'get_height'):
+                                if bar.get_height() >= 0:
+                                    bar.set_color('#FF0000')  # 鲜艳红色（上涨）
+                                    bar.set_edgecolor('#8B0000')  # 深红边框
+                                else:
+                                    bar.set_color('#00FF00')  # 鲜艳绿色（下跌）
+                                    bar.set_edgecolor('#006400')  # 深绿边框
+                                bar.set_alpha(0.85)  # 高透明度
                 
                 # 修改DIF和DEA线颜色
                 for line in ax.lines:
-                    label = str(line.get_label()).lower()
-                    if 'dif' in label:
-                        line.set_color('#FFA500')  # 橙色DIF线
-                        line.set_linewidth(1.5)
-                    elif 'dea' in label:
-                        line.set_color('#0000FF')  # 蓝色DEA线
-                        line.set_linewidth(1.5)
+                    label = str(line.get_label()).lower() if line.get_label() else ''
+                    if 'dif' in label or 'DIF' in str(line.get_label()):
+                        line.set_color('#FFFFFF')  # 白色DIF线（快线）
+                        line.set_linewidth(2.0)
+                        line.set_alpha(0.9)
+                    elif 'dea' in label or 'DEA' in str(line.get_label()):
+                        line.set_color('#FFFF00')  # 黄色DEA线（慢线）
+                        line.set_linewidth(2.0)
+                        line.set_alpha(0.9)
+                    
+                # 设置MACD图背景色为深色，增强对比度
+                ax.set_facecolor('#1a1a1a')  # 深灰背景
+                ax.tick_params(colors='white')  # 白色刻度
+                ax.xaxis.label.set_color('white')
+                ax.yaxis.label.set_color('white')
+                
         except Exception as e:
             logger.warning(f"自定义MACD颜色失败: {e}")
     
@@ -377,15 +392,19 @@ class FutuHKVisualTrading:
                         "grid": None  # 去掉网格线
                     },
                     "bi": {
-                        "color": "#FFD700",  # 金黄色画笔，更醒目
-                        "linewidth": 2.0,  # 笔线加粗
+                        "color": "#FFFF00",  # 黄色 (Yellow) - 笔/线段
+                        "linewidth": 2.5,  # 笔线加粗，AI更容易识别
                         "show_num": False
                     },
                     "zs": {
-                        "color": "#FF8C00",  # 深橙色中枢边框
-                        "linewidth": 2,
-                        "facecolor": "#FFA500",  # 橙色填充
-                        "alpha": 0.3  # 半透明，不遮挡K线
+                        "color": "#4169E1",  # 皇家蓝 - 中枢边框
+                        "linewidth": 2.5,
+                        "facecolor": "#87CEEB",  # 天蓝色填充
+                        "alpha": 0.25  # 半透明，不遮挡K线
+                    },
+                    "bsp": {
+                        "fontsize": 12,  # 买卖点标记字体大小
+                        "color": "red"  # 买卖点标记颜色
                     },
                     "macd": {
                         "width": 0.6  # MACD柱状图宽度
@@ -431,15 +450,19 @@ class FutuHKVisualTrading:
                         "grid": None  # 去掉网格线
                     },
                     "bi": {
-                        "color": "#FFD700",  # 金黄色画笔
-                        "linewidth": 2.0,  # 笔线加粗
+                        "color": "#FFFF00",  # 黄色 (Yellow) - 笔/线段
+                        "linewidth": 2.5,  # 笔线加粗
                         "show_num": False
                     },
                     "zs": {
-                        "color": "#FF8C00",  # 深橙色中枢边框
-                        "linewidth": 2,
-                        "facecolor": "#FFA500",  # 橙色填充
-                        "alpha": 0.3  # 半透明
+                        "color": "#4169E1",  # 皇家蓝 - 中枢边框
+                        "linewidth": 2.5,
+                        "facecolor": "#87CEEB",  # 天蓝色填充
+                        "alpha": 0.25  # 半透明
+                    },
+                    "bsp": {
+                        "fontsize": 12,
+                        "color": "red"
                     },
                     "macd": {
                         "width": 0.6
