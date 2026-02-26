@@ -195,6 +195,22 @@ class FutuHKVisualTrading:
             is_buy = bsp.is_buy
             price = bsp.klu.close
             
+            # ====== 时间过滤：只交易最近4小时内的信号 ======
+            # 将CTime转换为datetime
+            bsp_ctime = bsp.klu.time
+            bsp_time = datetime(bsp_ctime.year, bsp_ctime.month, bsp_ctime.day, 
+                               bsp_ctime.hour, bsp_ctime.minute, bsp_ctime.second)
+            
+            now = datetime.now()
+            time_diff = now - bsp_time
+            
+            if time_diff > timedelta(hours=4):
+                logger.info(f"{code} {bsp_type} 信号产生于 {bsp_time.strftime('%Y-%m-%d %H:%M')}，"
+                           f"距今 {time_diff.total_seconds()/3600:.1f} 小时，超过4小时窗口，跳过")
+                return None
+            
+            logger.info(f"{code} {bsp_type} 信号在4小时窗口内（{time_diff.total_seconds()/3600:.1f}小时前），继续分析")
+            
             result = {
                 'code': code,
                 'bsp_type': bsp_type,
