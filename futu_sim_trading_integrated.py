@@ -60,17 +60,26 @@ class ChanTheoryTrader:
             logging.error(f"获取账户信息异常: {e}")
             return None
 
-    def get_market_data(self, symbol: str, period: KLType, num_klines: int = 100) -> Dict[str, Any]:
+    def get_market_data(self, symbol: str, period: str, num_klines: int = 100) -> Dict[str, Any]:
         """获取市场数据并进行基本技术指标计算"""
         try:
-            end_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            start_time = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S')  # 增加历史数据
+            from futu import SubType, AuType
             
-            ret_code, ret_data = self.quote_ctx.request_history_kline(
+            # 先订阅
+            sub_ret, sub_msg = self.quote_ctx.subscribe(
+                [symbol], 
+                [SubType.K_30M if period == 'K_30M' else SubType.K_60M],
+                subscribe_push=False
+            )
+            if sub_ret != RET_OK:
+                logging.warning(f"订阅失败: {sub_msg}")
+            
+            # 获取K线数据
+            ret_code, ret_data = self.quote_ctx.get_cur_kline(
                 symbol, 
-                start=start_time, 
-                end=end_time, 
-                ktype=period
+                num_klines, 
+                period, 
+                AuType.QFQ
             )
             
             if ret_code != RET_OK:
