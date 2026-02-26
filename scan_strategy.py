@@ -5,12 +5,12 @@ from datetime import datetime
 from Chan import CChan
 from ChanConfig import CChanConfig
 from Common.CEnum import DATA_SRC, KL_TYPE, AUTYPE
-from web_app_qjtFUTU import CFutuStockDriver_V3 
+from web_app_qjtFUTU import CFutuStockDriver_V3
 
 def run_offline_scanner():
     # --- 1. 时间窗口设置 ---
     SEARCH_START = "2026-02-01 09:30:00" 
-    SEARCH_END   = "2026-02-12 16:00:00"
+    SEARCH_END   = "2026-02-13 11:30:00"
     start_dt = datetime.strptime(SEARCH_START, "%Y-%m-%d %H:%M:%S")
     end_dt   = datetime.strptime(SEARCH_END, "%Y-%m-%d %H:%M:%S")
 
@@ -39,7 +39,7 @@ def run_offline_scanner():
     
     # --- 🔥 核心配置修正：必须在这里打开开关 ---
     config = CChanConfig()
-    config.bs_type = '1,2,3a,3b'    # 必须明确指定
+    #config.bs_type = '1,2,3a,3b'    # 必须明确指定
     config.zs_algo = 'normal'       # 笔中枢，确保 5M 级别有足够的信号源
     config.bi_strict = True         # 保持默认的笔严谨度
     
@@ -50,10 +50,10 @@ def run_offline_scanner():
     # 🌟 关键：中枢算法
     # 'normal' = 标准笔中枢 (建议5分钟级别用这个，信号多)
     # 'segment' = 线段中枢 (如果你想看大级别的三买，用这个，但信号会少)
-    config.zs_algo = 'normal'  
+    # config.zs_algo = 'normal'  
     
     # 笔的严格程度
-    config.bi_strict = True # 也可以设为 False 试试，False 信号更多
+    #config.bi_strict = True # 也可以设为 False 试试，False 信号更多
 
     # ... 进入循环 ...
     for file_path in cache_files:
@@ -99,32 +99,97 @@ def run_offline_scanner():
             # --- 3. 结果打印 ---
             bi_cnt = len(mg_data.bi_list)
             zs_cnt = len(mg_data.zs_list)
-            print(f"[{code}] ✅ 加载:K线={len(mg_data.lst):<5} | 笔={bi_cnt:<3} | 中枢={zs_cnt:<2} | 信号={len(actual_list)}")
+            # print(f"[{code}] ✅ 加载:K线={len(mg_data.lst):<5} | 笔={bi_cnt:<3} | 中枢={zs_cnt:<2} | 信号={len(actual_list)}")
             
-            latest_signals = actual_list[-5:]  # 只看最近的几个信号，避免过多历史干扰
-            # --- 4. 终极修正判定 (解决 CKLine 属性报错) ---
-            last_kl = mg_data.lst[-1]
-            # 探测最后一根K线的时间
-            now_time = getattr(last_kl, 'date', getattr(last_kl, 'time', "Unknown"))
+            # === 🛠️ 最终修正版：使用索引计算距离 (修复 CKLine 属性错误) ===
             
-            # --- 实验：暂时放宽条件，看能不能抓到二买或一买 ---
-            for bsp in latest_signals:
-                bsp_type = bsp.type2str()
-                dist = abs(len(mg_data.lst) - bsp.klu.idx)
-                
-                # 判定：将 "3" 改为 "2" 或 "1"，看看能不能出结果
-                if bsp.is_buy and ("1" in bsp_type or "2" in bsp_type):
-                    if dist < 500: # 搜索最近 3 天
-                        bsp_time = getattr(bsp.klu, 'date', "N/A")
-                        print(f" 🔥【命中信号】{code} | 类型:{bsp_type:<3} | 距今:{dist}线")
-                        VALID_STOCKS.append({"code": code, "type": bsp_type})
-                        break
-            
+            if not actual_list:
+                continue
 
+            # 获取当前最后一根原始K线 (这是修正报错的关键)
+            # mg_data[-1] 是合并K线(CKLine)，它包含了一个原始K线列表 .lst
+            # 我们取 .lst[-1] 拿到真正的最后一根原始K线(CKLine_Unit)
+            try:
+                last_klu = mg_data[-1].lst[-1]
+            except AttributeError:
+                # 兼容性处理：如果 .lst 属性不对，尝试打印属性帮助调试
+                print(f"⚠️ 无法读取K线内部列表，对象属性: {dir(mg_data[-1])}")
+                continue
+
+            # 倒序遍历最后 3 个信号
+            for bsp in reversed(actual_list[-3:]):
+                # 1. 计算距离 (用最新K线的索引 - 信号K线的索引)
+                # 这样得到的 dist 就是“信号发生在多少根K线之前”
+                current_idx = last_klu.idx
+                signal_idx = bsp.klu.idx
+                dist = current_idx - signal_idx
+                
+                # 2. 获取时间用于显示 (手动解析 CTime)
+                t = bsp.klu.time
+                bsp_time_str = f"{t.year}-{t.month:02d}-{t.day:02d} {t.hour:02d}:{t.minute:02d}"
+                
+                bsp_type = bsp.type2str()
+                
+                # 3. 判定条件：
+                # (1) 必须是买点
+                # (2) 允许 1类/2类/3类
+                # (3) 必须是最近 100 根K线内的
+                if bsp.is_buy and dist <= 1000: 
+                    
+                    print(f" 🔥🔥🔥【命中信号】{code} | 类型:{bsp_type} | 时间:{bsp_time_str}")
+                    
+                    VALID_STOCKS.append({
+                        "code": code,
+                        "name": code, 
+                        "type": bsp_type,
+                        # 🛠️ 修复点：改用 bsp.klu.close 获取信号当根K线的收盘价
+                        "price": bsp.klu.close, 
+                        "time": bsp_time_str
+                    })
+                    break # 找到一个就退出，避免重复
         except Exception as e:
             print(f" ❌ {code} 运行出错: {e}")
-
+            
+    print("-" * 30)
     print(f"🚀 扫描完成！共发现 {len(VALID_STOCKS)} 个符合条件的标的。")
+
+    if len(VALID_STOCKS) > 0:
+        try:
+            # 1. 将结果列表转换为 DataFrame
+            df_result = pd.DataFrame(VALID_STOCKS)
+
+            # 2. 整理列顺序 (确保 code, type, time 在前，price/name 在后)
+            # 自动匹配您之前 append 进去的 key
+            desired_order = ['code', 'type', 'time', 'price']
+            # 过滤出实际存在的列，防止 key 不匹配报错
+            final_cols = [c for c in desired_order if c in df_result.columns]
+            df_result = df_result[final_cols]
+
+            # 3. 构造文件名 (包含时间戳，避免覆盖)
+            # 格式: scan_result_YYYYMMDD_HHMMSS.parquet
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            file_name = f"scan_result_{timestamp}.parquet"
+            
+            # 确保保存到 stock_cache 目录 (复用您脚本开头的 cache_dir 变量，或者硬编码)
+            save_dir = "stock_cache"
+            if not os.path.exists(save_dir):
+                os.makedirs(save_dir)
+            
+            file_path = os.path.join(save_dir, file_name)
+
+            # 4. 保存为 Parquet 文件
+            # engine='auto' 会自动选择 pyarrow 或 fastparquet
+            df_result.to_parquet(file_path, engine='auto', index=False)
+
+            print(f"💾 结果已保存至: {file_path}")
+            print(f"📄 数据预览:\n{df_result.head(3).to_string(index=False)}")
+
+        except ImportError:
+            print("❌ 保存失败: 缺少依赖库。请运行 pip install pyarrow 或 pip install fastparquet")
+        except Exception as e:
+            print(f"❌ 保存文件时发生错误: {e}")
+    else:
+        print("⚠️ 结果列表为空，未生成文件。")
 
 if __name__ == "__main__":
     run_offline_scanner() 

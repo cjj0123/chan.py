@@ -244,7 +244,7 @@ def run_analysis(code, lv, start_date, end_date):
 # ==========================================
 
 # 强力注入补丁
-CChan.GetStockAPI = lambda self: CFutuStockDriver_V3 if self.data_src == DATA_SRC.FUTU else _original_get_stock_api(self)
+CChan.GetStockAPI = lambda self: CFutuStockDriver_V3 if self.data_src == DATA_SRC.FUTU else DATA_SRC.BAO_STOCK(self)
 
 with st.sidebar:
     st.header("⚙️ 数据中心")
