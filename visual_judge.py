@@ -11,17 +11,24 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 USE_MOCK_IF_NO_API = True
 
 PROMPT_TEMPLATE = """
-你是一位资深的缠论交易专家。分析提供的 30M 和 5M K 线图，对买点信号打分（0-10 分）。
+你是一位资深的缠论交易专家。分析提供的 30M 和 5M K 线图，对买卖点信号进行专业评估（0-10 分）。
 
 评分标准：
-1. 结构完整性 (30%)：30M 下跌中枢是否清晰，c 段是否背驰于 b 段
-2. 力度与形态 (40%)：拒绝急跌，有底分型止跌迹象
-3. 次级别确认 (30%)：5M 图是否有盘整背驰
+1. 结构完整性 (30%)：中枢结构是否清晰、标准
+2. 力度与形态 (40%)：背驰是否明显、K线形态是否健康
+3. 次级别确认 (30%)：多周期共振情况
 
-决策规则：Score >= 8 则 BUY，否则 WAIT
+对于买点：
+- Score >= 8 且形态优秀 → action: BUY
+- Score < 8 或形态一般 → action: WAIT
+
+对于卖点：
+- Score <= 3 且顶部特征明显 → action: SELL（强烈建议卖出）
+- Score >= 7 且趋势良好 → action: HOLD（建议持有，不卖）
+- 其他情况 → action: WAIT
 
 **只输出 JSON，不要任何其他文字**：
-{"score": 整数 0-10, "signal_quality": "高/中/低", "analysis": "一句话理由", "action": "BUY 或 WAIT"}
+{"score": 整数 0-10, "signal_quality": "高/中/低", "analysis": "一句话理由", "action": "BUY/SELL/HOLD/WAIT"}
 """
 
 class VisualJudge:
@@ -39,7 +46,7 @@ class VisualJudge:
                 raise Exception("GOOGLE_API_KEY 未设置")
 
         try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GOOGLE_API_KEY}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={GOOGLE_API_KEY}"
 
             images = []
             for img_path in image_paths:

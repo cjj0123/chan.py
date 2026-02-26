@@ -560,11 +560,11 @@ class FutuHKVisualTrading:
                         logger.error(f"❌ 买入下单失败 {code}")
                 else:
                     # 卖出信号处理
-                    # 卖出阈值：视觉评分 >= 50 分（5分以上）就执行卖出
-                    SELL_SCORE_THRESHOLD = 50
+                    # 卖出阈值：视觉评分 <= 30 分（3分以下）说明顶部特征明显，建议卖出
+                    SELL_SCORE_THRESHOLD = 30
                     
-                    if score >= SELL_SCORE_THRESHOLD:
-                        logger.info(f"{code} 卖出信号 ({bsp_type}) 且视觉评分高达 {score}/100，强烈建议卖出！")
+                    if score <= SELL_SCORE_THRESHOLD:
+                        logger.info(f"{code} 卖出信号 ({bsp_type}) 且视觉评分仅 {score}/100，顶部特征明显，强烈建议卖出！")
                         
                         # 获取当前持仓数量
                         sell_quantity = self.get_position_quantity(code)
@@ -580,7 +580,7 @@ class FutuHKVisualTrading:
                         else:
                             logger.error(f"❌ 卖出下单失败 {code}")
                     else:
-                        logger.info(f"{code} 卖出信号 ({bsp_type}) 但视觉评分 {score}/100 低于阈值 {SELL_SCORE_THRESHOLD}，暂不卖出")
+                        logger.info(f"{code} 卖出信号 ({bsp_type}) 但视觉评分 {score}/100 高于阈值 {SELL_SCORE_THRESHOLD}，趋势仍健康，暂不卖出")
                     
             except Exception as e:
                 logger.error(f"视觉评分异常 {code}: {e}")
