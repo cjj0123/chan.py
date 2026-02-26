@@ -416,7 +416,21 @@ class FutuHKVisualTrading:
             is_buy = chan_result.get('is_buy_signal', False)
             logger.info(f"{code} 信号类型: {bsp_type}, 是否买入: {is_buy}")
             
-            # 生成图表（无论买入卖出都生成，用于视觉评分）
+            # ====== 持仓过滤逻辑 ======
+            # 查询当前持仓数量
+            position_qty = self.get_position_quantity(code)
+            
+            # 已持仓股票跳过买点
+            if is_buy and position_qty > 0:
+                logger.info(f"{code} 已有持仓({position_qty}股)，跳过买入")
+                continue
+            
+            # 未持仓股票跳过卖点
+            if not is_buy and position_qty <= 0:
+                logger.info(f"{code} 无持仓，跳过卖出分析")
+                continue
+            
+            # 生成图表（需要交易的股票才生成图表进行视觉评分）
             chart_paths = self.generate_charts(code, chan_result['chan_analysis']['chan_30m'])
             if not chart_paths:
                 logger.warning(f"{code} 图表生成失败，跳过")
