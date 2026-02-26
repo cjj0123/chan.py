@@ -136,6 +136,16 @@ class VisualJudge:
             # 解析 JSON 响应
             result = json.loads(response.text)
             
+            # 打印详细结果
+            print(f"   📊 Gemini 原始返回:")
+            print(f"      - detected_signal: {result.get('detected_signal')}")
+            print(f"      - direction: {result.get('direction')}")
+            print(f"      - 30f_trend_status: {result.get('30f_trend_status')}")
+            print(f"      - 5f_macd_status: {result.get('5f_macd_status')}")
+            print(f"      - score: {result.get('score')}")
+            print(f"      - reasoning: {result.get('reasoning', '')[:60]}...")
+            print(f"      - key_risk: {result.get('key_risk')}")
+            
             # 转换分数为 0-100 制
             original_score = result.get('score', 50)
             result['original_score'] = original_score
