@@ -356,6 +356,13 @@ class FutuHKVisualTrading:
         Returns:
             可用资金金额
         """
+        # 模拟盘模式下使用固定初始资金
+        if self.dry_run:
+            initial_capital = 1000000.0  # 100万港币模拟资金
+            logger.info(f"模拟盘初始资金: {initial_capital}")
+            return initial_capital
+        
+        # 实盘模式查询真实资金
         try:
             ret, data = self.trd_ctx.accinfo_query(trd_env=self.trd_env)
             if ret == RET_OK and not data.empty:
@@ -400,43 +407,54 @@ class FutuHKVisualTrading:
             
             # 缠论分析
             chan_result = self.analyze_with_chan(code)
-            if not chan_result or not chan_result.get('is_buy_signal'):
-                logger.debug(f"{code} 无买入信号，跳过")
+            if not chan_result:
+                logger.debug(f"{code} 无缠论信号，跳过")
                 continue
             
-            # 生成图表
+            # 记录信号类型（买入或卖出）
+            bsp_type = chan_result.get('bsp_type', '未知')
+            is_buy = chan_result.get('is_buy_signal', False)
+            logger.info(f"{code} 信号类型: {bsp_type}, 是否买入: {is_buy}")
+            
+            # 生成图表（无论买入卖出都生成，用于视觉评分）
             chart_paths = self.generate_charts(code, chan_result['chan_analysis']['chan_30m'])
             if not chart_paths:
                 logger.warning(f"{code} 图表生成失败，跳过")
                 continue
             
-            # 视觉评分
+            # 视觉评分（无论买入卖出都进行）
             try:
                 visual_result = self.visual_judge.evaluate(chart_paths)
                 score = visual_result.get('score', 0)
                 action = visual_result.get('action', 'WAIT')
                 analysis = visual_result.get('analysis', '')
                 
-                logger.info(f"{code} 视觉评分: {score}, 建议: {action}")
+                logger.info(f"{code} 视觉评分: {score}/100, 建议: {action}, 分析: {analysis}")
                 
-                # 检查评分阈值
-                if score < self.min_visual_score or action != 'BUY':
-                    logger.info(f"{code} 评分({score})低于阈值({self.min_visual_score})或建议不买入，跳过")
-                    continue
-                
-                # 计算购买数量
-                buy_quantity = self.calculate_position_size(current_price, available_funds)
-                if buy_quantity <= 0:
-                    logger.warning(f"{code} 计算出的购买数量无效: {buy_quantity}")
-                    continue
-                
-                logger.info(f"{code} 满足交易条件 - 价格: {current_price}, 数量: {buy_quantity}, 评分: {score}")
-                
-                # 执行交易
-                if self.execute_trade(code, 'BUY', buy_quantity, current_price):
-                    logger.info(f"成功下单买入 {code}")
+                # 根据信号类型执行不同操作
+                if is_buy:
+                    # 买入信号处理
+                    if score < self.min_visual_score or action != 'BUY':
+                        logger.info(f"{code} 买入信号但评分({score})低于阈值({self.min_visual_score})或建议不买入，跳过")
+                        continue
+                    
+                    # 计算购买数量
+                    buy_quantity = self.calculate_position_size(current_price, available_funds)
+                    if buy_quantity <= 0:
+                        logger.warning(f"{code} 计算出的购买数量无效: {buy_quantity}")
+                        continue
+                    
+                    logger.info(f"{code} 满足买入条件 - 价格: {current_price}, 数量: {buy_quantity}, 评分: {score}")
+                    
+                    # 执行买入交易
+                    if self.execute_trade(code, 'BUY', buy_quantity, current_price):
+                        logger.info(f"✅ 成功下单买入 {code}")
+                    else:
+                        logger.error(f"❌ 买入下单失败 {code}")
                 else:
-                    logger.error(f"下单失败 {code}")
+                    # 卖出信号处理
+                    logger.info(f"{code} 卖出信号 ({bsp_type})，暂不执行卖出操作")
+                    # TODO: 实现卖出逻辑
                     
             except Exception as e:
                 logger.error(f"视觉评分异常 {code}: {e}")
