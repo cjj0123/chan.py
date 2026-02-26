@@ -15,6 +15,7 @@ from DataAPI.CommonStockAPI import CCommonStockApi
 from KLine.KLine_List import CKLine_List
 from KLine.KLine_Unit import CKLine_Unit
 from DataAPI.FutuAPI import CFutuAPI
+from DataAPI.CustomParquetAPI import CCustomParquetAPI
 
 
 class CChan:
@@ -184,7 +185,7 @@ class CChan:
             from DataAPI.AkshareAPI import CAkshare
             _dict[DATA_SRC.AKSHARE] = CAkshare
         elif self.data_src == DATA_SRC.FUTU:
-            stock_api = CFutuAPI(self.code, lv, self.begin_time, self.end_time, self.autype)
+            return CFutuAPI
         if self.data_src in _dict:
             return _dict[self.data_src]
         assert isinstance(self.data_src, str)

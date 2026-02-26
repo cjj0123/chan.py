@@ -1,0 +1,56 @@
+{
+  "timestamp": "2026-02-21 07:17:11",
+  "stock": "HK.00836",
+  "trade_count": 5,
+  "trades": [
+    {
+      "buy_time": "2023/06/23 15:00",
+      "sell_time": "2023/07/12 10:30",
+      "buy_price": 13.482999999,
+      "sell_price": 15.363,
+      "profit": 13.943484396198427,
+      "buy_type": "1p",
+      "sell_type": "1"
+    },
+    {
+      "buy_time": "2023/08/21 15:00",
+      "sell_time": "2024/01/16 10:30",
+      "buy_price": 12.803,
+      "sell_price": 14.231,
+      "profit": 11.153635866593758,
+      "buy_type": "1",
+      "sell_type": "1"
+    },
+    {
+      "buy_time": "2024/09/11 10:30",
+      "sell_time": "2024/11/08 10:00",
+      "buy_price": 17.073,
+      "sell_price": 17.973,
+      "profit": 5.271481286241425,
+      "buy_type": "1",
+      "sell_type": "1"
+    },
+    {
+      "buy_time": "2024/11/29 14:30",
+      "sell_time": "2025/03/20 10:00",
+      "buy_price": 16.613,
+      "sell_price": 18.233,
+      "profit": 9.75139950641065,
+      "buy_type": "1",
+      "sell_type": "1"
+    },
+    {
+      "buy_time": "2025/09/26 10:00",
+      "sell_time": "2025/11/12 16:00",
+      "buy_price": 17.59,
+      "sell_price": 19.44,
+      "profit": 10.517339397384886,
+      "buy_type": "1p",
+      "sell_type": "1"
+    }
+  ],
+  "summary": {
+    "total_profit": 50.63734045282914,
+    "win_rate": 100.0
+  }
+}
