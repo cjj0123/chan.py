@@ -160,6 +160,83 @@ class FutuHKVisualTrading:
         
         return max(0, lot_size)
     
+    def calculate_trading_hours(self, start_time: datetime, end_time: datetime) -> float:
+        """
+        计算两个时间点之间的港股交易小时数（排除非交易时段）
+        
+        港股交易时间：
+        - 上午：09:30 - 12:00
+        - 下午：13:00 - 16:00
+        - 周末和节假日不交易
+        
+        Args:
+            start_time: 信号产生时间
+            end_time: 当前时间
+            
+        Returns:
+            交易小时数（浮点数）
+        """
+        from pandas.tseries.holiday import AbstractHolidayCalendar, Holiday
+        from pandas.tseries.offsets import CustomBusinessDay
+        
+        # 港股节假日（简化版，主要节假日）
+        class HKHolidays(AbstractHolidayCalendar):
+            rules = [
+                Holiday('New Year', month=1, day=1),
+                Holiday('Lunar New Year 1', month=2, day=10),  # 春节（示例日期）
+                Holiday('Lunar New Year 2', month=2, day=11),
+                Holiday('Lunar New Year 3', month=2, day=12),
+                Holiday('Good Friday', month=3, day=29),  # 耶稣受难节（示例）
+                Holiday('Easter Monday', month=4, day=1),  # 复活节星期一
+                Holiday('Labour Day', month=5, day=1),
+                Holiday('MidAutumn', month=9, day=17),  # 中秋节（示例）
+                Holiday('National Day', month=10, day=1),
+                Holiday('Christmas', month=12, day=25),
+                Holiday('Boxing Day', month=12, day=26),
+            ]
+        
+        total_hours = 0.0
+        current = start_time
+        
+        while current < end_time:
+            # 检查是否是工作日（周一到周五）
+            if current.weekday() >= 5:  # 周六或周日
+                current += timedelta(days=1)
+                current = current.replace(hour=0, minute=0, second=0)
+                continue
+            
+            # 获取当天的交易时段
+            morning_start = current.replace(hour=9, minute=30, second=0, microsecond=0)
+            morning_end = current.replace(hour=12, minute=0, second=0, microsecond=0)
+            afternoon_start = current.replace(hour=13, minute=0, second=0, microsecond=0)
+            afternoon_end = current.replace(hour=16, minute=0, second=0, microsecond=0)
+            day_end = current.replace(hour=23, minute=59, second=59)
+            
+            # 如果当前时间早于上午开盘，跳到开盘时间
+            if current < morning_start:
+                current = morning_start
+            
+            # 计算上午交易时段
+            if morning_start <= current < morning_end:
+                segment_end = min(morning_end, end_time)
+                total_hours += (segment_end - current).total_seconds() / 3600
+                current = segment_end
+            
+            # 计算下午交易时段
+            if afternoon_start <= current < afternoon_end:
+                segment_end = min(afternoon_end, end_time)
+                total_hours += (segment_end - current).total_seconds() / 3600
+                current = segment_end
+            
+            # 如果已经过了下午收盘，进入下一天
+            if current >= afternoon_end:
+                current = (current + timedelta(days=1)).replace(hour=0, minute=0, second=0)
+            elif morning_end <= current < afternoon_start:
+                # 午休时间，跳到下午开盘
+                current = afternoon_start
+        
+        return total_hours
+    
     def analyze_with_chan(self, code: str) -> Optional[Dict]:
         """
         使用CChan分析股票
@@ -195,21 +272,21 @@ class FutuHKVisualTrading:
             is_buy = bsp.is_buy
             price = bsp.klu.close
             
-            # ====== 时间过滤：只交易最近4小时内的信号 ======
+            # ====== 时间过滤：只交易最近4个交易小时内的信号 ======
             # 将CTime转换为datetime
             bsp_ctime = bsp.klu.time
             bsp_time = datetime(bsp_ctime.year, bsp_ctime.month, bsp_ctime.day, 
                                bsp_ctime.hour, bsp_ctime.minute, bsp_ctime.second)
             
             now = datetime.now()
-            time_diff = now - bsp_time
+            trading_hours = self.calculate_trading_hours(bsp_time, now)
             
-            if time_diff > timedelta(hours=4):
+            if trading_hours > 4:
                 logger.info(f"{code} {bsp_type} 信号产生于 {bsp_time.strftime('%Y-%m-%d %H:%M')}，"
-                           f"距今 {time_diff.total_seconds()/3600:.1f} 小时，超过4小时窗口，跳过")
+                           f"距今 {trading_hours:.1f} 个交易小时，超过4小时窗口，跳过")
                 return None
             
-            logger.info(f"{code} {bsp_type} 信号在4小时窗口内（{time_diff.total_seconds()/3600:.1f}小时前），继续分析")
+            logger.info(f"{code} {bsp_type} 信号在4小时窗口内（{trading_hours:.1f}个交易小时前），继续分析")
             
             result = {
                 'code': code,
