@@ -66,11 +66,12 @@ class FutuHKVisualTrading:
         # 交易环境
         self.trd_env = TrdEnv.SIMULATE if dry_run else TrdEnv.REAL
         
-        # 缠论配置
+        # 缠论配置 - 启用MACD计算
         self.chan_config = CChanConfig({
             "bi_strict": False,
             "one_bi_zs": True,
-            "bs_type": '1,1p,2,2s,3a,3b'
+            "bs_type": '1,1p,2,2s,3a,3b',
+            "macd": True  # 启用MACD计算，用于副图显示
         })
         
         # 视觉评分器
@@ -420,7 +421,7 @@ class FutuHKVisualTrading:
             
             # 获取5分钟数据并生成图表（用于Gemini辅助判断背驰）
             end_time = datetime.now()
-            start_time = end_time - timedelta(days=14)  # 延长到14天，确保有足够K线形成中枢
+            start_time = end_time - timedelta(days=7)  # 7天数据
             
             chan_5m = CChan(
                 code=code,
