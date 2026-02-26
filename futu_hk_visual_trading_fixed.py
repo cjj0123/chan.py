@@ -392,19 +392,17 @@ class FutuHKVisualTrading:
                         "grid": None  # 去掉网格线
                     },
                     "bi": {
-                        "color": "#FFFF00",  # 黄色 (Yellow) - 笔/线段
-                        "linewidth": 2.5,  # 笔线加粗，AI更容易识别
+                        "color": "#FFD700",  # 金黄色 (Gold) - 笔/线段，更醒目
                         "show_num": False
                     },
                     "zs": {
-                        "color": "#4169E1",  # 皇家蓝 - 中枢边框
-                        "linewidth": 2.5,
-                        "facecolor": "#87CEEB",  # 天蓝色填充
-                        "alpha": 0.25  # 半透明，不遮挡K线
+                        "color": "#FF4500",  # 橙红色 - 中枢边框，更醒目
+                        "linewidth": 3  # 加粗边框
                     },
                     "bsp": {
-                        "fontsize": 12,  # 买卖点标记字体大小
-                        "color": "red"  # 买卖点标记颜色
+                        "fontsize": 14,  # 买卖点标记字体大小
+                        "buy_color": "red",   # 买点红色
+                        "sell_color": "green"  # 卖点绿色
                     },
                     "macd": {
                         "width": 0.6  # MACD柱状图宽度
@@ -450,19 +448,17 @@ class FutuHKVisualTrading:
                         "grid": None  # 去掉网格线
                     },
                     "bi": {
-                        "color": "#FFFF00",  # 黄色 (Yellow) - 笔/线段
-                        "linewidth": 2.5,  # 笔线加粗
+                        "color": "#FFD700",  # 金黄色 (Gold) - 笔/线段，更醒目
                         "show_num": False
                     },
                     "zs": {
-                        "color": "#4169E1",  # 皇家蓝 - 中枢边框
-                        "linewidth": 2.5,
-                        "facecolor": "#87CEEB",  # 天蓝色填充
-                        "alpha": 0.25  # 半透明
+                        "color": "#FF4500",  # 橙红色 - 中枢边框，更醒目
+                        "linewidth": 3  # 加粗边框
                     },
                     "bsp": {
-                        "fontsize": 12,
-                        "color": "red"
+                        "fontsize": 14,  # 买卖点标记字体加大
+                        "buy_color": "red",  # 买点红色
+                        "sell_color": "green"  # 卖点绿色
                     },
                     "macd": {
                         "width": 0.6
