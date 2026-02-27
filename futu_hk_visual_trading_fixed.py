@@ -186,7 +186,7 @@ class FutuHKVisualTrading:
         except Exception as e:
             logger.error("❌ 发送备忘录异常：" + str(e))
     
-        def close_connections(self):
+    def close_connections(self):
         """关闭富途连接"""
         if hasattr(self, 'quote_ctx'):
             self.quote_ctx.close()
