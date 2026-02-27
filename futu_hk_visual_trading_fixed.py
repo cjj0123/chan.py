@@ -395,7 +395,9 @@ class FutuHKVisualTrading:
             
             bsp = latest_bsps[0]
             bsp_type = bsp.type2str()
-            is_buy = bsp.is_buy
+            # 修复 CChan 库 bug：bsp.is_buy 返回错误，手动根据类型判断
+            # 买点：1, 2, 2s, 3a, 3b | 卖点：1p, 2p, 3c 等
+            is_buy = bsp_type in ['1', '2', '2s', '3a', '3b']
             price = bsp.klu.close
             
             # ====== 时间过滤：只交易最近4个交易小时内的信号 ======
