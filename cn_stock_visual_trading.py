@@ -27,6 +27,10 @@ import matplotlib.pyplot as plt
 from futu import *
 from visual_judge import VisualJudge
 
+# 设置 Gemini API Key
+import os
+os.environ["GOOGLE_API_KEY"] = "AIzaSyCyOShkz9hhPPLxYrI6Oc4eHq_I6muZF0Q"
+
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
@@ -496,6 +500,17 @@ class CNStockVisualTrading:
             self.send_scan_result_to_notes(scan_summary)
         except Exception as e:
             logger.error(f"发送扫描结果到备忘录失败：{e}")
+        
+        # 发送邮件报告（如果有信号）
+        if all_signals:
+            try:
+                subject = f"🎯 A 股交易信号 - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                chart_paths = []
+                for signal in all_signals:
+                    chart_paths.extend(signal.get('chart_paths', []))
+                send_stock_report(all_signals, chart_paths, subject)
+            except Exception as e:
+                logger.error(f"邮件发送失败：{e}")
         
         logger.info("=" * 70)
         logger.info("✅ A 股扫描完成")
