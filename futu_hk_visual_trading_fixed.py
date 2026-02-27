@@ -88,19 +88,7 @@ class FutuHKVisualTrading:
     
     def send_scan_result_to_notes(self, scan_summary):
         """
-        将扫描结果发送到 Apple Notes 备忘录（仅在有信号时发送）
-        
-        Args:
-            scan_summary: 字典，包含以下字段：
-                - total_stocks: 扫描股票数量
-                - valid_signals: 有效信号数量
-                - sell_signals: 卖出信号列表 (包含 chart_paths)
-                - buy_signals: 买入信号列表 (包含 chart_paths)
-                - executed_sells: 执行的卖出交易列表
-                - executed_buys: 执行的买入交易列表
-                - filtered_signals: 被过滤的信号列表（低于阈值）
-                - initial_funds: 初始资金
-                - final_funds: 最终资金
+        将扫描结果发送到 Apple Notes 备忘录（仅在有信号时发送，嵌入图表图片）
         """
         try:
             # 如果没有有效信号，跳过发送
@@ -109,25 +97,25 @@ class FutuHKVisualTrading:
                 return
             
             now = datetime.now()
-            title = f"🎯 港股交易信号 - {now.strftime('%Y-%m-%d %H:%M')}"
+            title = "🎯 港股交易信号 - " + now.strftime('%Y-%m-%d %H:%M')
             
-            # 构建内容
-            content_lines = [
+            # 构建文本内容
+            text_lines = [
                 "🎯 港股缠论视觉交易信号",
                 "═══════════════════════════════",
                 "",
-                f"⏰ 扫描时间: {now.strftime('%Y-%m-%d %H:%M:%S')}",
-                f"📈 扫描股票: {scan_summary.get('total_stocks', 0)}只",
-                f"✅ 有效信号: {scan_summary.get('valid_signals', 0)}个",
-                f"🎯 执行交易: {len(scan_summary.get('executed_sells', [])) + len(scan_summary.get('executed_buys', []))}笔",
+                "⏰ 扫描时间：" + now.strftime('%Y-%m-%d %H:%M:%S'),
+                "✅ 有效信号：" + str(scan_summary.get('valid_signals', 0)) + "个",
                 ""
             ]
+            
+            # 收集所有图表路径
+            all_chart_paths = []
             
             # 卖出信号
             sell_signals = scan_summary.get('sell_signals', [])
             if sell_signals:
-                content_lines.append(f"【卖出信号】{len(sell_signals)}个")
-                content_lines.append("─────────────────────────────")
+                text_lines.append("【卖出信号】" + str(len(sell_signals)) + "个")
                 for i, signal in enumerate(sell_signals, 1):
                     code = signal.get('code', 'N/A')
                     bsp_type = signal.get('bsp_type', '未知')
@@ -135,23 +123,18 @@ class FutuHKVisualTrading:
                     qty = signal.get('position_qty', 0)
                     price = signal.get('current_price', 0)
                     chart_paths = signal.get('chart_paths', [])
-                    content_lines.append(f"{i}. {code}")
-                    content_lines.append(f"   信号类型: {bsp_type}")
-                    content_lines.append(f"   视觉评分: {score}/100")
-                    content_lines.append(f"   持仓数量: {int(qty)}股")
-                    content_lines.append(f"   当前价格: {price:.2f}")
+                    
+                    text_lines.append(str(i) + ". " + str(code) + " - " + str(bsp_type) + " (评分：" + str(score) + ")")
+                    text_lines.append("    持仓：" + str(int(qty)) + "股 @ " + "{:.2f}".format(price))
+                    
                     if chart_paths:
-                        content_lines.append("   📊 图表文件:")
-                        for chart_path in chart_paths:
-                            file_url = f"file://{os.path.abspath(chart_path)}"
-                            content_lines.append(f"      • {file_url}")
-                    content_lines.append("")
+                        all_chart_paths.extend(chart_paths)
+                    text_lines.append("")
             
             # 买入信号
             buy_signals = scan_summary.get('buy_signals', [])
             if buy_signals:
-                content_lines.append(f"【买入信号】{len(buy_signals)}个")
-                content_lines.append("─────────────────────────────")
+                text_lines.append("【买入信号】" + str(len(buy_signals)) + "个")
                 for i, signal in enumerate(buy_signals, 1):
                     code = signal.get('code', 'N/A')
                     bsp_type = signal.get('bsp_type', '未知')
@@ -160,68 +143,50 @@ class FutuHKVisualTrading:
                     price = signal.get('current_price', 0)
                     cost = signal.get('estimated_cost', qty * price)
                     chart_paths = signal.get('chart_paths', [])
-                    content_lines.append(f"{i}. {code}")
-                    content_lines.append(f"   信号类型: {bsp_type}")
-                    content_lines.append(f"   视觉评分: {score}/100")
-                    content_lines.append(f"   买入数量: {int(qty)}股")
-                    content_lines.append(f"   当前价格: {price:.2f}")
-                    content_lines.append(f"   预计花费: {cost:,.2f}")
+                    
+                    text_lines.append(str(i) + ". " + str(code) + " - " + str(bsp_type) + " (评分：" + str(score) + ")")
+                    text_lines.append("    买入：" + str(int(qty)) + "股 @ " + "{:.2f}".format(price) + " (约 " + "{:,.0f}".format(cost) + " HKD)")
+                    
                     if chart_paths:
-                        content_lines.append("   📊 图表文件:")
-                        for chart_path in chart_paths:
-                            file_url = f"file://{os.path.abspath(chart_path)}"
-                            content_lines.append(f"      • {file_url}")
-                    content_lines.append("")
+                        all_chart_paths.extend(chart_paths)
+                    text_lines.append("")
             
             # 资金变动
             initial = scan_summary.get('initial_funds', 0)
             final = scan_summary.get('final_funds', 0)
-            content_lines.append("═══════════════════════════════")
-            content_lines.append("💰 资金变动:")
-            content_lines.append(f"   初始可用: {initial:,.2f}")
-            content_lines.append(f"   最终可用: {final:,.2f}")
-            content_lines.append(f"   本次变动: {final - initial:,.2f}")
-            content_lines.append("")
+            text_lines.append("═══════════════════════════════")
+            text_lines.append("💰 资金：" + "{:,.0f}".format(initial) + " → " + "{:,.0f}".format(final) + " HKD")
             
-            # 下次扫描时间
-            next_hour = now.hour
-            next_minute = now.minute
-            if now.minute < 30:
-                next_minute = 31 if now.hour < 11 else 1
-                if now.hour == 11 and now.minute >= 30:
-                    next_hour = 13
-                    next_minute = 1
-            else:
-                next_minute = 1
-                next_hour = now.hour + 1
-                if next_hour == 12:
-                    next_hour = 13
-            content_lines.append(f"🔔 下次扫描: {next_hour:02d}:{next_minute:02d}")
+            text_content = "\n".join(text_lines)
             
-            content = "\n".join(content_lines)
+            # AppleScript: 创建备忘录并插入图片
+            escaped_title = title.replace('"', '\\"')
+            escaped_text = text_content.replace('"', '\\"').replace("\n", "\\n")
             
-            # 使用 AppleScript 创建备忘录（需要转义特殊字符）
-            escaped_title = title.replace('\\', '\\\\').replace('"', '\\"')
-            escaped_content = content.replace('\\', '\\\\').replace('"', '\\"')
+            # 1. 创建文本备忘录
+            script1 = 'tell application "Notes"\n    make new note with properties {name:"' + escaped_title + '", body:"' + escaped_text + '"}\nend tell'
             
-            applescript = f'tell application "Notes" to make new note with properties {{name:"{escaped_title}", body:"{escaped_content}"}}'
-            
-            result = subprocess.run(
-                ["osascript", "-e", applescript],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
+            result = subprocess.run(["osascript", "-e", script1], capture_output=True, text=True, timeout=10)
             
             if result.returncode == 0:
-                logger.info(f"✅ 备忘录已创建: {title}")
-            else:
-                logger.error(f"❌ 创建备忘录失败: {result.stderr}")
+                logger.info("✅ 备忘录已创建：" + title)
                 
+                # 2. 插入图表图片
+                if all_chart_paths:
+                    for chart_path in all_chart_paths:
+                        if os.path.exists(chart_path):
+                            abs_path = os.path.abspath(chart_path)
+                            script2 = 'tell application "Notes"\n    tell note "' + escaped_title + '"\n        insert image from file "' + abs_path + '"\n    end tell\nend tell'
+                            subprocess.run(["osascript", "-e", script2], capture_output=True, timeout=10)
+                    
+                    logger.info("📊 已插入 " + str(len(all_chart_paths)) + " 张图表")
+            else:
+                logger.error("❌ 创建备忘录失败：" + result.stderr)
+            
         except Exception as e:
-            logger.error(f"❌ 发送备忘录异常: {e}")
+            logger.error("❌ 发送备忘录异常：" + str(e))
     
-    def close_connections(self):
+        def close_connections(self):
         """关闭富途连接"""
         if hasattr(self, 'quote_ctx'):
             self.quote_ctx.close()
