@@ -679,31 +679,30 @@ class FutuHKVisualTrading:
     
     def get_available_funds(self) -> float:
         """
-        获取可用资金
+        获取可用资金 (模拟盘/实盘都实时查询)
         
         Returns:
             可用资金金额
         """
-        # 模拟盘模式下使用固定初始资金
-        if self.dry_run:
-            initial_capital = 1000000.0  # 100万港币模拟资金
-            logger.info(f"模拟盘初始资金: {initial_capital}")
-            return initial_capital
-        
-        # 实盘模式查询真实资金
         try:
             ret, data = self.trd_ctx.accinfo_query(trd_env=self.trd_env)
             if ret == RET_OK and not data.empty:
-                available_funds = data.iloc[0]['avl_withdrawal_cash']
-                logger.info(f"可用资金: {available_funds}")
-                return available_funds
+                # 优先使用 cash 字段 (总现金)
+                if 'cash' in data.columns:
+                    available_funds = data.iloc[0]['cash']
+                elif 'avl_withdrawal_cash' in data.columns:
+                    available_funds = data.iloc[0]['avl_withdrawal_cash']
+                else:
+                    available_funds = data.iloc[0].get('total_assets', 0.0)
+                logger.info(f"可用资金：{available_funds:,.2f} HKD")
+                return float(available_funds)
             else:
-                logger.error(f"获取账户信息失败: {data}")
+                logger.error(f"获取账户信息失败：{data}")
                 return 0.0
         except Exception as e:
-            logger.error(f"获取资金信息异常: {e}")
+            logger.error(f"获取资金信息异常：{e}")
             return 0.0
-    
+        
     def scan_and_trade(self):
         """
         批量扫描并执行交易
