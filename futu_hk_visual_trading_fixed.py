@@ -628,8 +628,8 @@ class FutuHKVisualTrading:
         
         try:
             if action.upper() == 'BUY':
-                # 买单使用略高价格确保成交
-                order_price = price * 1.01
+                # 买单使用略高价格确保成交，价格保留 3 位小数 (港股精度)
+                order_price = round(price * 1.01, 3)
                 ret, data = self.trd_ctx.place_order(
                     price=order_price,
                     qty=quantity,
@@ -648,8 +648,8 @@ class FutuHKVisualTrading:
                     return False
                     
             elif action.upper() == 'SELL':
-                # 卖单使用略低价格确保成交
-                order_price = price * 0.99
+                # 卖单使用略低价格确保成交，价格保留 3 位小数 (港股精度)
+                order_price = round(price * 0.99, 3)
                 ret, data = self.trd_ctx.place_order(
                     price=order_price,
                     qty=quantity,
