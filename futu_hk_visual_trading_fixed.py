@@ -134,11 +134,17 @@ class FutuHKVisualTrading:
                     score = signal.get('score', 0)
                     qty = signal.get('position_qty', 0)
                     price = signal.get('current_price', 0)
+                    chart_paths = signal.get('chart_paths', [])
                     content_lines.append(f"{i}. {code}")
                     content_lines.append(f"   信号类型: {bsp_type}")
                     content_lines.append(f"   视觉评分: {score}/100")
                     content_lines.append(f"   持仓数量: {int(qty)}股")
                     content_lines.append(f"   当前价格: {price:.2f}")
+                    if chart_paths:
+                        content_lines.append("   📊 图表文件:")
+                        for chart_path in chart_paths:
+                            file_url = f"file://{os.path.abspath(chart_path)}"
+                            content_lines.append(f"      • {file_url}")
                     content_lines.append("")
             
             # 买入信号
@@ -153,12 +159,18 @@ class FutuHKVisualTrading:
                     qty = signal.get('buy_quantity', 0)
                     price = signal.get('current_price', 0)
                     cost = signal.get('estimated_cost', qty * price)
+                    chart_paths = signal.get('chart_paths', [])
                     content_lines.append(f"{i}. {code}")
                     content_lines.append(f"   信号类型: {bsp_type}")
                     content_lines.append(f"   视觉评分: {score}/100")
                     content_lines.append(f"   买入数量: {int(qty)}股")
                     content_lines.append(f"   当前价格: {price:.2f}")
                     content_lines.append(f"   预计花费: {cost:,.2f}")
+                    if chart_paths:
+                        content_lines.append("   📊 图表文件:")
+                        for chart_path in chart_paths:
+                            file_url = f"file://{os.path.abspath(chart_path)}"
+                            content_lines.append(f"      • {file_url}")
                     content_lines.append("")
             
             # 资金变动
