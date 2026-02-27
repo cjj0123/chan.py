@@ -635,7 +635,7 @@ class FutuHKVisualTrading:
                     qty=quantity,
                     code=code,
                     trd_side=TrdSide.BUY,
-                    order_type=OrderType.ENHANCE_LIMIT,
+                    order_type=OrderType.NORMAL,  # 港股增强限价单
                     trd_env=self.trd_env
                 )
                 
@@ -655,7 +655,7 @@ class FutuHKVisualTrading:
                     qty=quantity,
                     code=code,
                     trd_side=TrdSide.SELL,
-                    order_type=OrderType.ENHANCE_LIMIT,
+                    order_type=OrderType.NORMAL,  # 港股增强限价单
                     trd_env=self.trd_env
                 )
                 
