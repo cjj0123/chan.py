@@ -88,14 +88,14 @@ class FutuHKVisualTrading:
     
     def send_scan_result_to_notes(self, scan_summary):
         """
-        将扫描结果发送到 Apple Notes 备忘录
+        将扫描结果发送到 Apple Notes 备忘录（仅在有信号时发送）
         
         Args:
             scan_summary: 字典，包含以下字段：
                 - total_stocks: 扫描股票数量
                 - valid_signals: 有效信号数量
-                - sell_signals: 卖出信号列表
-                - buy_signals: 买入信号列表
+                - sell_signals: 卖出信号列表 (包含 chart_paths)
+                - buy_signals: 买入信号列表 (包含 chart_paths)
                 - executed_sells: 执行的卖出交易列表
                 - executed_buys: 执行的买入交易列表
                 - filtered_signals: 被过滤的信号列表（低于阈值）
@@ -103,12 +103,17 @@ class FutuHKVisualTrading:
                 - final_funds: 最终资金
         """
         try:
+            # 如果没有有效信号，跳过发送
+            if scan_summary.get('valid_signals', 0) == 0:
+                logger.info("📭 无有效信号，跳过备忘录通知")
+                return
+            
             now = datetime.now()
-            title = f"港股扫描结果 - {now.strftime('%Y-%m-%d %H:%M')}"
+            title = f"🎯 港股交易信号 - {now.strftime('%Y-%m-%d %H:%M')}"
             
             # 构建内容
             content_lines = [
-                "📊 港股视觉交易扫描报告",
+                "🎯 港股缠论视觉交易信号",
                 "═══════════════════════════════",
                 "",
                 f"⏰ 扫描时间: {now.strftime('%Y-%m-%d %H:%M:%S')}",
