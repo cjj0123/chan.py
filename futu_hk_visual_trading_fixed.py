@@ -241,7 +241,7 @@ class FutuHKVisualTrading:
             code: 股票代码
             
         Returns:
-            包含价格、市值等信息的字典
+            包含价格、市值、每手股数等信息的字典
         """
         try:
             ret, data = self.quote_ctx.get_market_snapshot([code])
@@ -251,7 +251,8 @@ class FutuHKVisualTrading:
                     'current_price': stock_info['last_price'],
                     'market_val': stock_info.get('market_val', 0),
                     'turnover_rate': stock_info.get('turnover_rate', 0),
-                    'volume': stock_info.get('volume', 0)
+                    'volume': stock_info.get('volume', 0),
+                    'lot_size': int(stock_info.get('lot_size', 100))  # 每手股数
                 }
             else:
                 logger.warning(f"无法获取 {code} 的市场快照")
@@ -260,7 +261,7 @@ class FutuHKVisualTrading:
             logger.error(f"获取股票信息异常 {code}: {e}")
             return {}
     
-    def calculate_position_size(self, current_price: float, available_funds: float) -> int:
+    def calculate_position_size(self, current_price: float, available_funds: float, lot_size: int = 100) -> int:
         """
         计算持仓大小
         
@@ -281,7 +282,11 @@ class FutuHKVisualTrading:
         shares_to_buy = int(max_investment / current_price)
         
         # 确保最小购买量
-        min_lot_size = 100  # 默认100股一手
+        # 向下取整到最接近的整手
+        lots = shares_to_buy // lot_size
+        final_quantity = lots * lot_size
+        
+        return max(0, final_quantity)
         lot_size = max(min_lot_size, shares_to_buy // 100 * 100)
         
         return max(0, lot_size)
@@ -777,6 +782,8 @@ class FutuHKVisualTrading:
                 
                 # 只收集达到阈值的信号
                 if score >= self.min_visual_score:
+                    # 获取每手股数
+                    lot_size = stock_info.get('lot_size', 100)
                     signal_data = {
                         'code': code,
                         'is_buy': is_buy,
@@ -784,6 +791,7 @@ class FutuHKVisualTrading:
                         'score': score,
                         'current_price': current_price,
                         'position_qty': position_qty,
+                        'lot_size': lot_size,
                         'chart_paths': chart_paths,
                         'visual_result': visual_result
                     }
@@ -842,7 +850,7 @@ class FutuHKVisualTrading:
                 bsp_type = signal['bsp_type']
                 
                 # 计算可买入数量
-                buy_quantity = self.calculate_position_size(price, available_funds)
+                buy_quantity = self.calculate_position_size(price, available_funds, signal.get('lot_size', 100))
                 
                 if buy_quantity <= 0:
                     logger.warning(f"[{i}/{len(buy_signals)}] {code} 资金不足，跳过 (可用: {available_funds:.2f})")
