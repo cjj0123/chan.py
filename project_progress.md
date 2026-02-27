@@ -28,29 +28,59 @@
 
 ## 避坑指南
 
-### 1. Apple Notes 图片插入 (appscript 方法)
+### 1. Apple Notes 图片插入 (AppleScript 方法)
 
-**问题**: 使用 `memo` CLI 或 AppleScript 无法将图片正确插入到备忘录中。
+**问题**: 在较新版本的 macOS 中，使用 AppleScript 的 `insert image from file` 命令无法将图片嵌入到 Apple Notes 备忘录中，会报语法错误。
 
-**解决方案**: 使用 Python 的 `appscript` 库直接操作 Apple Notes。
+**解决方案**: 改用 `make new attachment at end with data` 命令。
+
+**错误示例**:
+```applescript
+-- 这个命令在新系统中会失败
+tell application "Notes"
+    tell note "My Note"
+        insert image from file "/path/to/image.png"
+    end tell
+end tell
+```
+
+**正确示例**:
+```applescript
+-- 使用 attachment 方式
+tell application "Notes"
+    tell note "My Note"
+        make new attachment at end with data "/path/to/image.png"
+    end tell
+end tell
+```
+
+**在 Python 中的调用方式**:
+```python
+import subprocess
+
+title = "My Note"
+image_path = "/path/to/image.png"
+script = f'tell application "Notes" to tell note "{title}" to make new attachment at end with data "{image_path}"'
+subprocess.run(["osascript", "-e", script])
+```
+
+**关键要点**:
+- **不要使用** `insert image from file`。
+- **必须使用** `make new attachment at end with data`。
+- 确保文件路径是绝对路径。
+- 此方法已在 macOS Sequoia (15.x) 上验证有效。
+
+### 2. Apple Notes 图片插入 (appscript 方法)
+
+**替代方案**: 如果不想使用 `osascript`，也可以使用 Python 的 `appscript` 库。
 
 ```python
 from appscript import app, mactypes, k
 
 # 连接到 Notes 应用
 notes = app('Notes')
-
-# 获取或创建文件夹
-folder_name = "量化交易报告"
-try:
-    folder = notes.folders[folder_name]
-except:
-    notes.make(new=k.folder, with_properties={k.name: folder_name})
-    folder = notes.folders[folder_name]
-
-# 获取目标笔记
-note_title = "缠论图表测试 - HK.00700 - 2026-02-27"
-note = folder.notes[note_title]
+folder = notes.folders["量化交易报告"]
+note = folder.notes["Note Title"]
 
 # 添加图片附件
 image_path = "/path/to/chart.png"
@@ -58,9 +88,7 @@ note.make(new=k.attachment, at=note.end, with_data=mactypes.File(image_path))
 ```
 
 **关键要点**:
-- 使用 `mactypes.File()` 包装文件路径
-- 使用 `k.attachment` 指定附件类型
-- 使用 `at=note.end` 将附件添加到笔记末尾
 - 需要安装 `appscript`: `pip install appscript`
+- 使用 `mactypes.File()` 包装文件路径
 
 **参考文档**: [appscript 官方文档](https://appscript.sourceforge.io/)
