@@ -186,12 +186,13 @@ class FutuHKVisualTrading:
             if result.returncode == 0:
                 logger.info("✅ 备忘录已创建：" + title)
                 
-                # 2. 插入图表图片
+                # 2. 插入图表图片 (使用 attachment 方式)
                 if all_chart_paths:
                     for chart_path in all_chart_paths:
                         if os.path.exists(chart_path):
                             abs_path = os.path.abspath(chart_path)
-                            script2 = 'tell application "Notes"\n    tell note "' + escaped_title + '"\n        insert image from file "' + abs_path + '"\n    end tell\nend tell'
+                            # 使用 make new attachment 替代 insert image
+                            script2 = 'tell application "Notes"\n    tell note "' + escaped_title + '"\n        make new attachment at end with data "' + abs_path + '"\n    end tell\nend tell'
                             subprocess.run(["osascript", "-e", script2], capture_output=True, timeout=10)
                     
                     logger.info("📊 已插入 " + str(len(all_chart_paths)) + " 张图表")
@@ -774,31 +775,42 @@ class FutuHKVisualTrading:
                 
                 logger.info(f"{code} 视觉评分: {score}/100, 建议: {action}")
                 
-                # 只收集达到阈值的信号
-                if score >= self.min_visual_score:
-                    # 获取每手股数
-                    lot_size = stock_info.get('lot_size', 100)
-                    signal_data = {
-                        'code': code,
-                        'is_buy': is_buy,
-                        'bsp_type': bsp_type,
-                        'score': score,
-                        'current_price': current_price,
-                        'position_qty': position_qty,
-                        'lot_size': lot_size,
-                        'chart_paths': chart_paths,
-                        'visual_result': visual_result
-                    }
-                    all_signals.append(signal_data)
-                    logger.info(f"✅ {code} 信号收集成功 (评分: {score})")
-                else:
-                    logger.info(f"{code} 评分({score})低于阈值({self.min_visual_score})，不收集")
-                    
+                # 收集所有缠论信号，无论视觉评分
+                # 获取每手股数
+                lot_size = stock_info.get('lot_size', 100)
+                signal_data = {
+                    'code': code,
+                    'is_buy': is_buy,
+                    'bsp_type': bsp_type,
+                    'score': score,
+                    'current_price': current_price,
+                    'position_qty': position_qty,
+                    'lot_size': lot_size,
+                    'chart_paths': chart_paths,
+                    'visual_result': visual_result
+                }
+                all_signals.append(signal_data)
+                logger.info(f"✅ {code} 缠论信号已收集 (评分: {score})")
+                
             except Exception as e:
                 logger.error(f"视觉评分异常 {code}: {e}")
+                # 即使视觉评分失败，也收集缠论信号
+                signal_data = {
+                    'code': code,
+                    'is_buy': is_buy,
+                    'bsp_type': bsp_type,
+                    'score': 0,
+                    'current_price': current_price,
+                    'position_qty': position_qty,
+                    'lot_size': lot_size,
+                    'chart_paths': chart_paths,
+                    'visual_result': {'score': 0, 'action': 'ERROR', 'analysis': '视觉评分失败'}
+                }
+                all_signals.append(signal_data)
+                logger.info(f"⚠️ {code} 视觉评分失败，但缠论信号已收集")
                 continue
         
-        logger.info(f"共收集到 {len(all_signals)} 个有效信号")
+        logger.info(f"共收集到 {len(all_signals)} 个缠论信号")
         
         # ========== 第二阶段：分离并排序信号 ==========
         # 即使没有信号也继续执行，让备忘录函数处理
@@ -812,6 +824,8 @@ class FutuHKVisualTrading:
         logger.info(f"卖出信号: {len(sell_signals)}个, 买入信号: {len(buy_signals)}个")
         
         # ========== 第三阶段：先执行卖点（优先）==========
+        executed_sell = 0
+        executed_buy = 0
         if sell_signals:
             logger.info(f"\n>>> 开始执行卖出操作（共{len(sell_signals)}个）")
             for i, signal in enumerate(sell_signals, 1):
@@ -823,13 +837,18 @@ class FutuHKVisualTrading:
                 
                 logger.info(f"\n[{i}/{len(sell_signals)}] 卖出 {code} - {bsp_type} - 评分: {score}")
                 
-                if self.execute_trade(code, 'SELL', qty, price):
-                    # 卖出成功，释放资金
-                    released_funds = price * qty
-                    available_funds += released_funds
-                    logger.info(f"✅ 卖出成功 {code}, 释放资金: {released_funds:.2f}, 当前可用: {available_funds:.2f}")
+                # 只有视觉评分 >= 阈值才执行交易
+                if score >= self.min_visual_score:
+                    if self.execute_trade(code, 'SELL', qty, price):
+                        # 卖出成功，释放资金
+                        released_funds = price * qty
+                        available_funds += released_funds
+                        executed_sell += 1
+                        logger.info(f"✅ 卖出成功 {code}, 释放资金: {released_funds:.2f}, 当前可用: {available_funds:.2f}")
+                    else:
+                        logger.error(f"❌ 卖出失败 {code}")
                 else:
-                    logger.error(f"❌ 卖出失败 {code}")
+                    logger.info(f"⏭️ 卖出信号 {code} 评分({score})低于阈值({self.min_visual_score})，仅通知不执行")
         
         # ========== 第四阶段：再执行买点 ==========
         if buy_signals:
@@ -840,24 +859,29 @@ class FutuHKVisualTrading:
                 price = signal['current_price']
                 bsp_type = signal['bsp_type']
                 
-                # 计算可买入数量
-                buy_quantity = self.calculate_position_size(price, available_funds, signal.get('lot_size', 100))
-                
-                if buy_quantity <= 0:
-                    logger.warning(f"[{i}/{len(buy_signals)}] {code} 资金不足，跳过 (可用: {available_funds:.2f})")
-                    continue
-                
-                required_funds = price * buy_quantity
-                
-                logger.info(f"\n[{i}/{len(buy_signals)}] 买入 {code} - {bsp_type} - 评分: {score}")
-                logger.info(f"   计划买入: {buy_quantity}股, 预计花费: {required_funds:.2f}")
-                
-                if self.execute_trade(code, 'BUY', buy_quantity, price):
-                    # 买入成功，扣除资金
-                    available_funds -= required_funds
-                    logger.info(f"✅ 买入成功 {code}, 剩余资金: {available_funds:.2f}")
+                # 只有视觉评分 >= 阈值才执行交易
+                if score >= self.min_visual_score:
+                    # 计算可买入数量
+                    buy_quantity = self.calculate_position_size(price, available_funds, signal.get('lot_size', 100))
+                    
+                    if buy_quantity <= 0:
+                        logger.warning(f"[{i}/{len(buy_signals)}] {code} 资金不足，跳过 (可用: {available_funds:.2f})")
+                        continue
+                    
+                    required_funds = price * buy_quantity
+                    
+                    logger.info(f"\n[{i}/{len(buy_signals)}] 买入 {code} - {bsp_type} - 评分: {score}")
+                    logger.info(f"   计划买入: {buy_quantity}股, 预计花费: {required_funds:.2f}")
+                    
+                    if self.execute_trade(code, 'BUY', buy_quantity, price):
+                        # 买入成功，扣除资金
+                        available_funds -= required_funds
+                        executed_buy += 1
+                        logger.info(f"✅ 买入成功 {code}, 剩余资金: {available_funds:.2f}")
+                    else:
+                        logger.error(f"❌ 买入失败 {code}")
                 else:
-                    logger.error(f"❌ 买入失败 {code}")
+                    logger.info(f"⏭️ 买入信号 {code} 评分({score})低于阈值({self.min_visual_score})，仅通知不执行")
         
         logger.info(f"\n扫描交易完成，最终可用资金: {available_funds:.2f}")
         
