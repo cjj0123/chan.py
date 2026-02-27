@@ -22,12 +22,12 @@
     
     <key>StartCalendarInterval</key>
     <array>
-        <!-- 09:21 开盘前 -->
+        <!-- 09:23 开盘前 -->
         <dict>
             <key>Hour</key>
             <integer>9</integer>
             <key>Minute</key>
-            <integer>21</integer>
+            <integer>23</integer>
             <key>Weekday</key>
             <integer>1</integer>
         </dict>
@@ -35,7 +35,7 @@
             <key>Hour</key>
             <integer>9</integer>
             <key>Minute</key>
-            <integer>21</integer>
+            <integer>23</integer>
             <key>Weekday</key>
             <integer>2</integer>
         </dict>
@@ -43,7 +43,7 @@
             <key>Hour</key>
             <integer>9</integer>
             <key>Minute</key>
-            <integer>21</integer>
+            <integer>23</integer>
             <key>Weekday</key>
             <integer>3</integer>
         </dict>
@@ -51,7 +51,7 @@
             <key>Hour</key>
             <integer>9</integer>
             <key>Minute</key>
-            <integer>21</integer>
+            <integer>23</integer>
             <key>Weekday</key>
             <integer>4</integer>
         </dict>
@@ -59,7 +59,49 @@
             <key>Hour</key>
             <integer>9</integer>
             <key>Minute</key>
-            <integer>21</integer>
+            <integer>23</integer>
+            <key>Weekday</key>
+            <integer>5</integer>
+        </dict>
+        
+        <!-- 09:31 -->
+        <dict>
+            <key>Hour</key>
+            <integer>9</integer>
+            <key>Minute</key>
+            <integer>31</integer>
+            <key>Weekday</key>
+            <integer>1</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>9</integer>
+            <key>Minute</key>
+            <integer>31</integer>
+            <key>Weekday</key>
+            <integer>2</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>9</integer>
+            <key>Minute</key>
+            <integer>31</integer>
+            <key>Weekday</key>
+            <integer>3</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>9</integer>
+            <key>Minute</key>
+            <integer>31</integer>
+            <key>Weekday</key>
+            <integer>4</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>9</integer>
+            <key>Minute</key>
+            <integer>31</integer>
             <key>Weekday</key>
             <integer>5</integer>
         </dict>
@@ -484,47 +526,6 @@
             <integer>5</integer>
         </dict>
         
-        <!-- 15:55 收盘前最后扫描 -->
-        <dict>
-            <key>Hour</key>
-            <integer>15</integer>
-            <key>Minute</key>
-            <integer>55</integer>
-            <key>Weekday</key>
-            <integer>1</integer>
-        </dict>
-        <dict>
-            <key>Hour</key>
-            <integer>15</integer>
-            <key>Minute</key>
-            <integer>55</integer>
-            <key>Weekday</key>
-            <integer>2</integer>
-        </dict>
-        <dict>
-            <key>Hour</key>
-            <integer>15</integer>
-            <key>Minute</key>
-            <integer>55</integer>
-            <key>Weekday</key>
-            <integer>3</integer>
-        </dict>
-        <dict>
-            <key>Hour</key>
-            <integer>15</integer>
-            <key>Minute</key>
-            <integer>55</integer>
-            <key>Weekday</key>
-            <integer>4</integer>
-        </dict>
-        <dict>
-            <key>Hour</key>
-            <integer>15</integer>
-            <key>Minute</key>
-            <integer>55</integer>
-            <key>Weekday</key>
-            <integer>5</integer>
-        </dict>
     </array>
     
     <key>StandardOutPath</key>
