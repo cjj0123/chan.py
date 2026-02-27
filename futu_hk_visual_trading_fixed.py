@@ -8,6 +8,8 @@ import os
 import sys
 import time
 import logging
+import shutil
+import subprocess
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 import pandas as pd
@@ -77,7 +79,123 @@ class FutuHKVisualTrading:
         # 视觉评分器
         self.visual_judge = VisualJudge(use_mock=False)
         
+        # 检查 memo CLI 是否可用（用于发送 Apple Notes 备忘录）
+        self.memo_available = shutil.which("memo") is not None
+        if not self.memo_available:
+            logger.warning("memo CLI 未安装，Apple Notes 通知功能不可用")
+        
         logger.info(f"初始化完成 - 模拟盘: {dry_run}, 评分阈值: {min_visual_score}")
+    
+    def send_scan_result_to_notes(self, scan_summary):
+        """
+        将扫描结果发送到 Apple Notes 备忘录
+        
+        Args:
+            scan_summary: 字典，包含以下字段：
+                - total_stocks: 扫描股票数量
+                - valid_signals: 有效信号数量
+                - sell_signals: 卖出信号列表
+                - buy_signals: 买入信号列表
+                - executed_sells: 执行的卖出交易列表
+                - executed_buys: 执行的买入交易列表
+                - filtered_signals: 被过滤的信号列表（低于阈值）
+                - initial_funds: 初始资金
+                - final_funds: 最终资金
+        """
+        if not self.memo_available:
+            logger.warning("memo CLI 不可用，跳过发送备忘录")
+            return
+        
+        now = datetime.now()
+        title = f"港股扫描结果 - {now.strftime('%Y-%m-%d %H:%M')}"
+        
+        # 构建内容
+        content_lines = [
+            "📊 港股视觉交易扫描报告",
+            "═══════════════════════════════",
+            "",
+            f"⏰ 扫描时间: {now.strftime('%Y-%m-%d %H:%M:%S')}",
+            f"📈 扫描股票: {scan_summary.get('total_stocks', 0)}只",
+            f"✅ 有效信号: {scan_summary.get('valid_signals', 0)}个",
+            f"🎯 执行交易: {len(scan_summary.get('executed_sells', [])) + len(scan_summary.get('executed_buys', []))}笔",
+            ""
+        ]
+        
+        # 卖出信号
+        sell_signals = scan_summary.get('sell_signals', [])
+        if sell_signals:
+            content_lines.append(f"【卖出信号】{len(sell_signals)}个")
+            content_lines.append("─────────────────────────────")
+            for i, signal in enumerate(sell_signals, 1):
+                code = signal.get('code', 'N/A')
+                bsp_type = signal.get('bsp_type', '未知')
+                score = signal.get('score', 0)
+                qty = signal.get('position_qty', 0)
+                price = signal.get('current_price', 0)
+                content_lines.append(f"{i}. {code}")
+                content_lines.append(f"   信号类型: {bsp_type}")
+                content_lines.append(f"   视觉评分: {score}/100")
+                content_lines.append(f"   持仓数量: {int(qty)}股")
+                content_lines.append(f"   当前价格: {price:.2f}")
+                content_lines.append("")
+        
+        # 买入信号
+        buy_signals = scan_summary.get('buy_signals', [])
+        if buy_signals:
+            content_lines.append(f"【买入信号】{len(buy_signals)}个")
+            content_lines.append("─────────────────────────────")
+            for i, signal in enumerate(buy_signals, 1):
+                code = signal.get('code', 'N/A')
+                bsp_type = signal.get('bsp_type', '未知')
+                score = signal.get('score', 0)
+                qty = signal.get('buy_quantity', 0)
+                price = signal.get('current_price', 0)
+                cost = signal.get('estimated_cost', qty * price)
+                content_lines.append(f"{i}. {code}")
+                content_lines.append(f"   信号类型: {bsp_type}")
+                content_lines.append(f"   视觉评分: {score}/100")
+                content_lines.append(f"   买入数量: {int(qty)}股")
+                content_lines.append(f"   当前价格: {price:.2f}")
+                content_lines.append(f"   预计花费: {cost:,.2f}")
+                content_lines.append("")
+        
+        # 资金变动
+        initial = scan_summary.get('initial_funds', 0)
+        final = scan_summary.get('final_funds', 0)
+        content_lines.append("═══════════════════════════════")
+        content_lines.append("💰 资金变动:")
+        content_lines.append(f"   初始可用: {initial:,.2f}")
+        content_lines.append(f"   最终可用: {final:,.2f}")
+        content_lines.append(f"   本次变动: {final - initial:,.2f}")
+        content_lines.append("")
+        
+        # 下次扫描时间
+        next_hour = now.hour
+        next_minute = now.minute
+        if now.minute < 30:
+            next_minute = 31 if now.hour < 11 else 1
+            if now.hour == 11 and now.minute >= 30:
+                next_hour = 13
+                next_minute = 1
+        else:
+            next_minute = 1
+            next_hour = now.hour + 1
+            if next_hour == 12:
+                next_hour = 13
+        content_lines.append(f"🔔 下次扫描: {next_hour:02d}:{next_minute:02d}")
+        
+        content = "\n".join(content_lines)
+        
+        # 调用 memo 命令
+        try:
+            cmd = ["memo", "notes", "-a", title]
+            result = subprocess.run(cmd, input=content, text=True, capture_output=True, timeout=10)
+            if result.returncode == 0:
+                logger.info(f"✅ 备忘录已创建: {title}")
+            else:
+                logger.error(f"❌ 创建备忘录失败: {result.stderr}")
+        except Exception as e:
+            logger.error(f"❌ 发送备忘录异常: {e}")
     
     def close_connections(self):
         """关闭富途连接"""
@@ -589,6 +707,7 @@ class FutuHKVisualTrading:
         
         # 获取初始可用资金
         available_funds = self.get_available_funds()
+        available_funds_at_start = available_funds  # 记录初始资金用于备忘录对比
         if available_funds <= 0:
             logger.error("可用资金不足，退出扫描")
             return
@@ -733,6 +852,23 @@ class FutuHKVisualTrading:
                     logger.error(f"❌ 买入失败 {code}")
         
         logger.info(f"\n扫描交易完成，最终可用资金: {available_funds:.2f}")
+        
+        # ========== 第五阶段：发送扫描结果到备忘录 ==========
+        try:
+            scan_summary = {
+                'total_stocks': len(watchlist_codes),
+                'valid_signals': len(all_signals),
+                'sell_signals': sell_signals,
+                'buy_signals': buy_signals,
+                'executed_sells': [],  # 简化处理，实际可记录详细交易信息
+                'executed_buys': [],
+                'filtered_signals': [],
+                'initial_funds': available_funds_at_start,
+                'final_funds': available_funds
+            }
+            self.send_scan_result_to_notes(scan_summary)
+        except Exception as e:
+            logger.error(f"发送扫描结果到备忘录失败: {e}")
 
     def get_position_quantity(self, code: str) -> int:
         """
