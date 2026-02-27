@@ -61,7 +61,7 @@ class CNStockVisualTrading:
             "bi_strict": True,
             "seg_algo": "chan",
             "trigger_step": False,
-            "show_msg": False,
+            
         })
         
         # 初始化视觉评判
@@ -70,6 +70,14 @@ class CNStockVisualTrading:
         # 图表保存目录
         self.charts_dir = "charts_cn"
         os.makedirs(self.charts_dir, exist_ok=True)
+        
+        # 初始化 Futu 连接
+        self.quote_ctx = None
+        try:
+            self.quote_ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
+            logger.info("Futu 行情连接已建立")
+        except Exception as e:
+            logger.error(f"Futu 连接失败：{e}")
         
         # 检查 memo CLI 是否可用
         self.memo_available = shutil.which("memo") is not None
