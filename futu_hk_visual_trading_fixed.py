@@ -183,12 +183,11 @@ class FutuHKVisualTrading:
             
             content = "\n".join(content_lines)
             
-            # 使用 AppleScript 创建备忘录
-            applescript = f'''
-            tell application "Notes"
-                make new note with properties {{name:"{title}", body:"{content}"}}
-            end tell
-            '''
+            # 使用 AppleScript 创建备忘录（需要转义特殊字符）
+            escaped_title = title.replace('\\', '\\\\').replace('"', '\\"')
+            escaped_content = content.replace('\\', '\\\\').replace('"', '\\"')
+            
+            applescript = f'tell application "Notes" to make new note with properties {{name:"{escaped_title}", body:"{escaped_content}"}}'
             
             result = subprocess.run(
                 ["osascript", "-e", applescript],
