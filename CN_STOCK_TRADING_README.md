@@ -50,20 +50,20 @@
 
 ## 🚀 安装步骤
 
-### 1. 安装 Crontab 任务
+### 1. 安装 macOS launchd 任务（推荐）
 
 ```bash
-cd /Users/jijunchen/.openclaw/workspace/chan.py
-crontab crontab_cn_stock_trading.txt
+# 加载 launchd 配置
+launchctl load ~/Library/LaunchAgents/com.openclaw.cnstock.plist
 ```
 
 ### 2. 验证安装
 
 ```bash
 # 查看已安装的任务
-crontab -l | grep cn_stock
+launchctl list | grep cnstock
 
-# 应该看到 12 条 A 股扫描任务
+# 应该看到：com.openclaw.cnstock
 ```
 
 ### 3. 手动测试
@@ -181,24 +181,31 @@ export LOG_DIR=/your/custom/log/path
 ### Q1: 如何暂停定时任务？
 
 ```bash
-# 方法 1：注释掉 crontab 中的任务
-crontab -e
-# 在任务行首添加 #
+# 卸载 launchd 任务
+launchctl unload ~/Library/LaunchAgents/com.openclaw.cnstock.plist
 
-# 方法 2：删除 crontab
-crontab -r
-
-# 方法 3：临时禁用 memo 通知
-# 程序会自动检测 memo CLI，未安装时跳过通知
+# 重新加载
+launchctl load ~/Library/LaunchAgents/com.openclaw.cnstock.plist
 ```
 
 ### Q2: 如何修改扫描频率？
 
-编辑 `crontab_cn_stock_trading.txt`，修改时间配置：
+编辑 `~/Library/LaunchAgents/com.openclaw.cnstock.plist`，修改 `StartCalendarInterval` 部分：
 
+```xml
+<!-- 改为每小时扫描一次 -->
+<dict>
+    <key>Hour</key>
+    <integer>*</integer>
+    <key>Minute</key>
+    <integer>1</integer>
+</dict>
+```
+
+然后重新加载：
 ```bash
-# 改为每小时扫描一次
-01 * * * 1-5 cd $WORKSPACE && ...
+launchctl unload ~/Library/LaunchAgents/com.openclaw.cnstock.plist
+launchctl load ~/Library/LaunchAgents/com.openclaw.cnstock.plist
 ```
 
 ### Q3: 图表占用太多空间怎么办？
@@ -214,12 +221,21 @@ du -sh charts_cn/
 ### Q4: 如何在节假日暂停任务？
 
 ```bash
-# 方法 1：手动编辑 crontab
-crontab -e
-# 在节假日前的交易日收盘后注释掉任务
+# 卸载任务
+launchctl unload ~/Library/LaunchAgents/com.openclaw.cnstock.plist
 
-# 方法 2：使用 scheduler_config.py 检查交易日
-python3 scheduler_config.py --check-today
+# 节后重新加载
+launchctl load ~/Library/LaunchAgents/com.openclaw.cnstock.plist
+```
+
+### Q5: 如何查看 launchd 任务状态？
+
+```bash
+# 查看任务列表
+launchctl list | grep cnstock
+
+# 查看日志
+tail -f ~/Library/Logs/com.openclaw.cnstock.log
 ```
 
 ---
