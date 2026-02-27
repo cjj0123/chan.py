@@ -575,8 +575,11 @@ class FutuHKVisualTrading:
             return 0.0
     
     def scan_and_trade(self):
-        """扫描股票并执行交易"""
-        logger.info("开始扫描交易...")
+        """
+        批量扫描并执行交易
+        逻辑：收集所有信号 → 卖点优先 → 同类型按评分排序执行
+        """
+        logger.info("开始批量扫描交易...")
         
         # 获取自选股
         watchlist_codes = self.get_watchlist_codes()
@@ -584,11 +587,14 @@ class FutuHKVisualTrading:
             logger.warning("没有获取到自选股，退出扫描")
             return
         
-        # 获取可用资金
+        # 获取初始可用资金
         available_funds = self.get_available_funds()
         if available_funds <= 0:
             logger.error("可用资金不足，退出扫描")
             return
+        
+        # ========== 第一阶段：收集所有有效信号 ==========
+        all_signals = []
         
         for code in watchlist_codes:
             logger.info(f"分析股票: {code}")
@@ -609,91 +615,124 @@ class FutuHKVisualTrading:
                 logger.debug(f"{code} 无缠论信号，跳过")
                 continue
             
-            # 记录信号类型（买入或卖出）
+            # 记录信号类型
             bsp_type = chan_result.get('bsp_type', '未知')
             is_buy = chan_result.get('is_buy_signal', False)
-            # 添加 b/s 前缀，明确显示买点或卖点
             bsp_type_display = f"{'b' if is_buy else 's'}{bsp_type}"
             logger.info(f"{code} 信号类型: {bsp_type_display}, 是否买入: {is_buy}")
             
-            # ====== 持仓过滤逻辑 ======
-            # 查询当前持仓数量
+            # 持仓过滤
             position_qty = self.get_position_quantity(code)
             
-            # 已持仓股票跳过买点
             if is_buy and position_qty > 0:
                 logger.info(f"{code} 已有持仓({position_qty}股)，跳过买入")
                 continue
             
-            # 未持仓股票跳过卖点
             if not is_buy and position_qty <= 0:
-                logger.info(f"{code} 无持仓，跳过卖出分析")
+                logger.info(f"{code} 无持仓，跳过卖出")
                 continue
             
-            # 生成图表（需要交易的股票才生成图表进行视觉评分）
+            # 生成图表
             chart_paths = self.generate_charts(code, chan_result['chan_analysis']['chan_30m'])
             if not chart_paths:
                 logger.warning(f"{code} 图表生成失败，跳过")
                 continue
             
-            # 视觉评分（无论买入卖出都进行）
+            # 视觉评分
             try:
                 visual_result = self.visual_judge.evaluate(chart_paths)
                 score = visual_result.get('score', 0)
                 action = visual_result.get('action', 'WAIT')
                 analysis = visual_result.get('analysis', '')
                 
-                logger.info(f"{code} 视觉评分: {score}/100, 建议: {action}, 分析: {analysis}")
+                logger.info(f"{code} 视觉评分: {score}/100, 建议: {action}")
                 
-                # 根据信号类型执行不同操作
-                if is_buy:
-                    # 买入信号处理
-                    if score < self.min_visual_score or action != 'BUY':
-                        logger.info(f"{code} 买入信号但评分({score})低于阈值({self.min_visual_score})或建议不买入，跳过")
-                        continue
-                    
-                    # 计算购买数量
-                    buy_quantity = self.calculate_position_size(current_price, available_funds)
-                    if buy_quantity <= 0:
-                        logger.warning(f"{code} 计算出的购买数量无效: {buy_quantity}")
-                        continue
-                    
-                    logger.info(f"{code} 满足买入条件 - 价格: {current_price}, 数量: {buy_quantity}, 评分: {score}")
-                    
-                    # 执行买入交易
-                    if self.execute_trade(code, 'BUY', buy_quantity, current_price):
-                        logger.info(f"✅ 成功下单买入 {code}")
-                    else:
-                        logger.error(f"❌ 买入下单失败 {code}")
+                # 只收集达到阈值的信号
+                if score >= self.min_visual_score:
+                    signal_data = {
+                        'code': code,
+                        'is_buy': is_buy,
+                        'bsp_type': bsp_type,
+                        'score': score,
+                        'current_price': current_price,
+                        'position_qty': position_qty,
+                        'chart_paths': chart_paths,
+                        'visual_result': visual_result
+                    }
+                    all_signals.append(signal_data)
+                    logger.info(f"✅ {code} 信号收集成功 (评分: {score})")
                 else:
-                    # 卖出信号处理
-                    # 卖出阈值：视觉评分 <= 30 分（3分以下）说明顶部特征明显，建议卖出
-                    SELL_SCORE_THRESHOLD = 30
-                    
-                    if score <= SELL_SCORE_THRESHOLD:
-                        logger.info(f"{code} 卖出信号 ({bsp_type}) 且视觉评分仅 {score}/100，顶部特征明显，强烈建议卖出！")
-                        
-                        # 获取当前持仓数量
-                        sell_quantity = self.get_position_quantity(code)
-                        if sell_quantity <= 0:
-                            logger.warning(f"{code} 无持仓，无法卖出")
-                            continue
-                        
-                        logger.info(f"{code} 满足卖出条件 - 价格: {current_price}, 数量: {sell_quantity}, 评分: {score}")
-                        
-                        # 执行卖出交易
-                        if self.execute_trade(code, 'SELL', sell_quantity, current_price):
-                            logger.info(f"✅ 成功下单卖出 {code}")
-                        else:
-                            logger.error(f"❌ 卖出下单失败 {code}")
-                    else:
-                        logger.info(f"{code} 卖出信号 ({bsp_type}) 但视觉评分 {score}/100 高于阈值 {SELL_SCORE_THRESHOLD}，趋势仍健康，暂不卖出")
+                    logger.info(f"{code} 评分({score})低于阈值({self.min_visual_score})，不收集")
                     
             except Exception as e:
                 logger.error(f"视觉评分异常 {code}: {e}")
                 continue
         
-        logger.info("扫描交易完成")
+        logger.info(f"共收集到 {len(all_signals)} 个有效信号")
+        
+        if not all_signals:
+            logger.info("没有符合条件的信号，结束扫描")
+            return
+        
+        # ========== 第二阶段：分离并排序信号 ==========
+        sell_signals = [s for s in all_signals if not s['is_buy']]
+        buy_signals = [s for s in all_signals if s['is_buy']]
+        
+        # 按评分从高到低排序
+        sell_signals.sort(key=lambda x: x['score'], reverse=True)
+        buy_signals.sort(key=lambda x: x['score'], reverse=True)
+        
+        logger.info(f"卖出信号: {len(sell_signals)}个, 买入信号: {len(buy_signals)}个")
+        
+        # ========== 第三阶段：先执行卖点（优先）==========
+        if sell_signals:
+            logger.info(f"\n>>> 开始执行卖出操作（共{len(sell_signals)}个）")
+            for i, signal in enumerate(sell_signals, 1):
+                code = signal['code']
+                score = signal['score']
+                qty = signal['position_qty']
+                price = signal['current_price']
+                bsp_type = signal['bsp_type']
+                
+                logger.info(f"\n[{i}/{len(sell_signals)}] 卖出 {code} - {bsp_type} - 评分: {score}")
+                
+                if self.execute_trade(code, 'SELL', qty, price):
+                    # 卖出成功，释放资金
+                    released_funds = price * qty
+                    available_funds += released_funds
+                    logger.info(f"✅ 卖出成功 {code}, 释放资金: {released_funds:.2f}, 当前可用: {available_funds:.2f}")
+                else:
+                    logger.error(f"❌ 卖出失败 {code}")
+        
+        # ========== 第四阶段：再执行买点 ==========
+        if buy_signals:
+            logger.info(f"\n>>> 开始执行买入操作（共{len(buy_signals)}个）")
+            for i, signal in enumerate(buy_signals, 1):
+                code = signal['code']
+                score = signal['score']
+                price = signal['current_price']
+                bsp_type = signal['bsp_type']
+                
+                # 计算可买入数量
+                buy_quantity = self.calculate_position_size(price, available_funds)
+                
+                if buy_quantity <= 0:
+                    logger.warning(f"[{i}/{len(buy_signals)}] {code} 资金不足，跳过 (可用: {available_funds:.2f})")
+                    continue
+                
+                required_funds = price * buy_quantity
+                
+                logger.info(f"\n[{i}/{len(buy_signals)}] 买入 {code} - {bsp_type} - 评分: {score}")
+                logger.info(f"   计划买入: {buy_quantity}股, 预计花费: {required_funds:.2f}")
+                
+                if self.execute_trade(code, 'BUY', buy_quantity, price):
+                    # 买入成功，扣除资金
+                    available_funds -= required_funds
+                    logger.info(f"✅ 买入成功 {code}, 剩余资金: {available_funds:.2f}")
+                else:
+                    logger.error(f"❌ 买入失败 {code}")
+        
+        logger.info(f"\n扫描交易完成，最终可用资金: {available_funds:.2f}")
 
     def get_position_quantity(self, code: str) -> int:
         """
