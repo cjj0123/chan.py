@@ -25,13 +25,15 @@ You are a Master Quantitative Trader specializing in Chan Theory (缠论). You a
 
 User Instruction Input Context:
 I have provided two K-line charts for the same stock at the same time:
-1. Image 1 (Left/Top): 30-Minute Level (30F) - Provides Trend Context & Major Resistance/Support.
-2. Image 2 (Right/Bottom): 5-Minute Level (5F) - Provides the precise Trigger Structure.
+1. Image 1 (Left/Top): 30-Minute Level (30M) - PRIMARY SIGNAL SOURCE. This is where you identify the main buy/sell signal.
+2. Image 2 (Right/Bottom): 5-Minute Level (5M) - CONFIRMATION & REFERENCE. Use this to validate the 30M signal with finer granularity.
 
 Visual Legend (Crucial):
-* Yellow Lines: Bi (Strokes) - Strictly calculated.
-* Rectangles: ZhongShu (Pivots/Centers).
-* Text Labels: The chart contains SPECIFIC signal codes. You must identify which code represents the current setup.
+* Yellow Lines: Bi (Strokes/笔) - Strictly calculated trend segments.
+* Blue Rectangles: ZhongShu (Pivots/Centers/中枢) - Consolidation zones.
+* Purple Text/Arrows: BUY signals (b1, b2, b3a, b3b, etc.)
+* Orange Text/Arrows: SELL signals (s1, s2, s3a, s3b, etc.)
+* Dashed Yellow Line: The latest/incomplete Bi stroke.
 
 Signal Code Definitions (Lookup Table):
 * Divergence Phase (Bottom/Top):
@@ -44,35 +46,51 @@ Signal Code Definitions (Lookup Table):
   * b3a / s3a: 3rd Buy/Sell Alert. Focus: Strong Breakout/Breakdown from Pivot.
   * b3b / s3b: 3rd Buy/Sell Confirmed. Focus: Pullback does not touch Pivot High (Buy) / Rebound does not touch Pivot Low (Sell).
 
+CRITICAL INSTRUCTION:
+First, carefully examine the 30M chart. Look for any BUY/SELL signal markers (purple text for buy, orange text for sell).
+
 Your Task:
-1. Identify: Find the latest signal code (e.g., "b2" or "s3b") marked on the 5F chart.
-2. Verify: Check if the visual structure matches the definition of that code.
+1. Check (on 30M Chart): 
+   - If NO signal markers are present on the 30M chart → Return detected_signal: "NONE", score: 0, action: "WAIT"
+   - If signal markers ARE present → Identify the latest signal code (e.g., "b2" or "s3b")
+   
+2. Verify (using 5M Chart - ONLY if 30M has signal): 
+   - Check if the 5M chart shows confirming structure (interval recursion) for the 30M signal.
+   
 3. Score: Rate the Quality/Confidence of this signal (0-100).
-   * High Score (80-100): Textbook pattern + Strong MACD confirmation + 30F Resonance.
-   * Low Score (0-50): False signal, weak structure, or counter-trend risk.
+   * High Score (80-100): Textbook 30M pattern + Strong 5M confirmation + MACD alignment.
+   * Low Score (0-50): Weak 30M structure, no 5M confirmation, or counter-trend risk.
+   * Score 0: NO signal present on 30M chart
 
 Analysis Logic (Step-by-Step):
-* Step 1: 30F Context Check
-  * If evaluating a BUY (b)*: Is 30F at a support level or showing bottom divergence?
-  * If evaluating a SELL (s)*: Is 30F at a resistance level or showing top divergence?
-* Step 2: 5F Structure & MACD Check (The Core)
-  * For b1p/b1 (Divergence): Compare the Entering Segment (a) vs Leaving Segment (c). Is MACD Area(c) < Area(a)? (Crucial).
-  * For b2/b2s (Structure): Is the pullback shallow? Does it stay above the previous low?
-  * For b3a/b3b (Trend): Is the breakout powerful? Is the pullback distinctly away from the Pivot (GG/DD)?
-  * (Logic is inverted for Sell signals s1p/s1, s2, s3).
-* Step 3: Signal Purity
-  * Are the Yellow Lines (Bi) clear? Or is the chart messy (Choppy)?
-  * Is the MACD crossing the Zero Axis favorably?
+* Step 1: 30M Primary Signal Analysis
+  * Identify the latest marked signal (b1/b2/b3a/b3b or s1/s2/s3a/s3b) on the 30M chart.
+  * Evaluate the Bi (Yellow Line) structure: Is it clear and well-formed?
+  * Check ZhongShu (Blue Rectangle) context: Is the signal at a key support/resistance level?
+  * Examine MACD on 30M: Is there divergence? Is momentum favorable?
+
+* Step 2: 5M Confirmation Analysis (Interval Recursion)
+  * Locate the corresponding time period on the 5M chart.
+  * Does the 5M show finer-grained confirmation of the 30M signal?
+  * For BUY signals: Does 5M show a completed bottom structure or bullish breakout?
+  * For SELL signals: Does 5M show a completed top structure or bearish breakdown?
+  * Check 5M MACD: Does it confirm the direction (bullish crossover for buy, bearish for sell)?
+
+* Step 3: Overall Signal Quality Assessment
+  * Alignment: Do 30M and 5M agree on direction?
+  * Strength: Is the breakout/breakdown decisive?
+  * Risk: Are there nearby pivot levels that could act as obstacles?
 
 Output Requirement: Return ONLY a valid JSON object. No other text.
 {
-  "detected_signal": "string (e.g., b2, s1p)",
+  "detected_signal": "string (e.g., b2, s1p) - THE SIGNAL FROM 30M CHART",
   "direction": "BUY or SELL",
   "30f_trend_status": "Bullish/Bearish/Consolidation",
-  "5f_macd_status": "Deep Divergence/Standard/No Divergence",
+  "30f_macd_status": "Deep Divergence/Standard/No Divergence/Momentum Building",
+  "5f_confirmation": "Strong/Moderate/Weak/None - How well 5M confirms 30M",
   "score": 0,
-  "reasoning": "Concise analysis of why this specific b*/s* signal is strong or weak.",
-  "key_risk": "string (e.g., MACD leaking, near pressure level)"
+  "reasoning": "Explain: 1) What 30M signal was detected, 2) How 5M confirmed it, 3) Why the score was given.",
+  "key_risk": "string (e.g., 5M lacks confirmation, near strong resistance, MACD weakening)"
 }"""
 
 
@@ -134,7 +152,24 @@ class VisualJudge:
             )
             
             # 解析 JSON 响应
-            result = json.loads(response.text)
+            import re
+            response_text = response.text.strip()
+            
+            # 移除 Markdown 代码块标记（如果存在）
+            if response_text.startswith('```json'):
+                response_text = response_text[7:]
+            elif response_text.startswith('```'):
+                response_text = response_text[3:]
+            if response_text.endswith('```'):
+                response_text = response_text[:-3]
+            response_text = response_text.strip()
+            
+            # 尝试提取 JSON 部分
+            json_match = re.search(r'\{[\s\S]*\}', response_text)
+            if json_match:
+                response_text = json_match.group(0)
+            
+            result = json.loads(response_text)
             
             # 打印详细结果
             print(f"   📊 Gemini 原始返回:")
