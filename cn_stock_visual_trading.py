@@ -43,7 +43,7 @@ class CNStockVisualTrading:
     """A 股视觉交易类（仅扫描通知）"""
     
     def __init__(self, 
-                 cn_watchlist_group: str = "A 股",
+                 cn_watchlist_group: str = "沪深",
                  min_visual_score: int = 70):
         """
         初始化 A 股视觉交易系统（仅扫描通知）
@@ -75,6 +75,7 @@ class CNStockVisualTrading:
         self.quote_ctx = None
         try:
             self.quote_ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
+            time.sleep(1)  # 等待连接就绪
             logger.info("Futu 行情连接已建立")
         except Exception as e:
             logger.error(f"Futu 连接失败：{e}")
@@ -94,6 +95,11 @@ class CNStockVisualTrading:
             股票代码列表
         """
         try:
+            # 确保连接已建立
+            if not self.quote_ctx:
+                self.quote_ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
+                time.sleep(0.5)  # 等待连接就绪
+            
             ret, data = self.quote_ctx.get_user_security(self.cn_watchlist_group)
             if ret == RET_OK:
                 codes = data['code'].tolist()
