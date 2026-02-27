@@ -26,6 +26,21 @@ import matplotlib.pyplot as plt
 from futu import *
 from visual_judge import VisualJudge
 
+# 自动加载 API Key
+try:
+    from load_api_key import load_api_keys
+    if load_api_keys():
+        print("✅ API Key 已从 memory/api_keys.md 加载")
+    else:
+        # 备用方案：直接设置
+        import os
+        os.environ["GOOGLE_API_KEY"] = "AIzaSyCyOShkz9hhPPLxYrI6Oc4eHq_I6muZF0Q"
+        print("✅ API Key 已使用备用配置")
+except Exception as e:
+    import os
+    os.environ["GOOGLE_API_KEY"] = "AIzaSyCyOShkz9hhPPLxYrI6Oc4eHq_I6muZF0Q"
+    print(f"⚠️ API Key 加载异常，使用备用配置")
+
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
