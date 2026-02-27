@@ -95,12 +95,17 @@ class CNStockVisualTrading:
             股票代码列表
         """
         try:
-            # 确保连接已建立
-            if not self.quote_ctx:
-                self.quote_ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
-                time.sleep(0.5)  # 等待连接就绪
+            # 重新创建连接确保可用
+            if self.quote_ctx:
+                try:
+                    self.quote_ctx.close()
+                except:
+                    pass
             
-            ret, data = self.quote_ctx.get_user_security(self.cn_watchlist_group)
+            self.quote_ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
+            time.sleep(1.5)  # 等待连接完全就绪
+            
+            ret, data = self.quote_ctx.get_user_security("沪深")
             if ret == RET_OK:
                 codes = data['code'].tolist()
                 # 过滤 A 股代码 (SH. SZ.)
