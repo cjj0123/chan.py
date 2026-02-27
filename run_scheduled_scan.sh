@@ -47,7 +47,7 @@ try:
         hk_watchlist_group='港股',
         min_visual_score=70,
         max_position_ratio=0.2,
-        dry_run=False  # 实盘模式
+        dry_run=True  # 模拟盘模式 (实盘需改为 False)
     )
     trader.scan_and_trade()
     trader.close_connections()
