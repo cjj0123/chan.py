@@ -785,11 +785,8 @@ class FutuHKVisualTrading:
         
         logger.info(f"共收集到 {len(all_signals)} 个有效信号")
         
-        if not all_signals:
-            logger.info("没有符合条件的信号，结束扫描")
-            return
-        
         # ========== 第二阶段：分离并排序信号 ==========
+        # 即使没有信号也继续执行，让备忘录函数处理
         sell_signals = [s for s in all_signals if not s['is_buy']]
         buy_signals = [s for s in all_signals if s['is_buy']]
         
