@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>缠论图表测试 - HK.00700</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+            border-bottom: 2px solid #4169E1;
+            padding-bottom: 10px;
+        }
+        .info {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .chart-container {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .chart-title {
+            font-size: 18px;
+            font-weight: bold;
+            color: #4169E1;
+            margin-bottom: 10px;
+        }
+        .chart-img {
+            width: 100%;
+            height: auto;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .config {
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+        }
+        .config h3 {
+            margin-top: 0;
+            color: #666;
+        }
+        .config-item {
+            margin: 5px 0;
+            font-size: 14px;
+        }
+        .color-box {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            vertical-align: middle;
+            margin-right: 8px;
+            border: 1px solid #ccc;
+        }
+    </style>
+</head>
+<body>
+    <h1>📊 缠论视觉评分测试图表</h1>
+    
+    <div class="info">
+        <strong>股票代码:</strong> HK.00700 (腾讯控股)<br>
+        <strong>生成时间:</strong> 2026-02-27 03:55<br>
+        <strong>用途:</strong> Gemini 视觉评分分析
+    </div>
+
+    <div class="chart-container">
+        <div class="chart-title">📈 30分钟图 (30天数据)</div>
+        <img class="chart-img" src="HK_00700_20260227_035540_30M.png" alt="30分钟图">
+    </div>
+
+    <div class="chart-container">
+        <div class="chart-title">📈 5分钟图 (7天数据)</div>
+        <img class="chart-img" src="HK_00700_20260227_035540_5M.png" alt="5分钟图">
+    </div>
+
+    <div class="config">
+        <h3>🎨 图表配置详情</h3>
+        <div class="config-item">
+            <span class="color-box" style="background: #FFFF00;"></span>
+            <strong>笔线颜色:</strong> 黄色 (#FFFF00)
+        </div>
+        <div class="config-item">
+            <span class="color-box" style="background: #4169E1;"></span>
+            <strong>中枢边框:</strong> 皇家蓝 (#4169E1)
+        </div>
+        <div class="config-item">
+            <span class="color-box" style="background: #FF0000;"></span>
+            <strong>MACD红柱:</strong> 鲜红 (#FF0000) - 上涨动能
+        </div>
+        <div class="config-item">
+            <span class="color-box" style="background: #00FF00;"></span>
+            <strong>MACD绿柱:</strong> 鲜绿 (#00FF00) - 下跌动能
+        </div>
+        <div class="config-item">
+            <span class="color-box" style="background: #FFFFFF; border: 1px solid #999;"></span>
+            <strong>DIF线:</strong> 白色 (#FFFFFF) - 快线
+        </div>
+        <div class="config-item">
+            <span class="color-box" style="background: #FFFF00;"></span>
+            <strong>DEA线:</strong> 黄色 (#FFFF00) - 慢线
+        </div>
+        <div class="config-item">
+            <span class="color-box" style="background: #1a1a1a;"></span>
+            <strong>MACD背景:</strong> 深灰色 (#1a1a1a) - 增强对比度
+        </div>
+        <div class="config-item">
+            <strong>买卖点标记:</strong> 红色 = 买入信号, 绿色 = 卖出信号
+        </div>
+    </div>
+</body>
+</html>
