@@ -102,98 +102,106 @@ class FutuHKVisualTrading:
                 - initial_funds: 初始资金
                 - final_funds: 最终资金
         """
-        if not self.memo_available:
-            logger.warning("memo CLI 不可用，跳过发送备忘录")
-            return
-        
-        now = datetime.now()
-        title = f"港股扫描结果 - {now.strftime('%Y-%m-%d %H:%M')}"
-        
-        # 构建内容
-        content_lines = [
-            "📊 港股视觉交易扫描报告",
-            "═══════════════════════════════",
-            "",
-            f"⏰ 扫描时间: {now.strftime('%Y-%m-%d %H:%M:%S')}",
-            f"📈 扫描股票: {scan_summary.get('total_stocks', 0)}只",
-            f"✅ 有效信号: {scan_summary.get('valid_signals', 0)}个",
-            f"🎯 执行交易: {len(scan_summary.get('executed_sells', [])) + len(scan_summary.get('executed_buys', []))}笔",
-            ""
-        ]
-        
-        # 卖出信号
-        sell_signals = scan_summary.get('sell_signals', [])
-        if sell_signals:
-            content_lines.append(f"【卖出信号】{len(sell_signals)}个")
-            content_lines.append("─────────────────────────────")
-            for i, signal in enumerate(sell_signals, 1):
-                code = signal.get('code', 'N/A')
-                bsp_type = signal.get('bsp_type', '未知')
-                score = signal.get('score', 0)
-                qty = signal.get('position_qty', 0)
-                price = signal.get('current_price', 0)
-                content_lines.append(f"{i}. {code}")
-                content_lines.append(f"   信号类型: {bsp_type}")
-                content_lines.append(f"   视觉评分: {score}/100")
-                content_lines.append(f"   持仓数量: {int(qty)}股")
-                content_lines.append(f"   当前价格: {price:.2f}")
-                content_lines.append("")
-        
-        # 买入信号
-        buy_signals = scan_summary.get('buy_signals', [])
-        if buy_signals:
-            content_lines.append(f"【买入信号】{len(buy_signals)}个")
-            content_lines.append("─────────────────────────────")
-            for i, signal in enumerate(buy_signals, 1):
-                code = signal.get('code', 'N/A')
-                bsp_type = signal.get('bsp_type', '未知')
-                score = signal.get('score', 0)
-                qty = signal.get('buy_quantity', 0)
-                price = signal.get('current_price', 0)
-                cost = signal.get('estimated_cost', qty * price)
-                content_lines.append(f"{i}. {code}")
-                content_lines.append(f"   信号类型: {bsp_type}")
-                content_lines.append(f"   视觉评分: {score}/100")
-                content_lines.append(f"   买入数量: {int(qty)}股")
-                content_lines.append(f"   当前价格: {price:.2f}")
-                content_lines.append(f"   预计花费: {cost:,.2f}")
-                content_lines.append("")
-        
-        # 资金变动
-        initial = scan_summary.get('initial_funds', 0)
-        final = scan_summary.get('final_funds', 0)
-        content_lines.append("═══════════════════════════════")
-        content_lines.append("💰 资金变动:")
-        content_lines.append(f"   初始可用: {initial:,.2f}")
-        content_lines.append(f"   最终可用: {final:,.2f}")
-        content_lines.append(f"   本次变动: {final - initial:,.2f}")
-        content_lines.append("")
-        
-        # 下次扫描时间
-        next_hour = now.hour
-        next_minute = now.minute
-        if now.minute < 30:
-            next_minute = 31 if now.hour < 11 else 1
-            if now.hour == 11 and now.minute >= 30:
-                next_hour = 13
-                next_minute = 1
-        else:
-            next_minute = 1
-            next_hour = now.hour + 1
-            if next_hour == 12:
-                next_hour = 13
-        content_lines.append(f"🔔 下次扫描: {next_hour:02d}:{next_minute:02d}")
-        
-        content = "\n".join(content_lines)
-        
-        # 调用 memo 命令
         try:
-            cmd = ["memo", "notes", "-a", title]
-            result = subprocess.run(cmd, input=content, text=True, capture_output=True, timeout=10)
+            now = datetime.now()
+            title = f"港股扫描结果 - {now.strftime('%Y-%m-%d %H:%M')}"
+            
+            # 构建内容
+            content_lines = [
+                "📊 港股视觉交易扫描报告",
+                "═══════════════════════════════",
+                "",
+                f"⏰ 扫描时间: {now.strftime('%Y-%m-%d %H:%M:%S')}",
+                f"📈 扫描股票: {scan_summary.get('total_stocks', 0)}只",
+                f"✅ 有效信号: {scan_summary.get('valid_signals', 0)}个",
+                f"🎯 执行交易: {len(scan_summary.get('executed_sells', [])) + len(scan_summary.get('executed_buys', []))}笔",
+                ""
+            ]
+            
+            # 卖出信号
+            sell_signals = scan_summary.get('sell_signals', [])
+            if sell_signals:
+                content_lines.append(f"【卖出信号】{len(sell_signals)}个")
+                content_lines.append("─────────────────────────────")
+                for i, signal in enumerate(sell_signals, 1):
+                    code = signal.get('code', 'N/A')
+                    bsp_type = signal.get('bsp_type', '未知')
+                    score = signal.get('score', 0)
+                    qty = signal.get('position_qty', 0)
+                    price = signal.get('current_price', 0)
+                    content_lines.append(f"{i}. {code}")
+                    content_lines.append(f"   信号类型: {bsp_type}")
+                    content_lines.append(f"   视觉评分: {score}/100")
+                    content_lines.append(f"   持仓数量: {int(qty)}股")
+                    content_lines.append(f"   当前价格: {price:.2f}")
+                    content_lines.append("")
+            
+            # 买入信号
+            buy_signals = scan_summary.get('buy_signals', [])
+            if buy_signals:
+                content_lines.append(f"【买入信号】{len(buy_signals)}个")
+                content_lines.append("─────────────────────────────")
+                for i, signal in enumerate(buy_signals, 1):
+                    code = signal.get('code', 'N/A')
+                    bsp_type = signal.get('bsp_type', '未知')
+                    score = signal.get('score', 0)
+                    qty = signal.get('buy_quantity', 0)
+                    price = signal.get('current_price', 0)
+                    cost = signal.get('estimated_cost', qty * price)
+                    content_lines.append(f"{i}. {code}")
+                    content_lines.append(f"   信号类型: {bsp_type}")
+                    content_lines.append(f"   视觉评分: {score}/100")
+                    content_lines.append(f"   买入数量: {int(qty)}股")
+                    content_lines.append(f"   当前价格: {price:.2f}")
+                    content_lines.append(f"   预计花费: {cost:,.2f}")
+                    content_lines.append("")
+            
+            # 资金变动
+            initial = scan_summary.get('initial_funds', 0)
+            final = scan_summary.get('final_funds', 0)
+            content_lines.append("═══════════════════════════════")
+            content_lines.append("💰 资金变动:")
+            content_lines.append(f"   初始可用: {initial:,.2f}")
+            content_lines.append(f"   最终可用: {final:,.2f}")
+            content_lines.append(f"   本次变动: {final - initial:,.2f}")
+            content_lines.append("")
+            
+            # 下次扫描时间
+            next_hour = now.hour
+            next_minute = now.minute
+            if now.minute < 30:
+                next_minute = 31 if now.hour < 11 else 1
+                if now.hour == 11 and now.minute >= 30:
+                    next_hour = 13
+                    next_minute = 1
+            else:
+                next_minute = 1
+                next_hour = now.hour + 1
+                if next_hour == 12:
+                    next_hour = 13
+            content_lines.append(f"🔔 下次扫描: {next_hour:02d}:{next_minute:02d}")
+            
+            content = "\n".join(content_lines)
+            
+            # 使用 AppleScript 创建备忘录
+            applescript = f'''
+            tell application "Notes"
+                make new note with properties {{name:"{title}", body:"{content}"}}
+            end tell
+            '''
+            
+            result = subprocess.run(
+                ["osascript", "-e", applescript],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
             if result.returncode == 0:
                 logger.info(f"✅ 备忘录已创建: {title}")
             else:
                 logger.error(f"❌ 创建备忘录失败: {result.stderr}")
+                
         except Exception as e:
             logger.error(f"❌ 发送备忘录异常: {e}")
     
