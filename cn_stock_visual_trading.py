@@ -127,6 +127,7 @@ class CNStockVisualTrading:
                 stock_info = data.iloc[0].to_dict()
                 return {
                     'current_price': stock_info['last_price'],
+                    'stock_name': stock_info.get('name', ''),  # 股票名称
                     'market_val': stock_info.get('market_val', 0),
                     'lot_size': int(stock_info.get('lot_size', 100))
                 }
@@ -313,13 +314,25 @@ class CNStockVisualTrading:
             sell_signals = scan_summary.get('sell_signals', [])
             if sell_signals:
                 text_lines.append("【卖出信号】" + str(len(sell_signals)) + "个")
+                text_lines.append("─────────────────────────────")
                 for i, signal in enumerate(sell_signals, 1):
                     code = signal.get('code', 'N/A')
+                    stock_name = signal.get('stock_name', '')
                     bsp_type = signal.get('bsp_type', '未知')
                     score = signal.get('score', 0)
                     chart_paths = signal.get('chart_paths', [])
+                    visual_result = signal.get('visual_result', {})
                     
-                    text_lines.append(str(i) + ". " + str(code) + " - " + str(bsp_type) + " (评分：" + str(score) + ")")
+                    text_lines.append(str(i) + ". " + str(code) + " " + str(stock_name))
+                    text_lines.append("   信号类型：" + str(bsp_type))
+                    text_lines.append("   视觉评分：" + str(score) + "/100")
+                    
+                    # 添加 Gemini 评分细节
+                    if visual_result:
+                        analysis = visual_result.get('analysis', '')
+                        if analysis:
+                            text_lines.append("   分析：" + str(analysis))
+                    
                     if chart_paths:
                         all_chart_paths.extend(chart_paths)
                     text_lines.append("")
@@ -328,13 +341,25 @@ class CNStockVisualTrading:
             buy_signals = scan_summary.get('buy_signals', [])
             if buy_signals:
                 text_lines.append("【买入信号】" + str(len(buy_signals)) + "个")
+                text_lines.append("─────────────────────────────")
                 for i, signal in enumerate(buy_signals, 1):
                     code = signal.get('code', 'N/A')
+                    stock_name = signal.get('stock_name', '')
                     bsp_type = signal.get('bsp_type', '未知')
                     score = signal.get('score', 0)
                     chart_paths = signal.get('chart_paths', [])
+                    visual_result = signal.get('visual_result', {})
                     
-                    text_lines.append(str(i) + ". " + str(code) + " - " + str(bsp_type) + " (评分：" + str(score) + ")")
+                    text_lines.append(str(i) + ". " + str(code) + " " + str(stock_name))
+                    text_lines.append("   信号类型：" + str(bsp_type))
+                    text_lines.append("   视觉评分：" + str(score) + "/100")
+                    
+                    # 添加 Gemini 评分细节
+                    if visual_result:
+                        analysis = visual_result.get('analysis', '')
+                        if analysis:
+                            text_lines.append("   分析：" + str(analysis))
+                    
                     if chart_paths:
                         all_chart_paths.extend(chart_paths)
                     text_lines.append("")
@@ -352,6 +377,7 @@ class CNStockVisualTrading:
                 
                 # 插入图表图片
                 if all_chart_paths:
+                    time.sleep(0.5)  # 等待备忘录创建完成
                     for chart_path in all_chart_paths:
                         if os.path.exists(chart_path):
                             abs_path = os.path.abspath(chart_path)
@@ -389,6 +415,8 @@ class CNStockVisualTrading:
                 continue
             
             current_price = stock_info['current_price']
+            # 获取股票名称
+            stock_name = stock_info.get('stock_name', '')
             if current_price <= 0:
                 logger.warning(f"{code} 价格无效，跳过")
                 continue
@@ -421,8 +449,12 @@ class CNStockVisualTrading:
                 
                 # 收集达到阈值的信号
                 if score >= self.min_visual_score:
+                    # 获取股票名称
+                    stock_name = stock_info.get('stock_name', '')
+                    
                     signal_data = {
                         'code': code,
+                        'stock_name': stock_name,
                         'is_buy': is_buy,
                         'bsp_type': bsp_type,
                         'score': score,
