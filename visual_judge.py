@@ -30,10 +30,12 @@ I have provided two K-line charts for the same stock at the same time:
 
 Visual Legend (Crucial):
 * Yellow Lines: Bi (Strokes/笔) - Strictly calculated trend segments.
+* Red Lines: Seg (Segments/线段) - Higher-level trend segments composed of multiple Bi.
 * Blue Rectangles: ZhongShu (Pivots/Centers/中枢) - Consolidation zones.
 * Purple Text/Arrows: BUY signals (b1, b2, b3a, b3b, etc.)
 * Orange Text/Arrows: SELL signals (s1, s2, s3a, s3b, etc.)
 * Dashed Yellow Line: The latest/incomplete Bi stroke.
+* Dashed Red Line: The latest/incomplete Seg stroke.
 
 Signal Code Definitions (Lookup Table):
 * Divergence Phase (Bottom/Top):
@@ -66,20 +68,22 @@ Analysis Logic (Step-by-Step):
 * Step 1: 30M Primary Signal Analysis
   * Identify the latest marked signal (b1/b2/b3a/b3b or s1/s2/s3a/s3b) on the 30M chart.
   * Evaluate the Bi (Yellow Line) structure: Is it clear and well-formed?
+  * Evaluate the Seg (Red Line) structure: Does the higher-level trend support the signal?
   * Check ZhongShu (Blue Rectangle) context: Is the signal at a key support/resistance level?
   * Examine MACD on 30M: Is there divergence? Is momentum favorable?
 
 * Step 2: 5M Confirmation Analysis (Interval Recursion)
   * Locate the corresponding time period on the 5M chart.
   * Does the 5M show finer-grained confirmation of the 30M signal?
+  * Evaluate both Bi and Seg structures on 5M: Do they align with 30M analysis?
   * For BUY signals: Does 5M show a completed bottom structure or bullish breakout?
   * For SELL signals: Does 5M show a completed top structure or bearish breakdown?
   * Check 5M MACD: Does it confirm the direction (bullish crossover for buy, bearish for sell)?
 
 * Step 3: Overall Signal Quality Assessment
-  * Alignment: Do 30M and 5M agree on direction?
-  * Strength: Is the breakout/breakdown decisive?
-  * Risk: Are there nearby pivot levels that could act as obstacles?
+  * Multi-level Alignment: Do Bi, Seg, and ZhongShu all support the same direction?
+  * Strength: Is the breakout/breakdown decisive across multiple levels?
+  * Risk: Are there nearby pivot levels or conflicting Seg directions that could act as obstacles?
 
 Output Requirement: Return ONLY a valid JSON object. No other text.
 {
