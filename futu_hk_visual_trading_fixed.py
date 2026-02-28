@@ -10,6 +10,10 @@ import time
 import logging
 import shutil
 import subprocess
+
+# 直接在代码中设置 GOOGLE_API_KEY，确保后台运行也能生效
+import os
+os.environ["GOOGLE_API_KEY"] = "AIzaSyCyOShkz9hhPPLxYrI6Oc4eHq_I6muZF0Q"
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 import pandas as pd
@@ -83,10 +87,11 @@ class FutuHKVisualTrading:
         # 交易环境
         self.trd_env = TrdEnv.SIMULATE if dry_run else TrdEnv.REAL
         
-        # 缠论配置 - 启用MACD计算（严格模式）
+        # 缠论配置 - 启用MACD计算（严格模式 + 线段）
         self.chan_config = CChanConfig({
             "bi_strict": True,
             "one_bi_zs": False,
+            "seg_algo": "chan",           # 启用线段算法
             "bs_type": '1,1p,2,2s,3a,3b',
             "macd": {"fast": 12, "slow": 26, "signal": 9}  # 启用MACD计算
         })
@@ -490,6 +495,7 @@ class FutuHKVisualTrading:
                 plot_config={
                     "plot_kline": True,
                     "plot_bi": True,
+                    "plot_seg": True,     # 启用线段显示
                     "plot_zs": True,
                     "plot_bsp": True,
                     "plot_macd": True  # 新增：副图显示MACD
@@ -546,6 +552,7 @@ class FutuHKVisualTrading:
                 plot_config={
                     "plot_kline": True,
                     "plot_bi": True,
+                    "plot_seg": True,     # 启用线段显示
                     "plot_zs": True,
                     "plot_bsp": True,
                     "plot_macd": True
