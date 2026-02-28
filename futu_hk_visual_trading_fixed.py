@@ -83,10 +83,10 @@ class FutuHKVisualTrading:
         # 交易环境
         self.trd_env = TrdEnv.SIMULATE if dry_run else TrdEnv.REAL
         
-        # 缠论配置 - 启用MACD计算
+        # 缠论配置 - 启用MACD计算（严格模式）
         self.chan_config = CChanConfig({
-            "bi_strict": False,
-            "one_bi_zs": True,
+            "bi_strict": True,
+            "one_bi_zs": False,
             "bs_type": '1,1p,2,2s,3a,3b',
             "macd": {"fast": 12, "slow": 26, "signal": 9}  # 启用MACD计算
         })
