@@ -85,6 +85,10 @@ class CNStockVisualTrading:
             "seg_algo": "chan",
             "trigger_step": False,
             "bs_type": '1,1p,2,2s,3a,3b',
+            "divergence_rate": 0.8,
+            "max_bs2_rate": 1.2,
+            "bsp1_only_multibi_zs": False,
+            "bs1_peak": False,
         })
         
         # 初始化视觉评判 (它会自动从环境变量加载API Key)
