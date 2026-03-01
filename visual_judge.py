@@ -118,7 +118,7 @@ class VisualJudge:
         if GEMINI_AVAILABLE and GOOGLE_API_KEY:
             try:
                 genai.configure(api_key=GOOGLE_API_KEY)
-                self.gemini_client = genai.GenerativeModel('gemini-pro-vision')
+                self.gemini_client = genai.GenerativeModel('gemini-2.5-pro')
                 print("✅ Gemini 客户端初始化成功")
             except Exception as e:
                 print(f"⚠️ Gemini 客户端初始化失败: {e}")

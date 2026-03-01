@@ -326,8 +326,8 @@ class FutuHKVisualTrading:
             )
             
             # 从30M级别获取最新的买卖点
-            chan_30m = chan_multi_level[0]  # 0索引对应第一个级别，即30M
-            latest_bsps = chan_30m.get_latest_bsp(number=1)
+            # 修复：使用 CChan.get_latest_bsp 并在 KLine_List 上正确调用
+            latest_bsps = chan_multi_level.get_latest_bsp(idx=0, number=1)
             if not latest_bsps:
                 logger.debug(f"{code} 未发现买卖点")
                 return None
@@ -417,129 +417,47 @@ class FutuHKVisualTrading:
         except Exception as e:
             logger.warning(f"自定义MACD颜色失败: {e}")
     
-    def generate_charts(self, code: str, chan_multi_level) -> List[str]:
+    def generate_charts(self, code: str, chan_multi_level: CChan) -> List[str]:
         """
         生成技术图表（AI视觉优化版）
-        
-        优化点：
-        1. 副图加入MACD
-        2. MACD颜色鲜艳（红绿柱高对比度）
-        3. 画笔线宽加粗到2.0
-        4. 中枢半透明填充(alpha=0.3)
-        5. 淡化网格线
-        
-        Args:
-            code: 股票代码
-            chan_multi_level: 包含多级别（30M和5M）缠论对象
-            
-        Returns:
-            图表文件路径列表
         """
         chart_paths = []
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_code = code.replace('.', '_').replace('-', '_')
+        original_lv_list = chan_multi_level.lv_list
         
         try:
-            # 从多级别对象中获取30M和5M数据
-            chan_30m = chan_multi_level[0]  # 0索引对应30M级别
-            chan_5m = chan_multi_level[1]   # 1索引对应5M级别
-            
-            # 生成30分钟图（AI视觉优化配置）
-            plot_30m = CPlotDriver(
-                chan_30m,
-                plot_config={
-                    "plot_kline": True,
-                    "plot_bi": True,
-                    "plot_seg": True,     # 启用线段显示
-                    "plot_zs": True,
-                    "plot_bsp": True,
-                    "plot_macd": True  # 新增：副图显示MACD
-                },
-                plot_para={
-                    "figure": {
-                        "w": 16,  # 增加宽度
-                        "h": 12,  # 增加高度容纳MACD副图
-                        "macd_h": 0.25,  # MACD副图占25%高度
-                        "grid": None  # 去掉网格线
+            for lv in original_lv_list:
+                # 暂时修改级别列表以生成单层图表
+                chan_multi_level.lv_list = [lv]
+                
+                # 生成技术图表（AI视觉优化配置）
+                plot_driver = CPlotDriver(
+                    chan_multi_level,
+                    plot_config={
+                        "plot_kline": True, "plot_bi": True, "plot_seg": True,
+                        "plot_zs": True, "plot_bsp": True, "plot_macd": True
                     },
-                    "bi": {
-                        "color": "#FFFF00",  # 黄色 (Yellow) - 笔
-                        "show_num": False
-                    },
-                    "zs": {
-                        "color": "#4169E1",  # 皇家蓝 (Royal Blue) - 中枢边框
-                        "linewidth": 2
-                    },
-                    "bsp": {
-                        "fontsize": 12,
-                        "buy_color": "red",
-                        "sell_color": "green"
-                    },
-                    "macd": {
-                        "width": 0.6
+                    plot_para={
+                        "figure": {"w": 16, "h": 12, "macd_h": 0.25, "grid": None},
+                        "bi": {"color": "#FFFF00", "show_num": False},
+                        "zs": {"color": "#4169E1", "linewidth": 2},
+                        "bsp": {"fontsize": 12, "buy_color": "red", "sell_color": "green"},
+                        "macd": {"width": 0.6}
                     }
-                }
-            )
-            
-            # 自定义MACD颜色（覆盖默认颜色）
-            self._customize_macd_colors(plot_30m)
-            
-            chart_30m_path = f"{self.charts_dir}/{safe_code}_{timestamp}_30M.png"
-            plt.savefig(chart_30m_path, bbox_inches='tight', dpi=120, facecolor='white')
-            plt.close('all')
-            chart_paths.append(chart_30m_path)
-            
-            # 生成5分钟图（使用已有的5M数据，不再重新请求）
-            plot_5m = CPlotDriver(
-                chan_5m,
-                plot_config={
-                    "plot_kline": True,
-                    "plot_bi": True,
-                    "plot_seg": True,     # 启用线段显示
-                    "plot_zs": True,
-                    "plot_bsp": True,
-                    "plot_macd": True
-                },
-                plot_para={
-                    "figure": {
-                        "w": 16,
-                        "h": 12,
-                        "macd_h": 0.25,
-                        "grid": None
-                    },
-                    "bi": {
-                        "color": "#FFFF00",
-                        "show_num": False
-                    },
-                    "zs": {
-                        "color": "#4169E1",
-                        "linewidth": 2
-                    },
-                    "bsp": {
-                        "fontsize": 12,
-                        "buy_color": "red",
-                        "sell_color": "green"
-                    },
-                    "macd": {
-                        "width": 0.6
-                    }
-                }
-            )
-            
-            # 自定义MACD颜色
-            self._customize_macd_colors(plot_5m)
-            
-            chart_5m_path = f"{self.charts_dir}/{safe_code}_{timestamp}_5M.png"
-            plt.savefig(chart_5m_path, bbox_inches='tight', dpi=120, facecolor='white')
-            plt.close('all')
-            chart_paths.append(chart_5m_path)
-            
-            logger.info(f"生成图表: {chart_paths}")
+                )
+                self._customize_macd_colors(plot_driver)
+                
+                chart_path = f"{self.charts_dir}/{safe_code}_{timestamp}_{lv.name.replace('K_','')}.png"
+                plt.savefig(chart_path, bbox_inches='tight', dpi=120, facecolor='white')
+                plt.close('all')
+                chart_paths.append(chart_path)
             return chart_paths
-            
         except Exception as e:
             logger.error(f"生成图表异常 {code}: {e}")
             return []
+        finally:
+            chan_multi_level.lv_list = original_lv_list
     
     def execute_trade(self, code: str, action: str, quantity: int, price: float) -> bool:
         """
