@@ -10,6 +10,7 @@ import time
 import logging
 import shutil
 import subprocess
+import json
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import asyncio
 import aiohttp
@@ -89,7 +90,57 @@ class FutuHKVisualTrading:
         # 视觉评分器
         self.visual_judge = VisualJudge()
         
+        # 信号执行历史记录文件
+        self.executed_signals_file = "executed_signals.json"
+        self.executed_signals = self._load_executed_signals()
+        
         logger.info(f"初始化完成 - 模拟盘: {dry_run}, 评分阈值: {min_visual_score}")
+    
+    def _load_executed_signals(self) -> Dict:
+        """加载已执行信号记录"""
+        if os.path.exists(self.executed_signals_file):
+            try:
+                with open(self.executed_signals_file, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"加载已执行信号记录失败: {e}")
+        return {}
+
+    def _save_executed_signals(self):
+        """保存已执行信号记录"""
+        try:
+            with open(self.executed_signals_file, 'w') as f:
+                json.dump(self.executed_signals, f, indent=4)
+        except Exception as e:
+            logger.error(f"保存已执行信号记录失败: {e}")
+
+    def check_pending_orders(self, code: str, side: str) -> bool:
+        """
+        检查是否有针对该股票的同向待成交订单
+        
+        Args:
+            code: 股票代码
+            side: 'BUY' or 'SELL'
+            
+        Returns:
+            True 如果存在待成交订单
+        """
+        try:
+            ret, data = self.trd_ctx.order_list_query(
+                status_list=[OrderStatus.SUBMITTING, OrderStatus.SUBMITTED, OrderStatus.WAITING_SUBMIT], 
+                trd_env=self.trd_env
+            )
+            if ret == RET_OK and not data.empty:
+                futu_side = TrdSide.BUY if side.upper() == 'BUY' else TrdSide.SELL
+                # 过滤出对应代码和方向的活跃订单
+                pending = data[(data['code'] == code) & (data['trd_side'] == futu_side)]
+                if not pending.empty:
+                    logger.info(f"{code} 发现已有 {side} 待成交订单，订单ID: {pending.iloc[0]['order_id']}")
+                    return True
+            return False
+        except Exception as e:
+            logger.error(f"检查待成交订单异常 {code}: {e}")
+            return False
     
     def send_email_notification(self, scan_summary):
         """
@@ -359,6 +410,7 @@ class FutuHKVisualTrading:
                 'is_buy_signal': is_buy,
                 'bsp_price': price,
                 'bsp_datetime': bsp.klu.time,
+                'bsp_datetime_str': bsp_time.strftime("%Y-%m-%d %H:%M:%S"),
                 'chan_analysis': {
                     'chan_30m': chan_30m,
                     'chan_multi_level': chan_multi_level  # 保存多级别对象，供后续图表生成使用
@@ -580,7 +632,15 @@ class FutuHKVisualTrading:
             # 记录信号类型
             bsp_type = chan_result.get('bsp_type', '未知')
             is_buy = chan_result.get('is_buy_signal', False)
+            bsp_time_str = chan_result.get('bsp_datetime_str', '')  # 需要在 analyze_with_chan 中添加
             bsp_type_display = f"{'b' if is_buy else 's'}{bsp_type}"
+            
+            # ====== 信号去重逻辑：检查持久化记录 ======
+            last_executed_time = self.executed_signals.get(code, "")
+            if last_executed_time == bsp_time_str:
+                logger.info(f"{code} {bsp_type_display} 信号时间 {bsp_time_str} 与历史记录一致，跳过重复处理")
+                continue
+
             logger.info(f"{code} 信号类型: {bsp_type_display}, 是否买入: {is_buy}")
             
             # 持仓过滤
@@ -592,6 +652,12 @@ class FutuHKVisualTrading:
             
             if not is_buy and position_qty <= 0:
                 logger.info(f"{code} 无持仓，跳过卖出")
+                continue
+            
+            # ====== 待成交订单过滤 ======
+            side_str = 'BUY' if is_buy else 'SELL'
+            if self.check_pending_orders(code, side_str):
+                logger.info(f"{code} 存在活跃 {side_str} 订单，跳过下单")
                 continue
             
             # 收集候选信号（不包括图表和评分）
@@ -763,10 +829,17 @@ class FutuHKVisualTrading:
                 # 只有视觉评分 >= 阈值才执行交易
                 if score >= self.min_visual_score:
                     if self.execute_trade(code, 'SELL', qty, price):
-                        # 卖出成功，释放资金
+                        # 卖出成功，释放资金，更新信号历史记录
                         released_funds = price * qty
                         available_funds += released_funds
                         executed_sell += 1
+                        
+                        # 记录已执行信号，防止重复处理同一信号
+                        bsp_time_str = signal.get('chan_result', {}).get('bsp_datetime_str', '')
+                        if bsp_time_str:
+                            self.executed_signals[code] = bsp_time_str
+                            self._save_executed_signals()
+                            
                         logger.info(f"✅ 卖出成功 {code}, 释放资金: {released_funds:.2f}, 当前可用: {available_funds:.2f}")
                     else:
                         logger.error(f"❌ 卖出失败 {code}")
@@ -797,9 +870,16 @@ class FutuHKVisualTrading:
                     logger.info(f"   计划买入: {buy_quantity}股, 预计花费: {required_funds:.2f}")
                     
                     if self.execute_trade(code, 'BUY', buy_quantity, price):
-                        # 买入成功，扣除资金
+                        # 买入成功，扣除资金，更新信号历史记录
                         available_funds -= required_funds
                         executed_buy += 1
+                        
+                        # 记录已执行信号，防止重复处理同一信号
+                        bsp_time_str = signal.get('chan_result', {}).get('bsp_datetime_str', '')
+                        if bsp_time_str:
+                            self.executed_signals[code] = bsp_time_str
+                            self._save_executed_signals()
+                            
                         logger.info(f"✅ 买入成功 {code}, 剩余资金: {available_funds:.2f}")
                     else:
                         logger.error(f"❌ 买入失败 {code}")
