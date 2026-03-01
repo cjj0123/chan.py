@@ -1,73 +1,211 @@
-from typing import Iterable, List
-from datetime import datetime
+from typing import Iterable, List, Dict, Any
+from datetime import datetime, timedelta
 import os
 import json
+import argparse
+import sys
 from Chan import CChan
 from ChanConfig import CChanConfig
-from Common.CEnum import KL_TYPE, AUTYPE, DATA_FIELD, DATA_SRC
+from Common.CEnum import KL_TYPE, AUTYPE, DATA_SRC
 from Common.CTime import CTime
 from KLine.KLine_Unit import CKLine_Unit
 from DataAPI.FutuAPI import CFutuAPI
+from visual_judge import VisualJudge
+from config import TRADING_CONFIG
+import time
 
-def run_online_backtest(stock_code, begin_date, end_date):
-    print(f"\n🚀 [EVOMAP-ONLINE] 启动富途在线回测: {stock_code}")
+# --- 核心参数 ---
+TARGET_CODE = "HK.00700"  # 目标股票
+BACKTEST_YEARS = 1  # 回测年限
+
+def get_backtest_period(years: int) -> (str, str):
+    """计算回测的起止日期 (YYYY-MM-DD)"""
+    end_date = datetime.now().strftime('%Y-%m-%d')
+    # 往前推一年 (365天)
+    start_date = (datetime.now() - timedelta(days=years*365)).strftime('%Y-%m-%d')
+    return start_date, end_date
+
+def run_chan_backtest(stock_code: str, begin_date: str, end_date: str, visual_enabled: bool) -> Dict[str, Any]:
+    """
+    使用 CChan 逻辑进行回测，并根据 visual_enabled 标志决定是否纳入视觉评分。
+    """
+    start_time_run = time.time()
+    print(f"\n🚀 [CHAN-BACKTEST] 启动回测: {stock_code}")
     print(f"   📅 周期: {begin_date} 至 {end_date}")
+    print(f"   👁️ 视觉评分启用: {visual_enabled}")
     
+    # 1. 缠论基础配置 
     config = CChanConfig({
         "bi_strict": True,
-        "trigger_step": False, 
-        "skip_step": 0,
-        "bs_type": '1,1p,2,2s,3a,3b',
         "one_bi_zs": False,
-        "print_warning": False,
+        "seg_algo": "chan",
+        "bs_type": TRADING_CONFIG['CHAN_CONFIG']['bs_type'],
     })
 
+    # 2. 初始化 CChan (使用多级数据结构)
     try:
-        # 使用 DATA_SRC.FUTU，现在它已经指向了增强版的 CFutuAPI
         chan = CChan(
             code=stock_code,
             begin_time=begin_date,
             end_time=end_date,
             data_src=DATA_SRC.FUTU,
-            lv_list=[KL_TYPE.K_30M],
+            # 显式加载 30M 和 5M 级别
+            lv_list=[KL_TYPE.K_30M, KL_TYPE.K_5M], 
             config=config,
             autype=AUTYPE.QFQ,
         )
         
+        # 3. 运行 Chan 内部计算（获取所有 BSP 点）
+        chan.load() 
         all_bsps = chan.get_bsp()
+        
+        # 4. 模拟交易和结果收集
         trades = []
         current_buy = None
         
+        min_score_threshold = TRADING_CONFIG['min_visual_score']
+        
         for bsp in all_bsps:
+            # 基础缠论信号点作为潜在交易点
             if bsp.is_buy:
                 if current_buy is None:
-                    current_buy = {"price": bsp.klu.close, "time": str(bsp.klu.time), "type": bsp.type2str()}
+                    current_buy = {"price": bsp.klu.close, "time": str(bsp.klu.time), "type": bsp.type2str(), "bsp_obj": bsp}
             else:
-                if current_buy is not None:
+                if current_buy is not None and bsp.time > current_buy['time']: 
+                    
                     profit = (bsp.klu.close - current_buy['price']) / current_buy['price'] * 100
-                    trades.append({
-                        "buy_time": current_buy['time'],
-                        "sell_time": str(bsp.klu.time),
-                        "profit": profit,
-                        "buy_type": current_buy['type'],
-                        "sell_type": bsp.type2str()
-                    })
+                    action = 'BLIND_TRADE' # 默认：基础缠论交易
+                    strategy_type = "Blind"
+
+                    if visual_enabled:
+                        # 模拟视觉评估：使用 Mock 模式
+                        judge = VisualJudge(use_mock=True)
+                        # 模拟图表路径
+                        mock_result = judge.evaluate([f"mock_30m_{bsp.klu.time}.png", f"mock_5m_{bsp.klu.time}.png"], signal_type=bsp.type2str())
+                        
+                        score = mock_result['score']
+                        
+                        if score >= min_score_threshold:
+                            action = 'VISUAL_TRADE'
+                            strategy_type = "Visual"
+                        else:
+                            action = 'VISUAL_REJECTED' # 视觉判断拒绝
+                            strategy_type = "Visual_Rejected"
+                            
+                    
+                    if action in ('BLIND_TRADE', 'VISUAL_TRADE'):
+                        trades.append({
+                            "buy_time": current_buy['time'],
+                            "sell_time": str(bsp.klu.time),
+                            "profit": profit,
+                            "buy_type": current_buy['type'],
+                            "sell_type": bsp.type2str(),
+                            "strategy_type": strategy_type
+                        })
+                    
                     current_buy = None
         
-        print(f"   ✅ 完成! 撮合交易对: {len(trades)}")
-        if trades:
-            total_profit = sum([t['profit'] for t in trades])
-            win_rate = len([t for t in trades if t['profit'] > 0]) / len(trades) * 100
-            print(f"   📈 累计盈亏: {total_profit:.2f}% | 胜率: {win_rate:.2f}%")
-            print("📝 最近 3 笔交易:")
-            for t in trades[-3:]:
-                print(f"      {t['buy_time']}({t['buy_type']}) -> {t['sell_time']}({t['sell_type']}) | {t['profit']:.2f}%")
-        else:
-            print("   ℹ️ 未能在该时间段内识别到闭合买卖点。")
+        # 5. 结果统计
+        stats = {
+            "total_trades": 0,
+            "total_profit_pct": 0.0,
+            "win_trades": 0,
+            "blind_trades": [],
+            "visual_trades": []
+        }
+        
+        stats["total_trades"] = len(trades)
+        stats["blind_trades"] = [t for t in trades if t['strategy_type'] == 'Blind']
+        stats["visual_trades"] = [t for t in trades if t['strategy_type'] == 'Visual']
+        
+        if stats["blind_trades"]:
+            total_profit_blind = sum([t['profit'] for t in stats["blind_trades"]])
+            win_rate_blind = len([t for t in stats["blind_trades"] if t['profit'] > 0]) / len(stats["blind_trades"]) * 100
+            stats["total_profit_pct_blind"] = total_profit_blind
+            stats["win_rate_blind"] = win_rate_blind
+            
+        if stats["visual_trades"]:
+            total_profit_visual = sum([t['profit'] for t in stats["visual_trades"]])
+            win_rate_visual = len([t for t in stats["visual_trades"] if t['profit'] > 0]) / len(stats["visual_trades"]) * 100
+            stats["total_profit_pct_visual"] = total_profit_visual
+            stats["win_rate_visual"] = win_rate_visual
+            
+        print(f"   ✅ 完成! 基础缠论信号对: {len(all_bsps) // 2} (包含未闭合)")
+        end_time_run = time.time()
+        print(f"   ⏱️ 耗时: {end_time_run - start_time_run:.2f} 秒")
+
+        return stats
 
     except Exception as e:
-        print(f"   ❌ 在线回测失败: {e}")
+        print(f"   ❌ 回测执行失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"error": str(e)}
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Chan Theory Backtesting Engine for Futu HK Stocks')
+    parser.add_argument('--code', type=str, default=TARGET_CODE, help='Stock code (e.g., HK.00700)')
+    parser.add_argument('--years', type=int, default=BACKTEST_YEARS, help='Number of years to backtest')
+    
+    # 允许覆盖默认的视觉评分启用状态
+    parser.add_argument('--disable-visual', action='store_true', help='Run backtest without visual score filtering/validation')
+    
+    args = parser.parse_args()
+    
+    start_date, end_date = get_backtest_period(args.years)
+    
+    # --- 运行无视觉评分的回测 (Blind) ---
+    print("\n" + "="*50)
+    print("RUN 1: BLIND TEST (Only basic Chan Signal)")
+    print("="*50)
+    blind_stats = run_chan_backtest(
+        stock_code=args.code, 
+        begin_date=start_date, 
+        end_date=end_date, 
+        visual_enabled=False
+    )
+    
+    # --- 运行有视觉评分的回测 (Visual) ---
+    print("\n" + "="*50)
+    print("RUN 2: VISUAL TEST (Chan Signal + Visual Judge Filter)")
+    print("="*50)
+    visual_stats = run_chan_backtest(
+        stock_code=args.code, 
+        begin_date=start_date, 
+        end_date=end_date, 
+        visual_enabled=True
+    )
+
+    # --- 结果汇总 ---
+    print("\n" + "#"*60)
+    print(f"## HK Stock Backtest Report for {args.code} ({args.years} Year(s)) ##")
+    print("#"*60)
+    
+    if 'error' in blind_stats or 'error' in visual_stats:
+        print("❌ 警告: 至少有一个回测运行失败，无法生成完整报告。")
+        
+    # 盲测结果
+    if 'total_profit_pct_blind' in blind_stats and 'blind_trades' in blind_stats:
+        print(f"\n[RESULTS: BLIND TRADING (No Visual Filter)]")
+        print(f"  > 交易次数: {len(blind_stats['blind_trades'])}")
+        print(f"  > 累计收益率: {blind_stats['total_profit_pct_blind']:.2f}%")
+        print(f"  > 胜率: {blind_stats['win_rate_blind']:.2f}%")
+    else:
+        print(f"\n[RESULTS: BLIND TRADING] 无法获取有效数据或回测失败。")
+        
+    # 视觉测试结果
+    if 'total_profit_pct_visual' in visual_stats and 'visual_trades' in visual_stats:
+        print(f"\n[RESULTS: VISUAL TRADING (Visual Score >= {TRADING_CONFIG['min_visual_score']})]")
+        print(f"  > 交易次数: {len(visual_stats['visual_trades'])}")
+        print(f"  > 累计收益率: {visual_stats['total_profit_pct_visual']:.2f}%")
+        print(f"  > 胜率: {visual_stats['win_rate_visual']:.2f}%")
+    else:
+        print(f"\n[RESULTS: VISUAL TRADING] 无法获取有效数据或回测失败。")
+
+    print("\n" + "="*60)
+    print("回测引擎执行完毕。")
+
 
 if __name__ == "__main__":
-    # 示例测试：回测腾讯控股 2024 年至今
-    run_online_backtest("HK.00700", "2024-01-01", "2025-12-31")
+    main()
