@@ -85,8 +85,7 @@ class CNStockVisualTrading:
             "seg_algo": "chan",
             "trigger_step": False,
             "bs_type": '1,1p,2,2s,3a,3b',
-            "divergence_rate": 0.9,    # 优化后的背驰率
-            "min_zs_cnt": 0,           # 允许 0 个中枢 (更灵敏)
+            "divergence_rate": 0.8,
             "max_bs2_rate": 1.2,
             "bsp1_only_multibi_zs": False,
             "bs1_peak": False,
@@ -185,8 +184,7 @@ class CNStockVisualTrading:
             )
             
             chan_30m = chan_multi_level[0]
-            # 修复：使用 CChan.get_latest_bsp 并在 KLine_List 上正确调用
-            latest_bsps = chan_multi_level.get_latest_bsp(idx=0, number=1)
+            latest_bsps = chan_30m.get_latest_bsp(number=1)
             if not latest_bsps:
                 return None
             
@@ -195,12 +193,10 @@ class CNStockVisualTrading:
             bsp_time = datetime(bsp_ctime.year, bsp_ctime.month, bsp_ctime.day, 
                                bsp_ctime.hour, bsp_ctime.minute, bsp_ctime.second)
             
-            # 生产环境：计算交易小时数并应用 4 小时窗口
-            trading_hours = self.calculate_trading_hours(bsp_time, datetime.now())
             if trading_hours > 4: 
                 return None
             
-            logger.info(f"{code} {bsp.type2str()} 信号在 4 小时窗口内 ({trading_hours:.1f}h)")
+            logger.info(f"{code} {bsp.type2str()} 信号在 4 小时窗口内")
             return {
                 'code': code,
                 'bsp_type': bsp.type2str(),
@@ -253,14 +249,10 @@ class CNStockVisualTrading:
         chart_paths = []
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_code = code.replace('.', '_')
-        original_lv_list = chan_multi_level.lv_list
         
         try:
-            for lv in original_lv_list:
-                # 暂时修改级别列表以生成单层图表
-                chan_multi_level.lv_list = [lv]
-                
-                plot_driver = CPlotDriver(chan_multi_level, plot_config={
+            for i, lv in enumerate([KL_TYPE.K_30M, KL_TYPE.K_5M]):
+                plot_driver = CPlotDriver(chan_multi_level[i], plot_config={
                     "plot_kline": True, "plot_bi": True, "plot_seg": True,
                     "plot_zs": True, "plot_macd": True, "plot_bsp": True,
                 })
@@ -274,9 +266,6 @@ class CNStockVisualTrading:
         except Exception as e:
             logger.error(f"生成图表异常 {code}: {e}")
             return []
-        finally:
-            # 必须在 finally 块恢复原始级别列表
-            chan_multi_level.lv_list = original_lv_list
 
     def _collect_candidate_signals(self, watchlist_codes: List[str]) -> List[Dict]:
         """第一阶段：快速收集所有有效信号"""
@@ -308,15 +297,18 @@ class CNStockVisualTrading:
             return None
 
     def _batch_generate_charts(self, candidate_signals: List[Dict]) -> List[Dict]:
-        """第二阶段：批量生成图表 (同步执行，避免进程池序列化问题)"""
+        """第二阶段：并行批量生成图表"""
         logger.info(f"阶段 2: 开始批量生成图表 (共 {len(candidate_signals)} 个)")
         signals_with_charts = []
-        
-        for signal in candidate_signals:
-            result = self._generate_single_chart(signal)
-            if result:
-                signals_with_charts.append(result)
-                
+        max_workers = min(4, len(candidate_signals))
+        if max_workers == 0: return []
+
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            future_to_signal = {executor.submit(self._generate_single_chart, s): s for s in candidate_signals}
+            for future in as_completed(future_to_signal):
+                result = future.result()
+                if result:
+                    signals_with_charts.append(result)
         logger.info(f"批量图表生成完成，成功 {len(signals_with_charts)} 个")
         return signals_with_charts
 
