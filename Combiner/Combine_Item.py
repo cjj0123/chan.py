@@ -21,5 +21,11 @@ class CCombine_Item:
             self.time_end = item.end_bi.end_klc.idx
             self.high = item._high()
             self.low = item._low()
+        elif hasattr(item, 'time') and hasattr(item, 'high') and hasattr(item, 'low'):
+            # 支持 BacktestKLineUnit 等具有 time/high/low 属性的类
+            self.time_begin = item.time
+            self.time_end = item.time
+            self.high = item.high
+            self.low = item.low
         else:
             raise CChanException(f"{type(item)} is unsupport sub class of CCombine_Item", ErrCode.COMMON_ERROR)

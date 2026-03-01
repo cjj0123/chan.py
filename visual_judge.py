@@ -21,11 +21,11 @@ GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 USE_MOCK_IF_NO_API = True
 
 MASTER_PROMPT = """System / Role Definition
-You are a Master Quantitative Trader specializing in Chan Theory (缠论). You are analyzing stock charts to validate specific algorithmic signals. You possess strict, objective visual reasoning capabilities regarding "Interval Recursion" (区间套) and "MACD Dynamics" (动力学).
+You are a Master Quantitative Trader specializing in Chan Theory (缠论). You are evaluating a specific algorithmic signal that has already been identified by our system. You possess strict, objective visual reasoning capabilities regarding "Interval Recursion" (区间套) and "MACD Dynamics" (动力学).
 
 User Instruction Input Context:
 I have provided two K-line charts for the same stock at the same time:
-1. Image 1 (Left/Top): 30-Minute Level (30M) - PRIMARY SIGNAL SOURCE. This is where you identify the main buy/sell signal.
+1. Image 1 (Left/Top): 30-Minute Level (30M) - PRIMARY SIGNAL SOURCE. This is where the algorithm has identified a specific buy/sell signal.
 2. Image 2 (Right/Bottom): 5-Minute Level (5M) - CONFIRMATION & REFERENCE. Use this to validate the 30M signal with finer granularity.
 
 Visual Legend (Crucial):
@@ -49,24 +49,24 @@ Signal Code Definitions (Lookup Table):
   * b3b / s3b: 3rd Buy/Sell Confirmed. Focus: Pullback does not touch Pivot High (Buy) / Rebound does not touch Pivot Low (Sell).
 
 CRITICAL INSTRUCTION:
-First, carefully examine the 30M chart. Look for any BUY/SELL signal markers (purple text for buy, orange text for sell).
+The algorithm has ALREADY identified a specific signal on the 30M chart. Your task is to EVALUATE the quality and reliability of this signal, not to detect it yourself.
 
 Your Task:
-1. Check (on 30M Chart): 
-   - If NO signal markers are present on the 30M chart → Return detected_signal: "NONE", score: 0, action: "WAIT"
-   - If signal markers ARE present → Identify the latest signal code (e.g., "b2" or "s3b")
+1. Confirm (on 30M Chart):
+   - Verify the presence of the signal that the algorithm has identified
+   - Assess the quality of the signal formation
    
-2. Verify (using 5M Chart - ONLY if 30M has signal): 
+2. Validate (using 5M Chart):
    - Check if the 5M chart shows confirming structure (interval recursion) for the 30M signal.
    
-3. Score: Rate the Quality/Confidence of this signal (0-100).
+3. Evaluate: Rate the Quality/Confidence of this signal (0-100).
    * High Score (80-100): Textbook 30M pattern + Strong 5M confirmation + MACD alignment.
-   * Low Score (0-50): Weak 30M structure, no 5M confirmation, or counter-trend risk.
-   * Score 0: NO signal present on 30M chart
+   * Medium Score (50-79): Clear 30M signal with moderate 5M confirmation.
+   * Low Score (0-49): Weak 30M structure, no 5M confirmation, or counter-trend risk.
 
 Analysis Logic (Step-by-Step):
-* Step 1: 30M Primary Signal Analysis
-  * Identify the latest marked signal (b1/b2/b3a/b3b or s1/s2/s3a/s3b) on the 30M chart.
+* Step 1: 30M Primary Signal Evaluation
+  * Confirm the signal type that was identified (b1/b2/b3a/b3b or s1/s2/s3a/s3b) on the 30M chart.
   * Evaluate the Bi (Yellow Line) structure: Is it clear and well-formed?
   * Evaluate the Seg (Red Line) structure: Does the higher-level trend support the signal?
   * Check ZhongShu (Blue Rectangle) context: Is the signal at a key support/resistance level?
@@ -87,13 +87,13 @@ Analysis Logic (Step-by-Step):
 
 Output Requirement: Return ONLY a valid JSON object. No other text.
 {
-  "detected_signal": "string (e.g., b2, s1p) - THE SIGNAL FROM 30M CHART",
+  "evaluated_signal": "string (e.g., b2, s1p) - THE SIGNAL THAT WAS IDENTIFIED BY ALGORITHM",
   "direction": "BUY or SELL",
   "30f_trend_status": "Bullish/Bearish/Consolidation",
   "30f_macd_status": "Deep Divergence/Standard/No Divergence/Momentum Building",
   "5f_confirmation": "Strong/Moderate/Weak/None - How well 5M confirms 30M",
   "score": 0,
-  "reasoning": "Explain: 1) What 30M signal was detected, 2) How 5M confirmed it, 3) Why the score was given.",
+  "reasoning": "Explain: 1) What 30M signal was evaluated, 2) How 5M confirmed it, 3) Why the score was given.",
   "key_risk": "string (e.g., 5M lacks confirmation, near strong resistance, MACD weakening)"
 }"""
 
@@ -118,7 +118,7 @@ class VisualJudge:
                 print("⚠️ GOOGLE_API_KEY 未设置")
             self.use_mock = True
 
-    def call_gemini_api(self, image_paths):
+    def call_gemini_api(self, image_paths, signal_type=None):
         """调用 Google Gemini API 进行视觉分析 (使用新版 SDK)"""
         if self.use_mock or not self.client:
             return None
@@ -141,8 +141,13 @@ class VisualJudge:
             
             print("   🤖 调用 Gemini-2.5-pro 分析中...")
             
+            # 构建内容，包含已知的信号类型信息
+            prompt_with_signal = MASTER_PROMPT
+            if signal_type:
+                prompt_with_signal = f"已知信号类型: {signal_type}\n\n{MASTER_PROMPT}"
+            
             # 构建内容
-            contents = [MASTER_PROMPT, images[0], images[1]]
+            contents = [prompt_with_signal, images[0], images[1]]
             
             # 发送请求 (新版 SDK 语法)
             response = self.client.models.generate_content(
@@ -177,7 +182,7 @@ class VisualJudge:
             
             # 打印详细结果
             print(f"   📊 Gemini 原始返回:")
-            print(f"      - detected_signal: {result.get('detected_signal')}")
+            print(f"      - evaluated_signal: {result.get('evaluated_signal')}")
             print(f"      - direction: {result.get('direction')}")
             print(f"      - 30f_trend_status: {result.get('30f_trend_status')}")
             print(f"      - 5f_macd_status: {result.get('5f_macd_status')}")
@@ -201,7 +206,7 @@ class VisualJudge:
             result['signal_quality'] = '高' if original_score >= 80 else ('中' if original_score >= 50 else '低')
             result['analysis'] = result.get('reasoning', '')[:100]
             
-            print(f"   ✅ Gemini 评分: {original_score}/100 | {result['action']} | {result['detected_signal']}")
+            print(f"   ✅ Gemini 评分: {original_score}/100 | {result['action']} | {result['evaluated_signal']}")
             return result
             
         except json.JSONDecodeError as e:
@@ -211,13 +216,15 @@ class VisualJudge:
             print(f"⚠️ API 调用异常: {e}")
             return None
 
-    def evaluate(self, image_paths):
+    def evaluate(self, image_paths, signal_type=None):
         """调用大模型进行视觉评分，如果使用模拟模式，则基于趋势清晰度和中枢复杂度进行评估"""
         print(f"👁️ [VisualJudge] 正在视觉分析：{[os.path.basename(p) for p in image_paths]}")
+        if signal_type:
+            print(f"   📌 已知信号类型: {signal_type}")
         
         # 尝试调用真实 API
         if not self.use_mock:
-            result = self.call_gemini_api(image_paths)
+            result = self.call_gemini_api(image_paths, signal_type)
             if result:
                 return result
             else:
@@ -244,7 +251,7 @@ class VisualJudge:
             action = "WAIT"
         
         result = {
-            "detected_signal": "mock",
+            "evaluated_signal": signal_type or "mock",
             "direction": "BUY" if score >= 60 else "SELL",
             "30f_trend_status": "Bullish" if trend_clarity > 0.5 else "Bearish",
             "5f_macd_status": "Standard",

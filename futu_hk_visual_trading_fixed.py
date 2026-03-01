@@ -10,14 +10,17 @@ import time
 import logging
 import shutil
 import subprocess
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import asyncio
+import aiohttp
 
-# 直接在代码中设置 GOOGLE_API_KEY，确保后台运行也能生效
-import os
-os.environ["GOOGLE_API_KEY"] = "AIzaSyCyOShkz9hhPPLxYrI6Oc4eHq_I6muZF0Q"
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 import pandas as pd
 import numpy as np
+
+# 导入配置
+from config import TRADING_CONFIG, CHAN_CONFIG
 
 from Chan import CChan
 from ChanConfig import CChanConfig
@@ -30,20 +33,8 @@ import matplotlib.pyplot as plt
 from futu import *
 from visual_judge import VisualJudge
 
-# 自动加载 API Key
-try:
-    from load_api_key import load_api_keys
-    if load_api_keys():
-        print("✅ API Key 已从 memory/api_keys.md 加载")
-    else:
-        # 备用方案：直接设置
-        import os
-        os.environ["GOOGLE_API_KEY"] = "AIzaSyCyOShkz9hhPPLxYrI6Oc4eHq_I6muZF0Q"
-        print("✅ API Key 已使用备用配置")
-except Exception as e:
-    import os
-    os.environ["GOOGLE_API_KEY"] = "AIzaSyCyOShkz9hhPPLxYrI6Oc4eHq_I6muZF0Q"
-    print(f"⚠️ API Key 加载异常，使用备用配置")
+# 导入配置
+from config import TRADING_CONFIG, CHAN_CONFIG
 
 # 配置日志
 logging.basicConfig(
@@ -57,11 +48,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class FutuHKVisualTrading:
-    def __init__(self, 
-                 hk_watchlist_group: str = "港股",
-                 min_visual_score: int = 70,
-                 max_position_ratio: float = 0.2,
-                 dry_run: bool = True):
+    def __init__(self,
+                 hk_watchlist_group: str = None,
+                 min_visual_score: int = None,
+                 max_position_ratio: float = None,
+                 dry_run: bool = None):
         """
         初始化港股视觉交易系统
         
@@ -71,10 +62,11 @@ class FutuHKVisualTrading:
             max_position_ratio: 单票最大仓位比例
             dry_run: 是否为模拟盘模式
         """
-        self.hk_watchlist_group = hk_watchlist_group
-        self.min_visual_score = min_visual_score
-        self.max_position_ratio = max_position_ratio
-        self.dry_run = dry_run
+        # 使用配置文件中的默认值，如果提供了参数则覆盖
+        self.hk_watchlist_group = hk_watchlist_group or TRADING_CONFIG['hk_watchlist_group']
+        self.min_visual_score = min_visual_score or TRADING_CONFIG['min_visual_score']
+        self.max_position_ratio = max_position_ratio or TRADING_CONFIG['max_position_ratio']
+        self.dry_run = dry_run if dry_run is not None else TRADING_CONFIG['dry_run']
         
         # 创建图表目录
         self.charts_dir = "charts"
@@ -88,13 +80,7 @@ class FutuHKVisualTrading:
         self.trd_env = TrdEnv.SIMULATE if dry_run else TrdEnv.REAL
         
         # 缠论配置 - 启用MACD计算（严格模式 + 线段）
-        self.chan_config = CChanConfig({
-            "bi_strict": True,
-            "one_bi_zs": False,
-            "seg_algo": "chan",           # 启用线段算法
-            "bs_type": '1,1p,2,2s,3a,3b',
-            "macd": {"fast": 12, "slow": 26, "signal": 9}  # 启用MACD计算
-        })
+        self.chan_config = CChanConfig(CHAN_CONFIG)
         
         # 视觉评分器
         self.visual_judge = VisualJudge(use_mock=False)
@@ -291,66 +277,83 @@ class FutuHKVisualTrading:
         Returns:
             交易小时数（浮点数）
         """
-        from pandas.tseries.holiday import AbstractHolidayCalendar, Holiday
-        from pandas.tseries.offsets import CustomBusinessDay
-        
-        # 港股节假日（简化版，主要节假日）
-        class HKHolidays(AbstractHolidayCalendar):
-            rules = [
-                Holiday('New Year', month=1, day=1),
-                Holiday('Lunar New Year 1', month=2, day=10),  # 春节（示例日期）
-                Holiday('Lunar New Year 2', month=2, day=11),
-                Holiday('Lunar New Year 3', month=2, day=12),
-                Holiday('Good Friday', month=3, day=29),  # 耶稣受难节（示例）
-                Holiday('Easter Monday', month=4, day=1),  # 复活节星期一
-                Holiday('Labour Day', month=5, day=1),
-                Holiday('MidAutumn', month=9, day=17),  # 中秋节（示例）
-                Holiday('National Day', month=10, day=1),
-                Holiday('Christmas', month=12, day=25),
-                Holiday('Boxing Day', month=12, day=26),
-            ]
-        
-        total_hours = 0.0
-        current = start_time
-        
-        while current < end_time:
-            # 检查是否是工作日（周一到周五）
-            if current.weekday() >= 5:  # 周六或周日
-                current += timedelta(days=1)
-                current = current.replace(hour=0, minute=0, second=0)
-                continue
+        try:
+            import pandas_market_calendars as mcal
             
-            # 获取当天的交易时段
-            morning_start = current.replace(hour=9, minute=30, second=0, microsecond=0)
-            morning_end = current.replace(hour=12, minute=0, second=0, microsecond=0)
-            afternoon_start = current.replace(hour=13, minute=0, second=0, microsecond=0)
-            afternoon_end = current.replace(hour=16, minute=0, second=0, microsecond=0)
-            day_end = current.replace(hour=23, minute=59, second=59)
+            # 获取港股交易日历
+            hkex = mcal.get_calendar('XHKG')
             
-            # 如果当前时间早于上午开盘，跳到开盘时间
-            if current < morning_start:
-                current = morning_start
+            # 获取交易时间段
+            schedule = hkex.schedule(start_date=start_time.date(), end_date=end_time.date())
+            if schedule.empty:
+                return 0.0
             
-            # 计算上午交易时段
-            if morning_start <= current < morning_end:
-                segment_end = min(morning_end, end_time)
-                total_hours += (segment_end - current).total_seconds() / 3600
-                current = segment_end
+            total_hours = 0.0
             
-            # 计算下午交易时段
-            if afternoon_start <= current < afternoon_end:
-                segment_end = min(afternoon_end, end_time)
-                total_hours += (segment_end - current).total_seconds() / 3600
-                current = segment_end
+            # 遍历每个交易日
+            for index, row in schedule.iterrows():
+                market_open = row['market_open'].to_pydatetime()
+                market_close = row['market_close'].to_pydatetime()
+                
+                # 确定当天的计算范围
+                day_start = max(start_time, market_open)
+                day_end = min(end_time, market_close)
+                
+                if day_start < day_end:
+                    # 计算当天的交易时间
+                    day_hours = (day_end - day_start).total_seconds() / 3600
+                    total_hours += day_hours
             
-            # 如果已经过了下午收盘，进入下一天
-            if current >= afternoon_end:
-                current = (current + timedelta(days=1)).replace(hour=0, minute=0, second=0)
-            elif morning_end <= current < afternoon_start:
-                # 午休时间，跳到下午开盘
-                current = afternoon_start
-        
-        return total_hours
+            return total_hours
+        except ImportError:
+            logger.warning("pandas_market_calendars 未安装，使用原始方法计算交易时间")
+            # 使用配置中的交易时间
+            trading_start_hour, trading_start_minute = map(int, TRADING_CONFIG['trading_hours_start'].split(':'))
+            trading_end_hour, trading_end_minute = map(int, TRADING_CONFIG['trading_hours_end'].split(':'))
+            lunch_start_hour, lunch_start_minute = map(int, TRADING_CONFIG['lunch_break_start'].split(':'))
+            lunch_end_hour, lunch_end_minute = map(int, TRADING_CONFIG['lunch_break_end'].split(':'))
+            
+            total_hours = 0.0
+            current = start_time
+            
+            while current < end_time:
+                # 检查是否是工作日（周一到周五）
+                if current.weekday() >= 5:  # 周六或周日
+                    current += timedelta(days=1)
+                    current = current.replace(hour=0, minute=0, second=0)
+                    continue
+                
+                # 获取当天的交易时段
+                morning_start = current.replace(hour=trading_start_hour, minute=trading_start_minute, second=0, microsecond=0)
+                morning_end = current.replace(hour=lunch_start_hour, minute=lunch_start_minute, second=0, microsecond=0)
+                afternoon_start = current.replace(hour=lunch_end_hour, minute=lunch_end_minute, second=0, microsecond=0)
+                afternoon_end = current.replace(hour=trading_end_hour, minute=trading_end_minute, second=0, microsecond=0)
+                day_end = current.replace(hour=23, minute=59, second=59)
+                
+                # 如果当前时间早于上午开盘，跳到开盘时间
+                if current < morning_start:
+                    current = morning_start
+                
+                # 计算上午交易时段
+                if morning_start <= current < morning_end:
+                    segment_end = min(morning_end, end_time)
+                    total_hours += (segment_end - current).total_seconds() / 3600
+                    current = segment_end
+                
+                # 计算下午交易时段
+                if afternoon_start <= current < afternoon_end:
+                    segment_end = min(afternoon_end, end_time)
+                    total_hours += (segment_end - current).total_seconds() / 3600
+                    current = segment_end
+                
+                # 如果已经过了下午收盘，进入下一天
+                if current >= afternoon_end:
+                    current = (current + timedelta(days=1)).replace(hour=0, minute=0, second=0)
+                elif morning_end <= current < afternoon_start:
+                    # 午休时间，跳到下午开盘
+                    current = afternoon_start
+            
+            return total_hours
     
     def analyze_with_chan(self, code: str) -> Optional[Dict]:
         """
@@ -363,20 +366,22 @@ class FutuHKVisualTrading:
             分析结果字典
         """
         try:
-            # 获取30分钟K线数据
+            # 获取30分钟和5分钟K线数据（一次性获取多级别数据）
             end_time = datetime.now()
-            start_time = end_time - timedelta(days=30)
+            start_time = end_time - timedelta(days=30)  # 30天数据用于30M分析
             
-            chan_30m = CChan(
+            # 一次性初始化包含30M和5M两个级别的CChan对象
+            chan_multi_level = CChan(
                 code=code,
                 begin_time=start_time.strftime("%Y-%m-%d"),
                 end_time=end_time.strftime("%Y-%m-%d %H:%M:%S"),
                 data_src=DATA_SRC.FUTU,
-                lv_list=[KL_TYPE.K_30M],
+                lv_list=[KL_TYPE.K_30M, KL_TYPE.K_5M],  # 同时获取30M和5M数据
                 config=self.chan_config
             )
             
-            # 获取最新的买卖点
+            # 从30M级别获取最新的买卖点
+            chan_30m = chan_multi_level[0]  # 0索引对应第一个级别，即30M
             latest_bsps = chan_30m.get_latest_bsp(number=1)
             if not latest_bsps:
                 logger.debug(f"{code} 未发现买卖点")
@@ -390,18 +395,18 @@ class FutuHKVisualTrading:
             # ====== 时间过滤：只交易最近4个交易小时内的信号 ======
             # 将CTime转换为datetime
             bsp_ctime = bsp.klu.time
-            bsp_time = datetime(bsp_ctime.year, bsp_ctime.month, bsp_ctime.day, 
+            bsp_time = datetime(bsp_ctime.year, bsp_ctime.month, bsp_ctime.day,
                                bsp_ctime.hour, bsp_ctime.minute, bsp_ctime.second)
             
             now = datetime.now()
             trading_hours = self.calculate_trading_hours(bsp_time, now)
             
-            if trading_hours > 4:
+            if trading_hours > TRADING_CONFIG['max_signal_age_hours']:
                 logger.info(f"{code} {bsp_type} 信号产生于 {bsp_time.strftime('%Y-%m-%d %H:%M')}，"
-                           f"距今 {trading_hours:.1f} 个交易小时，超过4小时窗口，跳过")
+                           f"距今 {trading_hours:.1f} 个交易小时，超过{TRADING_CONFIG['max_signal_age_hours']}小时窗口，跳过")
                 return None
             
-            logger.info(f"{code} {bsp_type} 信号在4小时窗口内（{trading_hours:.1f}个交易小时前），继续分析")
+            logger.info(f"{code} {bsp_type} 信号在{TRADING_CONFIG['max_signal_age_hours']}小时窗口内（{trading_hours:.1f}个交易小时前），继续分析")
             
             result = {
                 'code': code,
@@ -410,7 +415,8 @@ class FutuHKVisualTrading:
                 'bsp_price': price,
                 'bsp_datetime': bsp.klu.time,
                 'chan_analysis': {
-                    'chan_30m': chan_30m
+                    'chan_30m': chan_30m,
+                    'chan_multi_level': chan_multi_level  # 保存多级别对象，供后续图表生成使用
                 }
             }
             
@@ -466,7 +472,7 @@ class FutuHKVisualTrading:
         except Exception as e:
             logger.warning(f"自定义MACD颜色失败: {e}")
     
-    def generate_charts(self, code: str, chan_30m) -> List[str]:
+    def generate_charts(self, code: str, chan_multi_level) -> List[str]:
         """
         生成技术图表（AI视觉优化版）
         
@@ -479,7 +485,7 @@ class FutuHKVisualTrading:
         
         Args:
             code: 股票代码
-            chan_30m: 30分钟缠论对象
+            chan_multi_level: 包含多级别（30M和5M）缠论对象
             
         Returns:
             图表文件路径列表
@@ -489,6 +495,10 @@ class FutuHKVisualTrading:
         safe_code = code.replace('.', '_').replace('-', '_')
         
         try:
+            # 从多级别对象中获取30M和5M数据
+            chan_30m = chan_multi_level[0]  # 0索引对应30M级别
+            chan_5m = chan_multi_level[1]   # 1索引对应5M级别
+            
             # 生成30分钟图（AI视觉优化配置）
             plot_30m = CPlotDriver(
                 chan_30m,
@@ -534,19 +544,7 @@ class FutuHKVisualTrading:
             plt.close('all')
             chart_paths.append(chart_30m_path)
             
-            # 获取5分钟数据并生成图表（用于Gemini辅助判断背驰）
-            end_time = datetime.now()
-            start_time = end_time - timedelta(days=7)  # 7天数据
-            
-            chan_5m = CChan(
-                code=code,
-                begin_time=start_time.strftime("%Y-%m-%d"),
-                end_time=end_time.strftime("%Y-%m-%d %H:%M:%S"),
-                data_src=DATA_SRC.FUTU,
-                lv_list=[KL_TYPE.K_5M],
-                config=self.chan_config
-            )
-            
+            # 生成5分钟图（使用已有的5M数据，不再重新请求）
             plot_5m = CPlotDriver(
                 chan_5m,
                 plot_config={
@@ -689,28 +687,13 @@ class FutuHKVisualTrading:
             logger.error(f"获取资金信息异常：{e}")
             return 0.0
         
-    def scan_and_trade(self):
+    def _collect_candidate_signals(self, watchlist_codes: List[str]) -> List[Dict]:
         """
-        批量扫描并执行交易
-        逻辑：收集所有信号 → 卖点优先 → 同类型按评分排序执行
+        收集候选信号 - 第一步
+        返回包含股票代码、缠论分析结果和股票信息的数据结构，但不包括图表和评分
         """
-        logger.info("开始批量扫描交易...")
-        
-        # 获取自选股
-        watchlist_codes = self.get_watchlist_codes()
-        if not watchlist_codes:
-            logger.warning("没有获取到自选股，退出扫描")
-            return
-        
-        # 获取初始可用资金
-        available_funds = self.get_available_funds()
-        available_funds_at_start = available_funds  # 记录初始资金用于备忘录对比
-        if available_funds <= 0:
-            logger.error("可用资金不足，退出扫描")
-            return
-        
-        # ========== 第一阶段：收集所有有效信号 ==========
-        all_signals = []
+        logger.info("开始收集候选信号...")
+        candidate_signals = []
         
         for code in watchlist_codes:
             logger.info(f"分析股票: {code}")
@@ -748,60 +731,147 @@ class FutuHKVisualTrading:
                 logger.info(f"{code} 无持仓，跳过卖出")
                 continue
             
+            # 收集候选信号（不包括图表和评分）
+            signal_data = {
+                'code': code,
+                'is_buy': is_buy,
+                'bsp_type': bsp_type,
+                'current_price': current_price,
+                'position_qty': position_qty,
+                'lot_size': stock_info.get('lot_size', 100),
+                'chan_result': chan_result  # 保存完整的缠论分析结果
+            }
+            candidate_signals.append(signal_data)
+            logger.info(f"✅ {code} 候选信号已收集")
+        
+        logger.info(f"共收集到 {len(candidate_signals)} 个候选信号")
+        return candidate_signals
+
+    def _generate_single_chart(self, signal_data: Dict) -> Optional[Dict]:
+        """
+        生成单个图表的辅助函数，用于并行处理
+        """
+        code = signal_data['code']
+        chan_result = signal_data['chan_result']
+        
+        try:
             # 生成图表
-            chart_paths = self.generate_charts(code, chan_result['chan_analysis']['chan_30m'])
+            chart_paths = self.generate_charts(code, chan_result['chan_analysis']['chan_multi_level'])
             if not chart_paths:
-                logger.warning(f"{code} 图表生成失败，跳过")
-                continue
+                logger.warning(f"{code} 图表生成失败")
+                return None
             
-            # 视觉评分
-            try:
-                visual_result = self.visual_judge.evaluate(chart_paths)
-                score = visual_result.get('score', 0)
-                action = visual_result.get('action', 'WAIT')
-                analysis = visual_result.get('analysis', '')
-                
-                logger.info(f"{code} 视觉评分: {score}/100, 建议: {action}")
-                
-                # 收集所有缠论信号，无论视觉评分
-                # 获取每手股数
-                lot_size = stock_info.get('lot_size', 100)
-                signal_data = {
-                    'code': code,
-                    'is_buy': is_buy,
-                    'bsp_type': bsp_type,
-                    'score': score,
-                    'current_price': current_price,
-                    'position_qty': position_qty,
-                    'lot_size': lot_size,
-                    'chart_paths': chart_paths,
-                    'visual_result': visual_result
-                }
-                all_signals.append(signal_data)
-                logger.info(f"✅ {code} 缠论信号已收集 (评分: {score})")
-                
-            except Exception as e:
-                logger.error(f"视觉评分异常 {code}: {e}")
-                # 即使视觉评分失败，也收集缠论信号
-                signal_data = {
-                    'code': code,
-                    'is_buy': is_buy,
-                    'bsp_type': bsp_type,
-                    'score': 0,
-                    'current_price': current_price,
-                    'position_qty': position_qty,
-                    'lot_size': lot_size,
-                    'chart_paths': chart_paths,
-                    'visual_result': {'score': 0, 'action': 'ERROR', 'analysis': '视觉评分失败'}
-                }
-                all_signals.append(signal_data)
-                logger.info(f"⚠️ {code} 视觉评分失败，但缠论信号已收集")
-                continue
+            # 添加图表路径到信号数据
+            signal_with_chart = signal_data.copy()
+            signal_with_chart['chart_paths'] = chart_paths
+            logger.info(f"✅ {code} 图表已生成 ({len(chart_paths)} 张)")
+            return signal_with_chart
+        except Exception as e:
+            logger.error(f"生成图表异常 {code}: {e}")
+            return None
+
+    def _batch_generate_charts(self, candidate_signals: List[Dict]) -> List[Dict]:
+        """
+        批量生成图表 - 第二步 (并行化版本)
+        """
+        logger.info(f"开始批量生成图表，共 {len(candidate_signals)} 个信号")
         
-        logger.info(f"共收集到 {len(all_signals)} 个缠论信号")
+        # 使用进程池并行生成图表
+        signals_with_charts = []
+        max_workers = min(4, len(candidate_signals))  # 限制并发数避免资源耗尽
         
-        # ========== 第二阶段：分离并排序信号 ==========
-        # 即使没有信号也继续执行，让备忘录函数处理
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            # 提交所有任务
+            future_to_signal = {
+                executor.submit(self._generate_single_chart, signal): signal
+                for signal in candidate_signals
+            }
+            
+            # 收集结果
+            for future in as_completed(future_to_signal):
+                result = future.result()
+                if result is not None:
+                    signals_with_charts.append(result)
+        
+        logger.info(f"批量图表生成完成，成功生成 {len(signals_with_charts)} 个带图表的信号")
+        return signals_with_charts
+
+    async def _async_evaluate_single_signal(self, session: aiohttp.ClientSession, signal: Dict) -> Optional[Dict]:
+        """
+        异步评估单个信号的辅助函数
+        """
+        code = signal['code']
+        chart_paths = signal['chart_paths']
+        bsp_type = signal['bsp_type']  # 使用信号类型作为额外信息
+        
+        try:
+            # 使用线程池执行器来异步调用同步的evaluate方法
+            loop = asyncio.get_event_loop()
+            visual_result = await loop.run_in_executor(None, self.visual_judge.evaluate, chart_paths, bsp_type)
+            
+            score = visual_result.get('score', 0)
+            action = visual_result.get('action', 'WAIT')
+            analysis = visual_result.get('analysis', '')
+            
+            logger.info(f"{code} 视觉评分: {score}/100, 建议: {action}")
+            
+            # 添加评分结果到信号数据
+            scored_signal = signal.copy()
+            scored_signal['score'] = score
+            scored_signal['visual_result'] = visual_result
+            
+            logger.info(f"✅ {code} 评分已完成 (评分: {score})")
+            return scored_signal
+            
+        except Exception as e:
+            logger.error(f"视觉评分异常 {code}: {e}")
+            # 即使视觉评分失败，也添加信号（评分为0）
+            scored_signal = signal.copy()
+            scored_signal['score'] = 0
+            scored_signal['visual_result'] = {'score': 0, 'action': 'ERROR', 'analysis': '视觉评分失败'}
+            logger.info(f"⚠️ {code} 评分失败，但信号已添加")
+            return scored_signal
+
+    async def _batch_score_signals_async(self, signals_with_charts: List[Dict]) -> List[Dict]:
+        """
+        异步批量评分信号 - 第三步
+        """
+        logger.info(f"开始异步批量评分，共 {len(signals_with_charts)} 个带图表的信号")
+        
+        # 创建一个异步会话（虽然我们实际上不会在这里使用它，但为了接口一致性保留）
+        async with aiohttp.ClientSession() as session:
+            # 创建任务列表
+            tasks = [self._async_evaluate_single_signal(session, signal) for signal in signals_with_charts]
+            
+            # 并发执行所有评分任务
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # 过滤掉异常结果
+        scored_signals = []
+        for result in results:
+            if isinstance(result, Exception):
+                logger.error(f"评分任务异常: {result}")
+            else:
+                scored_signals.append(result)
+        
+        # 移除可能的None值
+        scored_signals = [s for s in scored_signals if s is not None]
+        
+        logger.info(f"异步批量评分完成，共 {len(scored_signals)} 个已评分信号")
+        return scored_signals
+
+    def _batch_score_signals(self, signals_with_charts: List[Dict]) -> List[Dict]:
+        """
+        批量评分信号 - 第三步 (同步包装器)
+        """
+        # 使用 asyncio.run 来运行异步方法
+        return asyncio.run(self._batch_score_signals_async(signals_with_charts))
+    
+    def _execute_trades(self, all_signals: List[Dict], available_funds_at_start: float) -> Tuple[List[Dict], int, int, float]:
+        """
+        执行交易 - 第四步
+        """
+        # 分离并排序信号
         sell_signals = [s for s in all_signals if not s['is_buy']]
         buy_signals = [s for s in all_signals if s['is_buy']]
         
@@ -811,9 +881,11 @@ class FutuHKVisualTrading:
         
         logger.info(f"卖出信号: {len(sell_signals)}个, 买入信号: {len(buy_signals)}个")
         
-        # ========== 第三阶段：先执行卖点（优先）==========
+        # 执行卖点（优先）
+        available_funds = available_funds_at_start
         executed_sell = 0
         executed_buy = 0
+        
         if sell_signals:
             logger.info(f"\n>>> 开始执行卖出操作（共{len(sell_signals)}个）")
             for i, signal in enumerate(sell_signals, 1):
@@ -838,7 +910,7 @@ class FutuHKVisualTrading:
                 else:
                     logger.info(f"⏭️ 卖出信号 {code} 评分({score})低于阈值({self.min_visual_score})，仅通知不执行")
         
-        # ========== 第四阶段：再执行买点 ==========
+        # 执行买点
         if buy_signals:
             logger.info(f"\n>>> 开始执行买入操作（共{len(buy_signals)}个）")
             for i, signal in enumerate(buy_signals, 1):
@@ -872,8 +944,83 @@ class FutuHKVisualTrading:
                     logger.info(f"⏭️ 买入信号 {code} 评分({score})低于阈值({self.min_visual_score})，仅通知不执行")
         
         logger.info(f"\n扫描交易完成，最终可用资金: {available_funds:.2f}")
+        return sell_signals, buy_signals, executed_sell, executed_buy, available_funds
+
+    def scan_and_trade(self):
+        """
+        批量扫描并执行交易
+        逻辑：收集所有信号 → 批量生成图表 → 批量评分 → 执行交易
+        """
+        logger.info("开始批量扫描交易...")
         
-        # ========== 第五阶段：发送扫描结果到备忘录 ==========
+        # 获取自选股
+        watchlist_codes = self.get_watchlist_codes()
+        if not watchlist_codes:
+            logger.warning("没有获取到自选股，退出扫描")
+            return
+        
+        # 获取初始可用资金
+        available_funds = self.get_available_funds()
+        available_funds_at_start = available_funds  # 记录初始资金用于备忘录对比
+        if available_funds <= 0:
+            logger.error("可用资金不足，退出扫描")
+            return
+        
+        # ========== 第一阶段：收集所有候选信号 ==========
+        candidate_signals = self._collect_candidate_signals(watchlist_codes)
+        
+        # ========== 第二阶段：如果没有候选信号，直接发送结果 ==========
+        if not candidate_signals:
+            # 即使没有信号也继续执行，让备忘录函数处理
+            try:
+                scan_summary = {
+                    'total_stocks': len(watchlist_codes),
+                    'all_signals': [],  # 所有缠论信号
+                    'sell_signals': [],
+                    'buy_signals': [],
+                    'executed_sells': 0,
+                    'executed_buys': 0,
+                    'initial_funds': available_funds_at_start,
+                    'final_funds': available_funds,
+                    'scan_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                }
+                self.send_scan_result_to_notes(scan_summary)
+            except Exception as e:
+                logger.error(f"发送扫描结果到备忘录失败: {e}")
+            return
+        
+        # ========== 第三阶段：批量生成图表 ==========
+        signals_with_charts = self._batch_generate_charts(candidate_signals)
+        
+        # ========== 第四阶段：如果没有图表，直接发送结果 ==========
+        if not signals_with_charts:
+            # 即使没有成功生成图表的信号也继续执行
+            try:
+                scan_summary = {
+                    'total_stocks': len(watchlist_codes),
+                    'all_signals': [],  # 所有缠论信号
+                    'sell_signals': [],
+                    'buy_signals': [],
+                    'executed_sells': 0,
+                    'executed_buys': 0,
+                    'initial_funds': available_funds_at_start,
+                    'final_funds': available_funds,
+                    'scan_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                }
+                self.send_scan_result_to_notes(scan_summary)
+            except Exception as e:
+                logger.error(f"发送扫描结果到备忘录失败: {e}")
+            return
+        
+        # ========== 第五阶段：批量评分信号 ==========
+        all_signals = self._batch_score_signals(signals_with_charts)
+        
+        # ========== 第六阶段：执行交易 ==========
+        sell_signals, buy_signals, executed_sell, executed_buy, final_funds = self._execute_trades(
+            all_signals, available_funds_at_start
+        )
+        
+        # ========== 第七阶段：发送扫描结果到备忘录 ==========
         try:
             scan_summary = {
                 'total_stocks': len(watchlist_codes),
@@ -883,7 +1030,7 @@ class FutuHKVisualTrading:
                 'executed_sells': executed_sell,
                 'executed_buys': executed_buy,
                 'initial_funds': available_funds_at_start,
-                'final_funds': available_funds,
+                'final_funds': final_funds,
                 'scan_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             }
             self.send_scan_result_to_notes(scan_summary)
@@ -919,12 +1066,7 @@ def main():
     """主函数"""
     try:
         # 初始化交易系统
-        trader = FutuHKVisualTrading(
-            hk_watchlist_group="港股",
-            min_visual_score=70,
-            max_position_ratio=0.2,
-            dry_run=True  # 设为True为模拟盘，False为实盘
-        )
+        trader = FutuHKVisualTrading()
         
         # 持续运行
         while True:

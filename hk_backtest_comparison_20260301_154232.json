@@ -1,0 +1,617 @@
+{
+  "with_visual": {
+    "watchlist": [
+      "HK.00700"
+    ],
+    "start_date": "2024-01-01",
+    "end_date": "2024-06-30",
+    "initial_funds": 100000.0,
+    "use_visual_judge": true,
+    "min_visual_score": 70,
+    "trades": [
+      {
+        "code": "HK.00700",
+        "action": "BUY",
+        "quantity": 300,
+        "price": 274.1,
+        "time": "2024-02-20 10:00:00",
+        "visual_score": 92
+      },
+      {
+        "code": "HK.00700",
+        "action": "SELL",
+        "quantity": 300,
+        "price": 288.5,
+        "time": "2024-03-21 10:00:00",
+        "profit": 4319.999999999993,
+        "profit_pct": 5.253557095950375
+      },
+      {
+        "code": "HK.00700",
+        "action": "BUY",
+        "quantity": 300,
+        "price": 301.1,
+        "time": "2024-04-02 16:00:00",
+        "visual_score": 85
+      },
+      {
+        "code": "HK.00700",
+        "action": "SELL",
+        "quantity": 300,
+        "price": 298.7,
+        "time": "2024-04-05 10:00:00",
+        "profit": -720.0000000000102,
+        "profit_pct": -0.7970773829292707
+      },
+      {
+        "code": "HK.00700",
+        "action": "BUY",
+        "quantity": 300,
+        "price": 297.9,
+        "time": "2024-04-05 12:00:00",
+        "visual_score": 83
+      },
+      {
+        "code": "HK.00700",
+        "action": "SELL",
+        "quantity": 300,
+        "price": 302.9,
+        "time": "2024-04-05 15:30:00",
+        "profit": 1500.0,
+        "profit_pct": 1.6784155756965426
+      },
+      {
+        "code": "HK.00700",
+        "action": "BUY",
+        "quantity": 300,
+        "price": 290.9,
+        "time": "2024-04-18 14:00:00",
+        "visual_score": 92
+      },
+      {
+        "code": "HK.00700",
+        "action": "SELL",
+        "quantity": 300,
+        "price": 348.9,
+        "time": "2024-05-02 10:30:00",
+        "profit": 17400.0,
+        "profit_pct": 19.938123066345824
+      },
+      {
+        "code": "HK.00700",
+        "action": "BUY",
+        "quantity": 300,
+        "price": 356.3,
+        "time": "2024-05-07 13:30:00",
+        "visual_score": 80
+      },
+      {
+        "code": "HK.00700",
+        "action": "SELL",
+        "quantity": 300,
+        "price": 361.5,
+        "time": "2024-05-08 10:00:00",
+        "profit": 1559.9999999999966,
+        "profit_pct": 1.4594442885209062
+      }
+    ],
+    "signals": [
+      {
+        "code": "HK.00700",
+        "time": "2024-02-20 10:00:00",
+        "type": "1",
+        "is_buy": true,
+        "price": 274.1,
+        "visual_score": 92
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-03-21 10:00:00",
+        "type": "1",
+        "is_buy": false,
+        "price": 288.5,
+        "visual_score": 100
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-04-02 15:00:00",
+        "type": "3a",
+        "is_buy": true,
+        "price": 301.1,
+        "visual_score": 48
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-04-02 15:30:00",
+        "type": "3a",
+        "is_buy": true,
+        "price": 301.1,
+        "visual_score": 49
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-04-02 16:00:00",
+        "type": "3a",
+        "is_buy": true,
+        "price": 301.1,
+        "visual_score": 85
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-04-05 10:00:00",
+        "type": "2",
+        "is_buy": false,
+        "price": 298.7,
+        "visual_score": 100
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-04-05 10:30:00",
+        "type": "3a",
+        "is_buy": true,
+        "price": 298.9,
+        "visual_score": 13
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-04-05 11:00:00",
+        "type": "3a",
+        "is_buy": true,
+        "price": 297.9,
+        "visual_score": 36
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-04-05 11:30:00",
+        "type": "3a",
+        "is_buy": true,
+        "price": 297.9,
+        "visual_score": 27
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-04-05 12:00:00",
+        "type": "3a",
+        "is_buy": true,
+        "price": 297.9,
+        "visual_score": 83
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-04-05 15:30:00",
+        "type": "2",
+        "is_buy": false,
+        "price": 302.9,
+        "visual_score": 100
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-04-18 13:30:00",
+        "type": "1",
+        "is_buy": true,
+        "price": 290.9,
+        "visual_score": 62
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-04-18 14:00:00",
+        "type": "1",
+        "is_buy": true,
+        "price": 290.9,
+        "visual_score": 92
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-05-02 10:30:00",
+        "type": "1",
+        "is_buy": false,
+        "price": 348.9,
+        "visual_score": 100
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-05-07 11:30:00",
+        "type": "3a",
+        "is_buy": true,
+        "price": 356.3,
+        "visual_score": 41
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-05-07 12:00:00",
+        "type": "3a",
+        "is_buy": true,
+        "price": 356.3,
+        "visual_score": 52
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-05-07 13:30:00",
+        "type": "3a",
+        "is_buy": true,
+        "price": 356.3,
+        "visual_score": 80
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-05-08 10:00:00",
+        "type": "2",
+        "is_buy": false,
+        "price": 361.5,
+        "visual_score": 100
+      }
+    ],
+    "final_funds": 123273.69952000002,
+    "total_return": 23.273699520000022,
+    "stats": {
+      "signals_found": 797,
+      "signals_filtered_by_time": 0,
+      "visual_scores": [
+        {
+          "code": "HK.00700",
+          "time": "2024-02-20 10:00:00",
+          "type": "1",
+          "score": 92
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-03-21 10:00:00",
+          "type": "1",
+          "score": 100
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-04-02 15:00:00",
+          "type": "3a",
+          "score": 48
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-04-02 15:30:00",
+          "type": "3a",
+          "score": 49
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-04-02 16:00:00",
+          "type": "3a",
+          "score": 85
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-04-05 10:00:00",
+          "type": "2",
+          "score": 100
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-04-05 10:30:00",
+          "type": "3a",
+          "score": 13
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-04-05 11:00:00",
+          "type": "3a",
+          "score": 36
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-04-05 11:30:00",
+          "type": "3a",
+          "score": 27
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-04-05 12:00:00",
+          "type": "3a",
+          "score": 83
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-04-05 15:30:00",
+          "type": "2",
+          "score": 100
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-04-18 13:30:00",
+          "type": "1",
+          "score": 62
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-04-18 14:00:00",
+          "type": "1",
+          "score": 92
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-05-02 10:30:00",
+          "type": "1",
+          "score": 100
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-05-07 11:30:00",
+          "type": "3a",
+          "score": 41
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-05-07 12:00:00",
+          "type": "3a",
+          "score": 52
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-05-07 13:30:00",
+          "type": "3a",
+          "score": 80
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-05-08 10:00:00",
+          "type": "2",
+          "score": 100
+        }
+      ],
+      "trades_with_visual": 5,
+      "trades_without_visual": 0
+    }
+  },
+  "without_visual": {
+    "watchlist": [
+      "HK.00700"
+    ],
+    "start_date": "2024-01-01",
+    "end_date": "2024-06-30",
+    "initial_funds": 100000.0,
+    "use_visual_judge": false,
+    "min_visual_score": 70,
+    "trades": [
+      {
+        "code": "HK.00700",
+        "action": "BUY",
+        "quantity": 300,
+        "price": 274.1,
+        "time": "2024-02-20 10:00:00",
+        "visual_score": 100
+      },
+      {
+        "code": "HK.00700",
+        "action": "SELL",
+        "quantity": 300,
+        "price": 288.5,
+        "time": "2024-03-21 10:00:00",
+        "profit": 4319.999999999993,
+        "profit_pct": 5.253557095950375
+      },
+      {
+        "code": "HK.00700",
+        "action": "BUY",
+        "quantity": 300,
+        "price": 301.1,
+        "time": "2024-04-02 15:00:00",
+        "visual_score": 100
+      },
+      {
+        "code": "HK.00700",
+        "action": "SELL",
+        "quantity": 300,
+        "price": 298.7,
+        "time": "2024-04-05 10:00:00",
+        "profit": -720.0000000000102,
+        "profit_pct": -0.7970773829292707
+      },
+      {
+        "code": "HK.00700",
+        "action": "BUY",
+        "quantity": 300,
+        "price": 298.9,
+        "time": "2024-04-05 10:30:00",
+        "visual_score": 100
+      },
+      {
+        "code": "HK.00700",
+        "action": "SELL",
+        "quantity": 300,
+        "price": 302.9,
+        "time": "2024-04-05 15:30:00",
+        "profit": 1200.0,
+        "profit_pct": 1.3382402141184344
+      },
+      {
+        "code": "HK.00700",
+        "action": "BUY",
+        "quantity": 300,
+        "price": 290.9,
+        "time": "2024-04-18 13:30:00",
+        "visual_score": 100
+      },
+      {
+        "code": "HK.00700",
+        "action": "SELL",
+        "quantity": 300,
+        "price": 348.9,
+        "time": "2024-05-02 10:30:00",
+        "profit": 17400.0,
+        "profit_pct": 19.938123066345824
+      },
+      {
+        "code": "HK.00700",
+        "action": "BUY",
+        "quantity": 300,
+        "price": 356.3,
+        "time": "2024-05-07 11:30:00",
+        "visual_score": 100
+      },
+      {
+        "code": "HK.00700",
+        "action": "SELL",
+        "quantity": 300,
+        "price": 361.5,
+        "time": "2024-05-08 10:00:00",
+        "profit": 1559.9999999999966,
+        "profit_pct": 1.4594442885209062
+      }
+    ],
+    "signals": [
+      {
+        "code": "HK.00700",
+        "time": "2024-02-20 10:00:00",
+        "type": "1",
+        "is_buy": true,
+        "price": 274.1,
+        "visual_score": 100
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-03-21 10:00:00",
+        "type": "1",
+        "is_buy": false,
+        "price": 288.5,
+        "visual_score": 100
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-04-02 15:00:00",
+        "type": "3a",
+        "is_buy": true,
+        "price": 301.1,
+        "visual_score": 100
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-04-05 10:00:00",
+        "type": "2",
+        "is_buy": false,
+        "price": 298.7,
+        "visual_score": 100
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-04-05 10:30:00",
+        "type": "3a",
+        "is_buy": true,
+        "price": 298.9,
+        "visual_score": 100
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-04-05 15:30:00",
+        "type": "2",
+        "is_buy": false,
+        "price": 302.9,
+        "visual_score": 100
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-04-18 13:30:00",
+        "type": "1",
+        "is_buy": true,
+        "price": 290.9,
+        "visual_score": 100
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-05-02 10:30:00",
+        "type": "1",
+        "is_buy": false,
+        "price": 348.9,
+        "visual_score": 100
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-05-07 11:30:00",
+        "type": "3a",
+        "is_buy": true,
+        "price": 356.3,
+        "visual_score": 100
+      },
+      {
+        "code": "HK.00700",
+        "time": "2024-05-08 10:00:00",
+        "type": "2",
+        "is_buy": false,
+        "price": 361.5,
+        "visual_score": 100
+      }
+    ],
+    "final_funds": 122973.60142000002,
+    "total_return": 22.97360142000002,
+    "stats": {
+      "signals_found": 797,
+      "signals_filtered_by_time": 0,
+      "visual_scores": [
+        {
+          "code": "HK.00700",
+          "time": "2024-02-20 10:00:00",
+          "type": "1",
+          "score": 100
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-03-21 10:00:00",
+          "type": "1",
+          "score": 100
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-04-02 15:00:00",
+          "type": "3a",
+          "score": 100
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-04-05 10:00:00",
+          "type": "2",
+          "score": 100
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-04-05 10:30:00",
+          "type": "3a",
+          "score": 100
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-04-05 15:30:00",
+          "type": "2",
+          "score": 100
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-04-18 13:30:00",
+          "type": "1",
+          "score": 100
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-05-02 10:30:00",
+          "type": "1",
+          "score": 100
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-05-07 11:30:00",
+          "type": "3a",
+          "score": 100
+        },
+        {
+          "code": "HK.00700",
+          "time": "2024-05-08 10:00:00",
+          "type": "2",
+          "score": 100
+        }
+      ],
+      "trades_with_visual": 0,
+      "trades_without_visual": 5
+    }
+  },
+  "comparison_summary": {
+    "return_difference": 0.30009810000000314,
+    "funds_difference": 300.0981000000029,
+    "trades_difference": 0
+  }
+}

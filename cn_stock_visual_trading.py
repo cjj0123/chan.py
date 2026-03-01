@@ -33,18 +33,13 @@ try:
     if load_api_keys():
         print("✅ API Key 已从 memory/api_keys.md 加载")
     else:
-        # 备用方案：直接设置
-        import os
-        os.environ["GOOGLE_API_KEY"] = "AIzaSyCyOShkz9hhPPLxYrI6Oc4eHq_I6muZF0Q"
-        print("✅ API Key 已使用备用配置")
+        # 如果无法加载API密钥，抛出错误
+        raise ValueError("无法加载Google API密钥，请确保memory/api_keys.md文件存在且包含有效的API密钥")
 except Exception as e:
-    import os
-    os.environ["GOOGLE_API_KEY"] = "AIzaSyCyOShkz9hhPPLxYrI6Oc4eHq_I6muZF0Q"
-    print(f"⚠️ API Key 加载异常，使用备用配置")
+    print(f"⚠️ API Key 加载异常: {e}")
+    raise ValueError("无法加载Google API密钥，请确保memory/api_keys.md文件存在且包含有效的API密钥")
 
-# 设置 Gemini API Key
-import os
-os.environ["GOOGLE_API_KEY"] = "AIzaSyCyOShkz9hhPPLxYrI6Oc4eHq_I6muZF0Q"
+# 不再硬编码设置Gemini API Key，依赖环境变量
 
 # 配置日志
 logging.basicConfig(

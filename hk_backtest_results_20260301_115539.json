@@ -1,0 +1,21 @@
+{
+  "watchlist": [
+    "HK.00700"
+  ],
+  "start_date": "2024-06-01",
+  "end_date": "2024-06-30",
+  "initial_funds": 100000.0,
+  "use_visual_judge": false,
+  "min_visual_score": 70,
+  "trades": [],
+  "signals": [],
+  "final_funds": 100000.0,
+  "total_return": 0.0,
+  "stats": {
+    "signals_found": 16,
+    "signals_filtered_by_time": 39,
+    "visual_scores": [],
+    "trades_with_visual": 0,
+    "trades_without_visual": 0
+  }
+}

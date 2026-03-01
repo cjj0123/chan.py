@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+全局配置文件
+"""
+
+import os
+from typing import Dict, Any
+
+# 交易系统配置
+TRADING_CONFIG = {
+    # 富途相关配置
+    'hk_watchlist_group': os.getenv('HK_WATCHLIST_GROUP', '港股'),
+    'min_visual_score': int(os.getenv('MIN_VISUAL_SCORE', '70')),
+    'max_position_ratio': float(os.getenv('MAX_POSITION_RATIO', '0.2')),
+    'dry_run': os.getenv('DRY_RUN', 'True').lower() in ('true', '1', 'yes'),
+    
+    # 交易时间配置
+    'trading_hours_start': os.getenv('TRADING_HOURS_START', '09:30'),
+    'trading_hours_end': os.getenv('TRADING_HOURS_END', '16:00'),
+    'lunch_break_start': os.getenv('LUNCH_BREAK_START', '12:00'),
+    'lunch_break_end': os.getenv('LUNCH_BREAK_END', '13:00'),
+    
+    # 信号时间过滤
+    'max_signal_age_hours': int(os.getenv('MAX_SIGNAL_AGE_HOURS', '4')),
+}
+
+# 缠论配置
+CHAN_CONFIG = {
+    "bi_strict": True,
+    "one_bi_zs": False,
+    "seg_algo": "chan",
+    "bs_type": '1,1p,2,2s,3a,3b',
+    "macd": {"fast": 12, "slow": 26, "signal": 9},
+    "divergence_rate": float("inf"),  # 无限大，禁用背驰率过滤
+    "min_zs_cnt": 0,
+    "bsp2_follow_1": False,
+    "bsp3_follow_1": False,
+    "bs1_peak": False,
+    "macd_algo": "peak",
+    "zs_algo": "normal",
+}
+
+# 图表配置
+CHART_CONFIG = {
+    "plot_kline": True,
+    "plot_kline_combine": True,
+    "plot_bi": True,
+    "plot_seg": True,
+    "plot_eigen": False,
+    "plot_zs": True,
+    "plot_macd": True,  # 启用MACD
+    "plot_mean": False,
+    "plot_channel": False,
+    "plot_bsp": True,
+    "plot_extrainfo": False,
+    "plot_demark": False,
+    "plot_marker": False,
+    "plot_rsi": False,
+    "plot_kdj": False,
+}
+
+# 图表参数配置
+CHART_PARA = {
+    "seg": {},
+    "bi": {
+        "color": "#FFFF00",  # 黄色
+        "show_num": False
+    },
+    "zs": {
+        "color": "#4169E1",  # 皇家蓝
+        "linewidth": 2
+    },
+    "bsp": {
+        "fontsize": 12,
+        "buy_color": "red",
+        "sell_color": "green"
+    },
+    "macd": {
+        "width": 0.6
+    },
+    "figure": {
+        "w": 16,
+        "h": 12,
+        "macd_h": 0.25,
+        "grid": None
+    }
+}
+
+# API配置
+API_CONFIG = {
+    'GOOGLE_API_KEY': os.getenv("GOOGLE_API_KEY"),
+}
+
+# 数据源配置
+DATA_CONFIG = {
+    'DEFAULT_DATA_SOURCE': 'FUTU',
+    'CACHE_ENABLED': True,
+    'CACHE_DIR': 'stock_cache',
+}
