@@ -16,6 +16,24 @@ from typing import List, Dict, Optional, Tuple
 import pandas as pd
 import numpy as np
 
+# A 股节假日（2026 年示例，需要根据实际更新）
+CN_HOLIDAYS_2026 = [
+    '2026-01-01',  # 元旦
+    '2026-01-22',  # 农历年初三
+    '2026-01-23',  # 农历年初四
+    '2026-04-03',  # 清明节
+    '2026-04-06',  # 复活节星期一
+    '2026-05-01',  # 劳动节
+    '2026-05-25',  # 佛诞
+    '2026-06-19',  # 端午节
+    '2026-07-01',  # 香港特区成立纪念日
+    '2026-09-28',  # 中秋节
+    '2026-10-01',  # 国庆节
+    '2026-10-02',  # 国庆节
+    '2026-10-21',  # 重阳节
+    '2026-12-25',  # 圣诞节
+]
+
 from Chan import CChan
 from ChanConfig import CChanConfig
 from Common.CEnum import KL_TYPE, DATA_SRC
@@ -404,8 +422,30 @@ class CNStockVisualTrading:
         except Exception as e:
             logger.error("❌ 发送备忘录异常：" + str(e))
     
+    def is_cn_trading_day(self) -> bool:
+        """检查是否为 A 股交易日"""
+        now = datetime.now()
+        
+        # 检查周末
+        if now.weekday() >= 5:
+            return False
+        
+        # 检查节假日
+        date_str = now.strftime('%Y-%m-%d')
+        if date_str in CN_HOLIDAYS_2026:
+            return False
+        
+        return True
+    
     def scan_and_trade(self):
         """A 股扫描：只扫描信号并发送备忘录通知"""
+        # 检查是否为交易日
+        if not self.is_cn_trading_day():
+            today = datetime.now().strftime('%Y-%m-%d')
+            weekday = datetime.now().strftime('%A')
+            logger.info(f"📭 今日是非交易日 ({today} {weekday})，跳过 A 股扫描")
+            return
+        
         logger.info("=" * 70)
         logger.info("🔍 A 股缠论信号扫描开始...")
         logger.info("=" * 70)
