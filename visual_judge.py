@@ -1,24 +1,35 @@
 """
-Gemini 视觉评分模块 - 使用 Google GenAI SDK (新版)
+视觉评分模块 - 支持 Gemini 和 Qwen 双模型, 具备回退机制
 """
 import os
 import json
-import random
+import base64
 from PIL import Image
+import re
 
-# 尝试导入 google.genai (新版)
+# 尝试导入 google.genai (Gemini)
 try:
-    from google import genai
-    from google.genai import types
-    GENAI_AVAILABLE = True
+    import google.generativeai as genai
+    from google.generativeai.types import GenerationConfig
+    GEMINI_AVAILABLE = True
 except ImportError:
-    GENAI_AVAILABLE = False
-    print("⚠️ google.genai 未安装，将使用 Mock 模式")
-    print("   安装命令: pip install google-genai")
+    GEMINI_AVAILABLE = False
+    print("⚠️ google.generativeai 未安装，Gemini 模型不可用。")
+    print("   安装命令: pip install google-generativeai")
 
-# 从环境变量获取 Google API 密钥
+# 尝试导入 dashscope (Qwen)
+try:
+    import dashscope
+    from dashscope import MultiModalConversation
+    QWEN_AVAILABLE = True
+except ImportError:
+    QWEN_AVAILABLE = False
+    print("⚠️ dashscope 未安装，Qwen 模型不可用。")
+    print("   安装命令: pip install dashscope")
+
+# API 密钥配置
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-USE_MOCK_IF_NO_API = True
+DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 
 MASTER_PROMPT = """System / Role Definition
 You are a Master Quantitative Trader specializing in Chan Theory (缠论). You are evaluating a specific algorithmic signal that has already been identified by our system. You possess strict, objective visual reasoning capabilities regarding "Interval Recursion" (区间套) and "MACD Dynamics" (动力学).
@@ -95,174 +106,198 @@ Output Requirement: Return ONLY a valid JSON object. No other text.
   "score": 0,
   "reasoning": "Explain: 1) What 30M signal was evaluated, 2) How 5M confirmed it, 3) Why the score was given.",
   "key_risk": "string (e.g., 5M lacks confirmation, near strong resistance, MACD weakening)"
-}"""
-
+}
+"""
 
 class VisualJudge:
-    def __init__(self, use_mock=False):
-        self.use_mock = use_mock
-        self.client = None
-        
-        # 初始化 Gemini 客户端
-        if GENAI_AVAILABLE and GOOGLE_API_KEY and not use_mock:
+    def __init__(self):
+        self.gemini_client = None
+        self.qwen_client = None
+
+        # 初始化 Gemini
+        if GEMINI_AVAILABLE and GOOGLE_API_KEY:
             try:
-                self.client = genai.Client(api_key=GOOGLE_API_KEY)
-                print("✅ Gemini 客户端初始化成功 (google.genai)")
+                genai.configure(api_key=GOOGLE_API_KEY)
+                self.gemini_client = genai.GenerativeModel('gemini-pro-vision')
+                print("✅ Gemini 客户端初始化成功")
             except Exception as e:
                 print(f"⚠️ Gemini 客户端初始化失败: {e}")
-                self.use_mock = True
         else:
-            if not GENAI_AVAILABLE:
-                print("⚠️ google.genai 不可用")
+            if not GEMINI_AVAILABLE:
+                pass # 消息已在顶部打印
             elif not GOOGLE_API_KEY:
-                print("⚠️ GOOGLE_API_KEY 未设置")
-            self.use_mock = True
+                print("⚠️ GOOGLE_API_KEY 未设置，Gemini 不可用")
 
-    def call_gemini_api(self, image_paths, signal_type=None):
-        """调用 Google Gemini API 进行视觉分析 (使用新版 SDK)"""
-        if self.use_mock or not self.client:
-            return None
-        
-        try:
-            # 加载图片
-            images = []
-            for img_path in image_paths:
-                if os.path.exists(img_path):
-                    img = Image.open(img_path)
-                    images.append(img)
-                    print(f"   📷 加载图片: {os.path.basename(img_path)}")
-                else:
-                    print(f"⚠️ 图片不存在: {img_path}")
-                    return None
-            
-            if len(images) < 2:
-                print("⚠️ 需要至少2张图片（30M和5M）")
-                return None
-            
-            print("   🤖 调用 Gemini-2.5-pro 分析中...")
-            
-            # 构建内容，包含已知的信号类型信息
-            prompt_with_signal = MASTER_PROMPT
-            if signal_type:
-                prompt_with_signal = f"已知信号类型: {signal_type}\n\n{MASTER_PROMPT}"
-            
-            # 构建内容
-            contents = [prompt_with_signal, images[0], images[1]]
-            
-            # 发送请求 (新版 SDK 语法)
-            response = self.client.models.generate_content(
-                model="gemini-2.5-pro",
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    temperature=0.1,
-                    max_output_tokens=2048,
-                    response_mime_type="application/json"
-                )
-            )
-            
-            # 解析 JSON 响应
-            import re
-            response_text = response.text.strip()
-            
-            # 移除 Markdown 代码块标记（如果存在）
-            if response_text.startswith('```json'):
-                response_text = response_text[7:]
-            elif response_text.startswith('```'):
-                response_text = response_text[3:]
-            if response_text.endswith('```'):
-                response_text = response_text[:-3]
-            response_text = response_text.strip()
-            
-            # 尝试提取 JSON 部分
-            json_match = re.search(r'\{[\s\S]*\}', response_text)
-            if json_match:
-                response_text = json_match.group(0)
-            
-            result = json.loads(response_text)
-            
-            # 打印详细结果
-            print(f"   📊 Gemini 原始返回:")
-            print(f"      - evaluated_signal: {result.get('evaluated_signal')}")
-            print(f"      - direction: {result.get('direction')}")
-            print(f"      - 30f_trend_status: {result.get('30f_trend_status')}")
-            print(f"      - 5f_macd_status: {result.get('5f_macd_status')}")
-            print(f"      - score: {result.get('score')}")
-            print(f"      - reasoning: {result.get('reasoning', '')[:60]}...")
-            print(f"      - key_risk: {result.get('key_risk')}")
-            
-            # 转换分数为 0-100 制
-            original_score = result.get('score', 50)
-            result['original_score'] = original_score
-            
-            # 根据 direction 确定 action
-            direction = result.get('direction', '').upper()
-            if direction == 'BUY' and original_score >= 70:
-                result['action'] = 'BUY'
-            elif direction == 'SELL' and original_score <= 30:
-                result['action'] = 'SELL'
+        # 初始化 Qwen
+        if QWEN_AVAILABLE and DASHSCOPE_API_KEY:
+            try:
+                dashscope.api_key = DASHSCOPE_API_KEY
+                # Qwen 的初始化是即时调用，所以这里只设置 api_key
+                self.qwen_client = True # 标记为可用
+                print("✅ Qwen (DashScope) API Key 设置成功")
+            except Exception as e:
+                print(f"⚠️ Qwen (DashScope) 初始化失败: {e}")
+                self.qwen_client = False
+        else:
+            if not QWEN_AVAILABLE:
+                pass # 消息已在顶部打印
+            elif not DASHSCOPE_API_KEY:
+                print("⚠️ DASHSCOPE_API_KEY 未设置，Qwen 不可用")
+    
+    def _prepare_images(self, image_paths):
+        """加载并验证图片路径"""
+        images = []
+        for img_path in image_paths:
+            if os.path.exists(img_path):
+                images.append(img_path)
+                print(f"   📷 加载图片: {os.path.basename(img_path)}")
             else:
-                result['action'] = 'WAIT'
+                print(f"⚠️ 图片不存在: {img_path}")
+                return None
+        
+        if len(images) < 2:
+            print("⚠️ 需要至少2张图片（30M和5M）")
+            return None
+        return images
+
+    def _parse_llm_response(self, response_text):
+        """从LLM返回的文本中提取并解析JSON"""
+        response_text = response_text.strip()
+        
+        # 移除Markdown代码块标记
+        json_match = re.search(r'\{[\s\S]*\}', response_text)
+        if json_match:
+            response_text = json_match.group(0)
+        else:
+            # 如果没有花括号，可能整个字符串就是json，或者格式错误
+            print("⚠️ 在响应中未找到有效的JSON结构")
+            return None
             
-            result['signal_quality'] = '高' if original_score >= 80 else ('中' if original_score >= 50 else '低')
-            result['analysis'] = result.get('reasoning', '')[:100]
-            
-            print(f"   ✅ Gemini 评分: {original_score}/100 | {result['action']} | {result['evaluated_signal']}")
-            return result
-            
+        try:
+            return json.loads(response_text)
         except json.JSONDecodeError as e:
             print(f"⚠️ JSON 解析失败: {e}")
-            return None
-        except Exception as e:
-            print(f"⚠️ API 调用异常: {e}")
+            print(f"   原始响应: {response_text}")
             return None
 
+    def _post_process_result(self, result, model_name):
+        """对解析后的JSON结果进行标准化处理"""
+        print(f"   📊 {model_name} 原始返回:")
+        print(f"      - score: {result.get('score')}")
+        print(f"      - direction: {result.get('direction')}")
+        print(f"      - reasoning: {result.get('reasoning', '')[:60]}...")
+
+        score = result.get('score', 50)
+        direction = result.get('direction', '').upper()
+        
+        if direction == 'BUY':
+            result['action'] = 'BUY'
+        elif direction == 'SELL':
+            result['action'] = 'SELL'
+        else:
+            result['action'] = 'WAIT'
+            
+        result['analysis'] = f"({model_name}) {result.get('reasoning', '')}"
+        result['score'] = int(score) # 确保是整数
+        
+        print(f"   ✅ {model_name} 评分: {result['score']}/100 | {result['action']}")
+        return result
+
+    def call_gemini_api(self, image_paths, signal_type):
+        """调用 Gemini API"""
+        print("   🤖 调用 Gemini-1.0-Pro-Vision...")
+        
+        images = [Image.open(p) for p in image_paths]
+        prompt = f"已知信号类型: {signal_type}\n\n{MASTER_PROMPT}" if signal_type else MASTER_PROMPT
+        contents = [prompt] + images
+
+        generation_config = GenerationConfig(
+            temperature=0.1,
+            max_output_tokens=2048,
+            response_mime_type="application/json",
+        )
+        
+        response = self.gemini_client.generate_content(contents, generation_config=generation_config)
+        result = self._parse_llm_response(response.text)
+        
+        if result:
+            return self._post_process_result(result, "Gemini")
+        return None
+
+    def call_qwen_api(self, image_paths, signal_type):
+        """调用 Qwen API"""
+        print("   🤖 调用 Qwen-VL-Plus (备用)...")
+        
+        prompt = f"已知信号类型: {signal_type}\n\n{MASTER_PROMPT}" if signal_type else MASTER_PROMPT
+        
+        messages = [{'role': 'user', 'content': []}]
+        messages[0]['content'].append({'text': prompt})
+        for path in image_paths:
+            messages[0]['content'].append({'image': f'file://{os.path.abspath(path)}'})
+
+        response = MultiModalConversation.call(
+            model='qwen-vl-plus',
+            messages=messages,
+            temperature=0.1,
+        )
+
+        if response and response.status_code == 200:
+            content = response.output.choices[0].message.content
+            result = self._parse_llm_response(content)
+            if result:
+                return self._post_process_result(result, "Qwen")
+        else:
+            print(f"⚠️ Qwen API 调用失败: {response.code if response else 'No response'} - {response.message if response else 'N/A'}")
+        return None
+
     def evaluate(self, image_paths, signal_type=None):
-        """调用大模型进行视觉评分，如果使用模拟模式，则基于趋势清晰度和中枢复杂度进行评估"""
+        """
+        按顺序调用大模型进行视觉评分，具备回退机制
+        顺序: Gemini -> Qwen
+        """
         print(f"👁️ [VisualJudge] 正在视觉分析：{[os.path.basename(p) for p in image_paths]}")
         if signal_type:
             print(f"   📌 已知信号类型: {signal_type}")
-        
-        # 尝试调用真实 API
-        if not self.use_mock:
-            result = self.call_gemini_api(image_paths, signal_type)
-            if result:
-                return result
-            else:
-                print("⚠️ API 调用失败，降级到 Mock 模式")
-                self.use_mock = True
-        
-        # Mock 模式
-        print("   🎲 使用 Mock 评分模式")
-        
-        trend_clarity = random.uniform(0, 1)
-        pivot_complexity = random.uniform(0, 1)
-        base_score = trend_clarity * 60 + (1 - pivot_complexity) * 40
-        volatility = random.uniform(-15, 15)
-        score = max(0, min(100, base_score + volatility))
-        
-        if score >= 75:
-            signal_quality = "高"
-            action = "BUY"
-        elif score >= 50:
-            signal_quality = "中"
-            action = "WAIT"
+            
+        images = self._prepare_images(image_paths)
+        if not images:
+            return self._return_error("图片加载失败")
+
+        # 1. 尝试 Gemini
+        if self.gemini_client:
+            try:
+                result = self.call_gemini_api(images, signal_type)
+                if result:
+                    return result
+            except Exception as e:
+                print(f"⚠️ Gemini API 调用异常: {e}")
         else:
-            signal_quality = "低"
-            action = "WAIT"
+            print("-> Gemini 不可用，跳过。")
+
+        # 2. 尝试 Qwen (如果 Gemini 失败)
+        if self.qwen_client:
+            try:
+                print("-> 降级至 Qwen 模型...")
+                result = self.call_qwen_api(images, signal_type)
+                if result:
+                    return result
+            except Exception as e:
+                print(f"⚠️ Qwen API 调用异常: {e}")
+        else:
+            print("-> Qwen 不可用，跳过。")
+            
+        # 3. 如果全部失败
+        print("❌ 所有视觉评分模型均调用失败。")
+        return self._return_error("所有模型均调用失败")
         
-        result = {
-            "evaluated_signal": signal_type or "mock",
-            "direction": "BUY" if score >= 60 else "SELL",
-            "30f_trend_status": "Bullish" if trend_clarity > 0.5 else "Bearish",
-            "5f_macd_status": "Standard",
-            "score": int(score),
-            "original_score": int(score),
-            "reasoning": f"Mock评分: 趋势清晰度({trend_clarity:.2f}), 中枢复杂度({pivot_complexity:.2f})",
-            "key_risk": "Mock模式 - 无真实风险分析",
-            "signal_quality": signal_quality,
-            "analysis": f"趋势清晰度({trend_clarity:.2f})与中枢复杂度({pivot_complexity:.2f})综合评估",
-            "action": action
+    def _return_error(self, reason):
+        """返回一个表示错误的标准化字典"""
+        return {
+            "evaluated_signal": "ERROR",
+            "direction": "WAIT",
+            "score": 0,
+            "reasoning": f"评分失败: {reason}",
+            "key_risk": "模型调用失败，无法进行风险评估",
+            "analysis": f"评分失败: {reason}",
+            "action": "WAIT"
         }
-        
-        print(f"   ✅ Mock 评分: {result['score']}/100 | {result['action']}")
-        return result

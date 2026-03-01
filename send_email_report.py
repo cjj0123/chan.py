@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 发送股票扫描报告邮件（带图表图片）
+支持从配置文件或环境变量加载邮件设置
 """
 
 import smtplib
@@ -11,6 +12,14 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.image import MIMEImage
 from datetime import datetime
+from pathlib import Path
+from dotenv import load_dotenv
+
+# 尝试从配置文件加载环境变量
+env_file = Path(__file__).parent / "email_config.env"
+if env_file.exists():
+    load_dotenv(env_file)
+    print(f"✅ 已从 {env_file} 加载邮件配置")
 
 
 def send_stock_report(signals, chart_paths, subject=None):
@@ -58,22 +67,35 @@ def send_stock_report(signals, chart_paths, subject=None):
                     img.add_header('Content-Disposition', 'inline', filename=os.path.basename(chart_path))
                     msg.attach(img)
         
-        # 发送邮件
-        with smtplib.SMTP(smtp_server, smtp_port) as server:
-            server.starttls()
-            server.login(sender_email, sender_password)
-            server.sendmail(sender_email, [recipient_email], msg.as_string())
+        # 发送邮件 - 尝试 TLS 连接
+        try:
+            # 尝试 TLS (端口 587)
+            with smtplib.SMTP(smtp_server, smtp_port) as server:
+                server.set_debuglevel(1)  # 开启详细调试日志
+                server.starttls()
+                server.login(sender_email, sender_password)
+                server.sendmail(sender_email, [recipient_email], msg.as_string())
+        except smtplib.SMTPAuthenticationError:
+            # TLS 失败，尝试 SSL (端口 465)
+            import ssl
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(smtp_server, 465, context=context) as server:
+                server.set_debuglevel(1)  # 开启详细调试日志
+                server.login(sender_email, sender_password)
+                server.sendmail(sender_email, [recipient_email], msg.as_string())
         
         print(f"✅ 邮件已发送：{recipient_email}")
         return True
         
     except Exception as e:
         print(f"❌ 邮件发送失败：{e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 
 def build_html_content(signals):
-    """构建 HTML 邮件内容"""
+    """构建 HTML 邮件内容（支持移动端和图片显示）"""
     now = datetime.now()
     
     buy_signals = [s for s in signals if s.get('is_buy')]
@@ -83,33 +105,69 @@ def build_html_content(signals):
     <html>
     <head>
         <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
-            body {{ font-family: Arial, sans-serif; line-height: 1.6; }}
-            .header {{ background: #2c3e50; color: white; padding: 20px; text-align: center; }}
-            .summary {{ background: #ecf0f1; padding: 15px; margin: 20px 0; border-radius: 5px; }}
-            .signal {{ border: 1px solid #ddd; margin: 15px 0; padding: 15px; border-radius: 5px; }}
+            /* 基础样式 */
+            body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; line-height: 1.6; margin: 0; padding: 0; background-color: #f5f5f5; }}
+            .container {{ max-width: 600px; margin: 0 auto; background-color: #ffffff; }}
+            
+            /* 头部样式 */
+            .header {{ background: linear-gradient(135deg, #2c3e50, #3498db); color: white; padding: 25px 20px; text-align: center; }}
+            .header h1 {{ margin: 0 0 10px 0; font-size: 24px; }}
+            .header p {{ margin: 0; opacity: 0.9; font-size: 14px; }}
+            
+            /* 摘要卡片 */
+            .summary {{ background: #ecf0f1; padding: 20px; margin: 20px; border-radius: 10px; }}
+            .summary h2 {{ margin: 0 0 15px 0; font-size: 18px; color: #2c3e50; }}
+            .summary p {{ margin: 8px 0; font-size: 14px; }}
+            
+            /* 信号卡片 */
+            .signal {{ background: #fff; border: 1px solid #e0e0e0; margin: 15px; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }}
             .buy {{ border-left: 5px solid #27ae60; }}
             .sell {{ border-left: 5px solid #e74c3c; }}
-            .score {{ font-size: 24px; font-weight: bold; }}
+            .signal h3 {{ margin: 0 0 15px 0; font-size: 18px; color: #2c3e50; }}
+            .signal p {{ margin: 8px 0; font-size: 14px; color: #555; }}
+            
+            /* 评分样式 */
+            .score {{ font-size: 20px; font-weight: bold; margin: 10px 0 !important; }}
             .score-high {{ color: #27ae60; }}
             .score-medium {{ color: #f39c12; }}
             .score-low {{ color: #e74c3c; }}
-            .chart {{ text-align: center; margin: 10px 0; }}
-            .chart img {{ max-width: 100%; height: auto; border: 1px solid #ddd; }}
+            
+            /* 图表样式 */
+            .chart {{ text-align: center; margin: 15px 0; padding: 15px; background: #f9f9f9; border-radius: 8px; }}
+            .chart h4 {{ margin: 0 0 10px 0; font-size: 16px; color: #2c3e50; }}
+            .chart img {{ max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 5px; margin: 10px 0; }}
+            .chart p {{ font-size: 12px; color: #888; margin: 5px 0; }}
+            
+            /* 分析内容 */
+            .analysis {{ background: #f8f9fa; padding: 12px; border-radius: 6px; margin-top: 10px; font-size: 13px; color: #444; line-height: 1.7; }}
+            
+            /* 移动端适配 */
+            @media only screen and (max-width: 600px) {{
+                .container {{ width: 100% !important; }}
+                .header {{ padding: 20px 15px !important; }}
+                .header h1 {{ font-size: 20px !important; }}
+                .summary {{ margin: 10px !important; padding: 15px !important; }}
+                .signal {{ margin: 10px !important; padding: 15px !important; }}
+                .signal h3 {{ font-size: 16px !important; }}
+                .score {{ font-size: 18px !important; }}
+            }}
         </style>
     </head>
     <body>
-        <div class="header">
-            <h1>🎯 A 股缠论视觉交易信号</h1>
-            <p>扫描时间：{now.strftime('%Y-%m-%d %H:%M:%S')}</p>
-        </div>
-        
-        <div class="summary">
-            <h2>📊 扫描摘要</h2>
-            <p><strong>总信号数：</strong> {len(signals)} 个</p>
-            <p><strong>买入信号：</strong> {len(buy_signals)} 个</p>
-            <p><strong>卖出信号：</strong> {len(sell_signals)} 个</p>
-        </div>
+        <div class="container">
+            <div class="header">
+                <h1>🎯 A 股缠论视觉交易信号</h1>
+                <p>扫描时间：{now.strftime('%Y-%m-%d %H:%M:%S')}</p>
+            </div>
+            
+            <div class="summary">
+                <h2>📊 扫描摘要</h2>
+                <p><strong>总信号数：</strong> {len(signals)} 个</p>
+                <p><strong>买入信号：</strong> {len(buy_signals)} 个</p>
+                <p><strong>卖出信号：</strong> {len(sell_signals)} 个</p>
+            </div>
     """
     
     # 买入信号
@@ -125,6 +183,7 @@ def build_html_content(signals):
             html += build_signal_html(signal, 'sell')
     
     html += """
+        </div>
     </body>
     </html>
     """
@@ -133,7 +192,7 @@ def build_html_content(signals):
 
 
 def build_signal_html(signal, signal_type):
-    """构建单个信号的 HTML"""
+    """构建单个信号的 HTML（支持图片显示）"""
     code = signal.get('code', 'N/A')
     stock_name = signal.get('stock_name', '')
     bsp_type = signal.get('bsp_type', '未知')
@@ -157,18 +216,17 @@ def build_signal_html(signal, signal_type):
         <p><strong>信号类型：</strong> {bsp_type}</p>
         <p><strong>当前价格：</strong> {price:.2f}</p>
         <p class="score {score_class}">视觉评分：{score}/100</p>
-        <p><strong>分析：</strong> {analysis}</p>
+        <div class="analysis"><strong>分析：</strong> {analysis}</div>
     """
     
-    # 添加图表
+    # 添加图表（修复图片显示问题）
     if chart_paths:
         html += "<div class='chart'><h4>📊 图表分析</h4>"
         for chart_path in chart_paths:
             if os.path.exists(chart_path):
                 filename = os.path.basename(chart_path)
-                html += f'<p>{filename}</p>'
-                # 注意：实际发送时需要使用 CID 引用
-                # html += f'<img src="cid:{filename}" alt="{filename}">'
+                # 使用 CID 引用嵌入的图片
+                html += f'<img src="cid:{filename}" alt="{filename}" />'
         html += "</div>"
     
     html += "</div>"
@@ -177,23 +235,32 @@ def build_signal_html(signal, signal_type):
 
 
 if __name__ == "__main__":
-    # 测试邮件发送
-    print("测试邮件发送功能...")
+    # 测试邮件发送（带图片）
+    print("测试邮件发送功能（带图片）...")
+    
+    # 使用实际的图表文件
+    chart_30m = "/Users/jijunchen/Documents/Projects/Chanlun_Bot/charts_test/HK_00700_20260227_035540_30M.png"
+    chart_5m = "/Users/jijunchen/Documents/Projects/Chanlun_Bot/charts_test/HK_00700_20260227_035540_5M.png"
     
     # 示例数据
     test_signals = [
         {
-            'code': 'SH.600886',
-            'stock_name': '国电南瑞',
+            'code': 'HK.00700',
+            'stock_name': '腾讯控股',
             'is_buy': True,
             'bsp_type': 'b1',
-            'score': 82,
-            'current_price': 13.27,
+            'score': 85,
+            'current_price': 450.00,
             'visual_result': {
-                'analysis': '趋势清晰，买点明确'
+                'analysis': '30 分钟图显示清晰的底部背驰结构，5 分钟图提供区间套确认，买点质量高。'
             },
-            'chart_paths': []
+            'chart_paths': [chart_30m, chart_5m]
         }
     ]
     
-    send_stock_report(test_signals, [])
+    # 将所有图表路径收集到列表中
+    all_chart_paths = []
+    for signal in test_signals:
+        all_chart_paths.extend(signal.get('chart_paths', []))
+    
+    send_stock_report(test_signals, all_chart_paths)
