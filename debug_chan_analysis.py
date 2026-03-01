@@ -32,8 +32,12 @@ def run_chan_diagnostic():
         "seg_algo": "chan",
         "trigger_step": False,
         "bs_type": '1,1p,2,2s,3a,3b',
+        "divergence_rate": 0.8,
+        "max_bs2_rate": 1.2,
+        "bsp1_only_multibi_zs": False,
+        "bs1_peak": False,
     })
-    print("✅ 配置加载成功 (bi_strict: True)")
+    print("✅ 配置加载成功 (优化参数)")
 
     try:
         # 2. 初始化 CChan 核心分析器
