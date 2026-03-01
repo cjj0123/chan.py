@@ -36,6 +36,9 @@ from visual_judge import VisualJudge
 # 导入配置
 from config import TRADING_CONFIG, CHAN_CONFIG
 
+# 导入交易日检查函数
+from scheduler_config import is_trading_day
+
 # 配置日志
 logging.basicConfig(
     level=logging.INFO,
@@ -951,6 +954,13 @@ class FutuHKVisualTrading:
         批量扫描并执行交易
         逻辑：收集所有信号 → 批量生成图表 → 批量评分 → 执行交易
         """
+        # 检查是否为交易日
+        if not is_trading_day():
+            today = datetime.now().strftime('%Y-%m-%d')
+            weekday = datetime.now().strftime('%A')
+            logger.info(f"📭 今日是非交易日 ({today} {weekday})，跳过扫描")
+            return
+        
         logger.info("开始批量扫描交易...")
         
         # 获取自选股
