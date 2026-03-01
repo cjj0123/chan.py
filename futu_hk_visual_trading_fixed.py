@@ -32,6 +32,7 @@ import matplotlib.pyplot as plt
 
 from futu import *
 from visual_judge import VisualJudge
+from send_email_report import send_stock_report
 
 # 导入配置
 from config import TRADING_CONFIG, CHAN_CONFIG
@@ -86,97 +87,37 @@ class FutuHKVisualTrading:
         self.chan_config = CChanConfig(CHAN_CONFIG)
         
         # 视觉评分器
-        self.visual_judge = VisualJudge(use_mock=False)
-        
-        # 检查 memo CLI 是否可用（用于发送 Apple Notes 备忘录）
-        self.memo_available = shutil.which("memo") is not None
-        if not self.memo_available:
-            logger.warning("memo CLI 未安装，Apple Notes 通知功能不可用")
+        self.visual_judge = VisualJudge()
         
         logger.info(f"初始化完成 - 模拟盘: {dry_run}, 评分阈值: {min_visual_score}")
     
-    def send_scan_result_to_notes(self, scan_summary):
+    def send_email_notification(self, scan_summary):
         """
-        将扫描结果发送到 Apple Notes 备忘录（每次扫描都发送，有信号时嵌入图表）
+        发送扫描结果邮件
         """
         try:
-            now = datetime.now()
-            title = "📊 港股扫描报告 - " + now.strftime('%Y-%m-%d %H:%M')
-            
-            # 构建文本内容
-            text_lines = [
-                "📊 港股缠论视觉交易系统 - 扫描报告",
-                "═══════════════════════════════",
-                "",
-                "⏰ 扫描时间：" + scan_summary.get('scan_time', now.strftime('%Y-%m-%d %H:%M:%S')),
-                "🔍 扫描股票数：" + str(scan_summary.get('total_stocks', 0)),
-                ""
-            ]
-            
             all_signals = scan_summary.get('all_signals', [])
-            executed_buys = scan_summary.get('executed_buys', 0)
-            executed_sells = scan_summary.get('executed_sells', 0)
-            
-            if all_signals:
-                # 有信号的情况
-                text_lines.append(f"✅ 发现缠论信号：{len(all_signals)} 个")
-                text_lines.append(f"   - 执行买入：{executed_buys} 个")
-                text_lines.append(f"   - 执行卖出：{executed_sells} 个")
-                text_lines.append("")
-                
-                # 收集所有图表路径
-                all_chart_paths = []
-                for signal in all_signals:
-                    chart_paths = signal.get('chart_paths', [])
-                    if chart_paths:
-                        all_chart_paths.extend(chart_paths)
-                
-                if all_chart_paths:
-                    text_lines.append("📎 图表已附在下方")
-            else:
-                # 无信号的情况
-                text_lines.append("📭 本次扫描未发现任何缠论信号。")
-                text_lines.append("   程序运行正常，系统处于监控状态。")
-            
-            # 资金变动
-            initial = scan_summary.get('initial_funds', 0)
-            final = scan_summary.get('final_funds', 0)
-            text_lines.append("═══════════════════════════════")
-            text_lines.append("💰 资金：" + "{:,.0f}".format(initial) + " → " + "{:,.0f}".format(final) + " HKD")
-            
-            text_content = "\n".join(text_lines)
-            
-            # AppleScript: 创建备忘录
-            escaped_title = title.replace('"', '\\"')
-            escaped_text = text_content.replace('"', '\\"').replace("\n", "\\n")
-            
-            script1 = 'tell application "Notes"\n    make new note with properties {name:"' + escaped_title + '", body:"' + escaped_text + '"}\nend tell'
-            result = subprocess.run(["osascript", "-e", script1], capture_output=True, text=True, timeout=10)
-            
-            if result.returncode == 0:
-                logger.info("✅ 扫描报告已创建：" + title)
-                
-                # 插入图表图片（如果有）
-                all_chart_paths = []
-                for signal in all_signals:
-                    chart_paths = signal.get('chart_paths', [])
-                    if chart_paths:
-                        all_chart_paths.extend(chart_paths)
-                
-                if all_chart_paths:
-                    for chart_path in all_chart_paths:
-                        if os.path.exists(chart_path):
-                            abs_path = os.path.abspath(chart_path)
-                            script2 = 'tell application "Notes"\n    tell note "' + escaped_title + '"\n        make new attachment at end with data "' + abs_path + '"\n    end tell\nend tell'
-                            subprocess.run(["osascript", "-e", script2], capture_output=True, timeout=10)
-                    
-                    logger.info("📊 已插入 " + str(len(all_chart_paths)) + " 张图表")
-            else:
-                logger.error("❌ 创建扫描报告失败：" + result.stderr)
-            
+            if not all_signals:
+                logger.info("没有发现交易信号，不发送邮件。")
+                # Even if there are no signals, we might want to send a "still alive" email.
+                # For now, we only send emails when there are signals.
+                return
+
+            all_chart_paths = []
+            for signal in all_signals:
+                stock_info = self.get_stock_info(signal['code'])
+                signal['stock_name'] = stock_info.get('name', '')
+                chart_paths = signal.get('chart_paths', [])
+                if chart_paths:
+                    all_chart_paths.extend(chart_paths)
+
+            now = datetime.now()
+            subject = f"港股交易信号 - {now.strftime('%Y-%m-%d %H:%M')}"
+
+            send_stock_report(all_signals, all_chart_paths, subject=subject)
         except Exception as e:
-            logger.error("❌ 发送扫描报告异常：" + str(e))
-    
+            logger.error(f"发送邮件通知异常: {e}")
+
     def close_connections(self):
         """关闭富途连接"""
         if hasattr(self, 'quote_ctx'):
@@ -222,10 +163,11 @@ class FutuHKVisualTrading:
                 stock_info = data.iloc[0].to_dict()
                 return {
                     'current_price': stock_info['last_price'],
+                    'name': stock_info.get('stock_name', ''),
                     'market_val': stock_info.get('market_val', 0),
                     'turnover_rate': stock_info.get('turnover_rate', 0),
                     'volume': stock_info.get('volume', 0),
-                    'lot_size': int(stock_info.get('lot_size', 100))  # 每手股数
+                    'lot_size': int(stock_info.get('lot_size', 100))
                 }
             else:
                 logger.warning(f"无法获取 {code} 的市场快照")
@@ -954,6 +896,15 @@ class FutuHKVisualTrading:
         批量扫描并执行交易
         逻辑：收集所有信号 → 批量生成图表 → 批量评分 → 执行交易
         """
+        # ========== 诊断检查：磁盘空间 ==========
+        import shutil
+        total, used, free = shutil.disk_usage("/")
+        logger.info(f"[DIAGNOSTIC] 磁盘空间 - 总计：{total//1024//1024}MB, 已用：{used//1024//1024}MB, 可用：{free//1024//1024}MB")
+        if free < 500 * 1024 * 1024:  # 少于 500MB
+            logger.error(f"[DIAGNOSTIC] 磁盘空间不足！仅剩 {free//1024//1024}MB，建议清理后再运行")
+            raise Exception("磁盘空间不足，无法继续运行")
+        # ========================================
+        
         # 检查是否为交易日
         if not is_trading_day():
             today = datetime.now().strftime('%Y-%m-%d')
@@ -994,7 +945,7 @@ class FutuHKVisualTrading:
                     'final_funds': available_funds,
                     'scan_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 }
-                self.send_scan_result_to_notes(scan_summary)
+                self.send_email_notification(scan_summary)
             except Exception as e:
                 logger.error(f"发送扫描结果到备忘录失败: {e}")
             return
@@ -1017,7 +968,7 @@ class FutuHKVisualTrading:
                     'final_funds': available_funds,
                     'scan_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 }
-                self.send_scan_result_to_notes(scan_summary)
+                self.send_email_notification(scan_summary)
             except Exception as e:
                 logger.error(f"发送扫描结果到备忘录失败: {e}")
             return
@@ -1043,7 +994,7 @@ class FutuHKVisualTrading:
                 'final_funds': final_funds,
                 'scan_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             }
-            self.send_scan_result_to_notes(scan_summary)
+            self.send_email_notification(scan_summary)
         except Exception as e:
             logger.error(f"发送扫描结果到备忘录失败: {e}")
 
@@ -1077,13 +1028,7 @@ def main():
     try:
         # 初始化交易系统
         trader = FutuHKVisualTrading()
-        
-        # 持续运行
-        while True:
-            trader.scan_and_trade()
-            logger.info("等待下一轮扫描...")
-            time.sleep(60 * 10)  # 每10分钟扫描一次
-            
+        trader.scan_and_trade()
     except KeyboardInterrupt:
         logger.info("收到中断信号，正在退出...")
     except Exception as e:
