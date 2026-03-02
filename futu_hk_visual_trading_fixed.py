@@ -13,7 +13,6 @@ import subprocess
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import asyncio
-from kline_cache import kline_cache
 from parallel_kline_fetcher import ParallelKLineFetcher
 import aiohttp
 
@@ -395,10 +394,6 @@ class FutuHKVisualTrading:
             finally:
                 loop.close()
             
-            # 缓存30M数据
-            if chan_30m is not None:
-                kline_cache.save_data_to_cache(code, KL_TYPE.K_30M, start_time_str, end_time_str, chan_30m)
-            
             # 检查30M数据是否足够
             if chan_30m is None:
                 logger.warning(f"{code} 30分钟K线数据获取失败，跳过分析")
@@ -410,10 +405,6 @@ class FutuHKVisualTrading:
             if kline_30m_count < 10:  # 如果30M数据少于10根K线，则认为数据不足
                 logger.warning(f"{code} 30分钟K线数据不足({kline_30m_count}根)，跳过分析")
                 return None
-            
-            # 缓存5M数据
-            if chan_5m is not None:
-                kline_cache.save_data_to_cache(code, KL_TYPE.K_5M, start_time_str, end_time_str, chan_5m)
             
             # 检查5M数据是否足够
             if chan_5m is not None:
