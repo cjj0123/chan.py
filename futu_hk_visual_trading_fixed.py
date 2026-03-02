@@ -13,6 +13,8 @@ import subprocess
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import asyncio
+from kline_cache import kline_cache
+from parallel_kline_fetcher import ParallelKLineFetcher
 import aiohttp
 
 from datetime import datetime, timedelta
@@ -93,6 +95,9 @@ class FutuHKVisualTrading:
         
         # 缠论配置 - 启用MACD计算（严格模式 + 线段）
         self.chan_config = CChanConfig(CHAN_CONFIG)
+        
+        # 初始化并行K线获取器
+        self.kline_fetcher = ParallelKLineFetcher(self.chan_config, max_workers=2)
         
         # 视觉评分器
         self.visual_judge = VisualJudge()
@@ -375,18 +380,30 @@ class FutuHKVisualTrading:
             # 获取30分钟和5分钟K线数据（分别获取）
             end_time = datetime.now()
             start_time = end_time - timedelta(days=30)  # 30天数据用于30M分析
+            start_time_str = start_time.strftime("%Y-%m-%d")
+            end_time_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
             
-            # 先获取30M数据
-            chan_30m = CChan(
-                code=code,
-                begin_time=start_time.strftime("%Y-%m-%d"),
-                end_time=end_time.strftime("%Y-%m-%d %H:%M:%S"),
-                data_src=DATA_SRC.FUTU,
-                lv_list=[KL_TYPE.K_30M],
-                config=self.chan_config
-            )
+            # 使用并行获取器获取30M和5M数据
+            async def _fetch_data_async():
+                return await self.kline_fetcher.fetch_both_levels(code, start_time_str, end_time_str)
+            
+            # 运行异步函数
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                chan_30m, chan_5m = loop.run_until_complete(_fetch_data_async())
+            finally:
+                loop.close()
+            
+            # 缓存30M数据
+            if chan_30m is not None:
+                kline_cache.save_data_to_cache(code, KL_TYPE.K_30M, start_time_str, end_time_str, chan_30m)
             
             # 检查30M数据是否足够
+            if chan_30m is None:
+                logger.warning(f"{code} 30分钟K线数据获取失败，跳过分析")
+                return None
+                
             kline_30m_count = 0
             for _ in chan_30m[0].klu_iter():
                 kline_30m_count += 1
@@ -394,28 +411,18 @@ class FutuHKVisualTrading:
                 logger.warning(f"{code} 30分钟K线数据不足({kline_30m_count}根)，跳过分析")
                 return None
             
-            # 尝试获取5M数据（单独获取，不与30M组合）
-            chan_5m = None
-            kline_5m_count = 0
-            try:
-                chan_5m = CChan(
-                    code=code,
-                    begin_time=start_time.strftime("%Y-%m-%d"),
-                    end_time=end_time.strftime("%Y-%m-%d %H:%M:%S"),
-                    data_src=DATA_SRC.FUTU,
-                    lv_list=[KL_TYPE.K_5M],
-                    config=self.chan_config
-                )
-                
-                # 检查5M数据是否足够
+            # 缓存5M数据
+            if chan_5m is not None:
+                kline_cache.save_data_to_cache(code, KL_TYPE.K_5M, start_time_str, end_time_str, chan_5m)
+            
+            # 检查5M数据是否足够
+            if chan_5m is not None:
+                kline_5m_count = 0
                 for _ in chan_5m[0].klu_iter():
                     kline_5m_count += 1
                 if kline_5m_count < 20:  # 如果5M数据少于20根K线，则认为数据不足
                     logger.warning(f"{code} 5分钟K线数据不足({kline_5m_count}根)，仅使用30M数据进行分析")
                     chan_5m = None
-            except Exception as e5:
-                logger.warning(f"{code} 5分钟数据获取失败: {e5}，仅使用30M数据进行分析")
-                chan_5m = None
             
             # 从30M级别获取最新的买卖点（主分析基于30M）
             latest_bsps = chan_30m.get_latest_bsp(idx=0, number=1)
