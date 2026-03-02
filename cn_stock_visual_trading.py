@@ -115,11 +115,16 @@ class CNStockVisualTrading:
         try:
             all_signals = scan_summary.get('all_signals', [])
             if not all_signals:
-                logger.info("没有发现交易信号，不发送邮件。")
+                logger.info("没有发现交易信号 (评分 >= 阈值)，不发送邮件。")
                 return
 
+            logger.info(f"正在为 {len(all_signals)} 个信号准备邮件报告...")
             all_chart_paths = []
             for signal in all_signals:
+                # 确保 signal 字典中有 is_buy 键，供 send_email_report.py 使用
+                if 'is_buy' not in signal and 'is_buy_signal' in signal:
+                    signal['is_buy'] = signal['is_buy_signal']
+                
                 stock_info = self.get_stock_info(signal['code'])
                 signal['stock_name'] = stock_info.get('stock_name', '')
                 chart_paths = signal.get('chart_paths', [])
@@ -129,7 +134,12 @@ class CNStockVisualTrading:
             now = datetime.now()
             subject = f"A 股交易信号 - {now.strftime('%Y-%m-%d %H:%M')}"
 
-            send_stock_report(all_signals, all_chart_paths, subject=subject)
+            logger.info(f"发送邮件: {subject}, 包含 {len(all_signals)} 个信号")
+            success = send_stock_report(all_signals, all_chart_paths, subject=subject)
+            if success:
+                logger.info("邮件发送成功")
+            else:
+                logger.error("邮件发送失败")
         except Exception as e:
             logger.error(f"发送邮件通知异常: {e}")
     
@@ -204,6 +214,7 @@ class CNStockVisualTrading:
             return {
                 'code': code,
                 'bsp_type': bsp.type2str(),
+                'is_buy': bsp.is_buy,
                 'is_buy_signal': bsp.is_buy,
                 'chan_multi_level': chan_multi_level
             }
@@ -232,14 +243,16 @@ class CNStockVisualTrading:
             # Morning session
             if calc_start < morning_end:
                 segment_end = min(end_time, morning_end)
-                total_hours += (segment_end - calc_start).total_seconds() / 3600
+                if segment_end > calc_start:
+                    total_hours += (segment_end - calc_start).total_seconds() / 3600
             
             # Afternoon session
             if end_time > afternoon_start:
                  calc_start = max(current, afternoon_start)
                  if calc_start < afternoon_end:
                     segment_end = min(end_time, afternoon_end)
-                    total_hours += (segment_end - calc_start).total_seconds() / 3600
+                    if segment_end > calc_start:
+                        total_hours += (segment_end - calc_start).total_seconds() / 3600
 
             if end_time.date() > current.date():
                 current = (current + timedelta(days=1)).replace(hour=0, minute=0)
@@ -360,8 +373,8 @@ class CNStockVisualTrading:
         scored_signals = asyncio.run(self._batch_score_signals_async(signals_with_charts))
         
         # 按买卖和评分排序
-        buy_signals = sorted([s for s in scored_signals if s['is_buy_signal']], key=lambda x: x['score'], reverse=True)
-        sell_signals = sorted([s for s in scored_signals if not s['is_buy_signal']], key=lambda x: x['score'], reverse=True)
+        buy_signals = sorted([s for s in scored_signals if s.get('is_buy', s.get('is_buy_signal'))], key=lambda x: x['score'], reverse=True)
+        sell_signals = sorted([s for s in scored_signals if not s.get('is_buy', s.get('is_buy_signal'))], key=lambda x: x['score'], reverse=True)
         
         logger.info(f"评分完成. 买入信号: {len(buy_signals)}个, 卖出信号: {len(sell_signals)}个")
         return sell_signals + buy_signals # 卖点优先
