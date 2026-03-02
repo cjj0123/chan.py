@@ -30,8 +30,6 @@ from Plot.PlotDriver import CPlotDriver
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import threading
-from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 from futu import *
 from visual_judge import VisualJudge
@@ -100,9 +98,6 @@ class FutuHKVisualTrading:
         # 信号执行历史记录文件
         self.executed_signals_file = "executed_signals.json"
         self.executed_signals = self._load_executed_signals()
-        
-        # 图表生成锁，用于解决多线程环境下的matplotlib渲染冲突
-        self.chart_generation_lock = threading.Lock()
         
         logger.info(f"初始化完成 - 模拟盘: {dry_run}, 评分阈值: {min_visual_score}")
     
@@ -390,7 +385,7 @@ class FutuHKVisualTrading:
                 
                 # 检查30M数据是否足够
                 kline_30m_count = 0
-                for _ in chan_30m[0].klu_iter():
+                for _ in chan_30m.get_sub_level(KL_TYPE.K_30M).kl_list():
                     kline_30m_count += 1
                 if kline_30m_count < 10:  # 如果30M数据少于10根K线，则认为数据不足
                     logger.warning(f"{code} 30分钟K线数据不足({kline_30m_count}根)，跳过分析")
@@ -410,7 +405,7 @@ class FutuHKVisualTrading:
                     
                     # 检查5M数据是否足够
                     kline_5m_count = 0
-                    for _ in chan_5m[0].klu_iter():
+                    for _ in chan_5m.get_sub_level(KL_TYPE.K_5M).kl_list():
                         kline_5m_count += 1
                     if kline_5m_count < 20:  # 如果5M数据少于20根K线，则认为数据不足
                         logger.warning(f"{code} 5分钟K线数据不足({kline_5m_count}根)，仅使用30M数据进行分析")
@@ -505,155 +500,68 @@ class FutuHKVisualTrading:
         safe_code = code.replace('.', '_').replace('-', '_')
         original_lv_list = chan_multi_level.lv_list
         
-        # 使用线程锁确保matplotlib操作的线程安全性
-        with self.chart_generation_lock:
+        try:
+            # 确保包含30M和5M级别
+            required_levels = ['K_30M', 'K_5M']
+            levels_to_plot = []
+            
+            # 检查哪些级别可用
+            for req_level in required_levels:
+                for lv in original_lv_list:
+                    if lv.name == req_level:
+                        levels_to_plot.append(lv)
+                        break
+            
+            # 如果没有找到所需级别，使用所有可用级别
+            if not levels_to_plot:
+                levels_to_plot = original_lv_list
+            
+            for lv in levels_to_plot:
+                # 暂时修改级别列表以生成单层图表
+                chan_multi_level.lv_list = [lv]
+                
+                # 生成技术图表（统一为 A 股格式）
+                plot_driver = CPlotDriver(
+                    chan_multi_level,
+                    plot_config={
+                        "plot_kline": True, "plot_bi": True, "plot_seg": True,
+                        "plot_zs": True, "plot_bsp": True, "plot_macd": True
+                    },
+                    plot_para={
+                        "figure": {"w": 16, "h": 12, "macd_h": 0.25, "grid": None},
+                        "bi": {"show_num": False},
+                        "seg": {"color": "#9932CC", "width": 5},  # 紫色线段
+                        "zs": {"linewidth": 2},
+                        "bsp": {"fontsize": 12, "buy_color": "#C71585", "sell_color": "#C71585"},  # 品红色买卖点
+                        "macd": {"width": 0.6}
+                    }
+                )
+                
+                # 绘制图表
+                plot_driver.plot(to_html=False)
+                
+                chart_path = f"{self.charts_dir}/{safe_code}_{timestamp}_{lv.name.replace('K_','')}.png"
+                plt.savefig(chart_path, bbox_inches='tight', dpi=120, facecolor='white')
+                plt.close('all')
+                chart_paths.append(chart_path)
+                
+            # 恢复原始级别列表
+            chan_multi_level.lv_list = original_lv_list
+            return chart_paths
+        except Exception as e:
+            logger.error(f"生成图表异常 {code}: {e}")
+            # 恢复原始级别列表
             try:
-                # 确保包含30M和5M级别
-                required_levels = ['K_30M', 'K_5M']
-                levels_to_plot = []
-                
-                # 检查哪些级别可用
-                for req_level in required_levels:
-                    found = False
-                    for lv in original_lv_list:
-                        if lv.name == req_level:
-                            levels_to_plot.append(lv)
-                            found = True
-                            break
-                    if not found:
-                        # 如果指定级别不可用，尝试从原始数据获取
-                        logger.warning(f"{code} 缺少 {req_level} 级别数据，尝试补充...")
-                        
-                        # 从原始数据源获取缺失的级别数据
-                        if req_level == 'K_5M':
-                            try:
-                                # 获取当前时间范围
-                                start_time = None
-                                end_time = datetime.now()
-                                
-                                # 从现有数据中推断开始时间
-                                for lv_existing in original_lv_list:
-                                    if lv_existing.name == 'K_30M':
-                                        kl_list = list(lv_existing.kl_list())
-                                        if kl_list:
-                                            start_time = kl_list[0].time
-                                        break
-                                
-                                if start_time is None:
-                                    # 如果无法从现有数据推断，使用默认的 30 天前
-                                    start_time = end_time - timedelta(days=30)
-                                
-                                # 获取 5 分钟数据
-                                missing_data = CChan(
-                                    code=code,
-                                    begin_time=start_time.strftime("%Y-%m-%d"),
-                                    end_time=end_time.strftime("%Y-%m-%d %H:%M:%S"),
-                                    data_src=DATA_SRC.FUTU,
-                                    lv_list=[KL_TYPE.K_5M],
-                                    config=self.chan_config
-                                )
-                                
-                                # 检查获取到的数据是否有效
-                                kline_5m_count = 0
-                                for _ in missing_data[0].klu_iter():
-                                    kline_5m_count += 1
-                                
-                                if kline_5m_count >= 20:  # 如果 5M 数据足够
-                                    # 将新获取的级别添加到 levels_to_plot
-                                    for lv_new in missing_data.lv_list:
-                                        if lv_new.name == req_level:
-                                            levels_to_plot.append(lv_new)
-                                            logger.info(f"{code} 成功补充 {req_level} 数据 ({kline_5m_count} 根K线)")
-                                            break
-                                else:
-                                    logger.warning(f"{code} 补充 {req_level} 数据不足 ({kline_5m_count}根)，跳过该级别")
-                                    
-                            except Exception as e:
-                                logger.error(f"{code} 补充 {req_level} 数据失败：{e}")
-                        elif req_level == 'K_30M':
-                            try:
-                                # 获取当前时间范围
-                                start_time = datetime.now() - timedelta(days=30)
-                                end_time = datetime.now()
-                                
-                                # 获取 30 分钟数据
-                                missing_data = CChan(
-                                    code=code,
-                                    begin_time=start_time.strftime("%Y-%m-%d"),
-                                    end_time=end_time.strftime("%Y-%m-%d %H:%M:%S"),
-                                    data_src=DATA_SRC.FUTU,
-                                    lv_list=[KL_TYPE.K_30M],
-                                    config=self.chan_config
-                                )
-                                
-                                # 检查获取到的数据是否有效
-                                kline_30m_count = 0
-                                for _ in missing_data[0].klu_iter():
-                                    kline_30m_count += 1
-                                
-                                if kline_30m_count >= 10:  # 如果 30M 数据足够
-                                    # 将新获取的级别添加到 levels_to_plot
-                                    for lv_new in missing_data.lv_list:
-                                        if lv_new.name == req_level:
-                                            levels_to_plot.append(lv_new)
-                                            logger.info(f"{code} 成功补充 {req_level} 数据 ({kline_30m_count} 根K线)")
-                                            break
-                                else:
-                                    logger.warning(f"{code} 补充 {req_level} 数据不足 ({kline_30m_count}根)，跳过该级别")
-                                    
-                            except Exception as e:
-                                logger.error(f"{code} 补充 {req_level} 数据失败：{e}")
-                
-                # 如果没有找到所需级别，使用所有可用级别
-                if not levels_to_plot:
-                    levels_to_plot = original_lv_list
-                
-                for lv in levels_to_plot:
-                    # 暂时修改级别列表以生成单层图表
-                    chan_multi_level.lv_list = [lv]
-                    
-                    # 生成技术图表（统一为 A 股格式）
-                    plot_driver = CPlotDriver(
-                        chan_multi_level,
-                        plot_config={
-                            "plot_kline": True, "plot_bi": True, "plot_seg": True,
-                            "plot_zs": True, "plot_bsp": True, "plot_macd": True
-                        },
-                        plot_para={
-                            "figure": {"w": 16, "h": 12, "macd_h": 0.25, "grid": None},
-                            "bi": {"show_num": False},
-                            "seg": {"color": "#9932CC", "width": 5},  # 紫色线段
-                            "zs": {"linewidth": 2},
-                            "bsp": {"fontsize": 12, "buy_color": "#C71585", "sell_color": "#C71585"},  # 品红色买卖点
-                            "macd": {"width": 0.6}
-                        }
-                    )
-                    
-                    # 绘制图表 - 直接使用matplotlib保存
-                    pass  # 图形已经在构造函数中创建，只需保存
-                    
-                    chart_path = f"{self.charts_dir}/{safe_code}_{timestamp}_{lv.name.replace('K_','')}.png"
-                    plt.savefig(chart_path, bbox_inches='tight', dpi=120, facecolor='white')
-                    plt.close('all')
-                    chart_paths.append(chart_path)
-                    
-                # 恢复原始级别列表
                 chan_multi_level.lv_list = original_lv_list
-                return chart_paths
-            except Exception as e:
-                logger.error(f"生成图表异常 {code}: {e}")
-                # 恢复原始级别列表
-                try:
-                    chan_multi_level.lv_list = original_lv_list
-                except:
-                    pass
-                return []
-            finally:
-                # 确保恢复原始级别列表
-                try:
-                    chan_multi_level.lv_list = original_lv_list
-                except:
-                    pass
+            except:
+                pass
+            return []
+        finally:
+            # 确保恢复原始级别列表
+            try:
+                chan_multi_level.lv_list = original_lv_list
+            except:
+                pass
     
     def execute_trade(self, code: str, action: str, quantity: int, price: float) -> bool:
         """
@@ -990,59 +898,33 @@ class FutuHKVisualTrading:
                 else:
                     logger.info(f"⏭️ 卖出信号 {code} 评分({score})低于阈值({self.min_visual_score})，仅通知不执行")
         
-        # 执行买点 - 将账户现金额度分成5份，每份买入单只股票的最大可买手数，当可用金额小于5万元则停止买入
+        # 执行买点
         if buy_signals:
             logger.info(f"\n>>> 开始执行买入操作（共{len(buy_signals)}个）")
-            
-            # 计算每份资金（总资金的20%，即分成5份）
-            portion_size = available_funds_at_start * 0.2
-            max_stocks_to_buy = 5  # 最多买入5只股票
-            stocks_bought = 0  # 已买入股票数量
-            
             for i, signal in enumerate(buy_signals, 1):
-                # 检查是否已达到最大买入股票数量
-                if stocks_bought >= max_stocks_to_buy:
-                    logger.info(f"✅ 已达到最大买入股票数量限制({max_stocks_to_buy}只)，停止买入")
-                    break
-                
                 code = signal['code']
                 score = signal['score']
                 price = signal['current_price']
                 bsp_type = signal['bsp_type']
-                lot_size = signal.get('lot_size', 100)  # 获取股票的最小手数
-                
-                # 检查可用资金是否小于5万元，如果是则停止买入
-                if available_funds < 50000:
-                    logger.info(f"💰 可用资金({available_funds:.2f})少于5万元，停止买入操作")
-                    break
                 
                 # 只有视觉评分 >= 阈值才执行交易
                 if score >= self.min_visual_score:
-                    # 使用每份资金（总资金的20%）来计算可买手数
-                    investment_amount = portion_size  # 每只股票分配的资金份额
+                    # 计算可买入数量
+                    buy_quantity = self.calculate_position_size(price, available_funds, signal.get('lot_size', 100))
                     
-                    # 按照该股票最小可买手数计算出可买手数
-                    lots_can_buy = int(investment_amount / (price * lot_size))
-                    if lots_can_buy < 1:
-                        logger.warning(f"[{i}/{len(buy_signals)}] {code} 资金不足，无法购买一手 (需要: {price * lot_size:.2f}, 可用份额: {investment_amount:.2f})")
+                    if buy_quantity <= 0:
+                        logger.warning(f"[{i}/{len(buy_signals)}] {code} 资金不足，跳过 (可用: {available_funds:.2f})")
                         continue
                     
-                    buy_quantity = lots_can_buy * lot_size
                     required_funds = price * buy_quantity
                     
-                    # 检查可用资金是否足够
-                    if required_funds > available_funds:
-                        logger.warning(f"[{i}/{len(buy_signals)}] {code} 资金不足，需要{required_funds:.2f}，可用{available_funds:.2f}，跳过")
-                        continue
-                    
                     logger.info(f"\n[{i}/{len(buy_signals)}] 买入 {code} - {bsp_type} - 评分: {score}")
-                    logger.info(f"   计划买入: {buy_quantity}股 ({lots_can_buy}手), 预计花费: {required_funds:.2f} (分配份额: {investment_amount:.2f})")
+                    logger.info(f"   计划买入: {buy_quantity}股, 预计花费: {required_funds:.2f}")
                     
                     if self.execute_trade(code, 'BUY', buy_quantity, price):
                         # 买入成功，扣除资金，更新信号历史记录
                         available_funds -= required_funds
                         executed_buy += 1
-                        stocks_bought += 1  # 增加已买入股票计数
                         
                         # 记录已执行信号，防止重复处理同一信号
                         bsp_time_str = signal.get('chan_result', {}).get('bsp_datetime_str', '')
@@ -1050,7 +932,7 @@ class FutuHKVisualTrading:
                             self.executed_signals[code] = bsp_time_str
                             self._save_executed_signals()
                             
-                        logger.info(f"✅ 买入成功 {code}, 剩余资金: {available_funds:.2f}, 已买入{stocks_bought}/{max_stocks_to_buy}只")
+                        logger.info(f"✅ 买入成功 {code}, 剩余资金: {available_funds:.2f}")
                     else:
                         logger.error(f"❌ 买入失败 {code}")
                 else:
@@ -1193,43 +1075,10 @@ class FutuHKVisualTrading:
 
 def main():
     """主函数"""
-    import argparse
-    import sys
-    
-    # 解析命令行参数
-    parser = argparse.ArgumentParser(description='港股缠论视觉交易系统')
-    parser.add_argument('--freq', type=str, default='30m', help='K线周期 (30m, 5m)')
-    parser.add_argument('--tag', type=str, default='core_scan', help='扫描标签 (core_scan, open_predict, close_predict, cas_predict, cas_execute, final_confirm)')
-    args = parser.parse_args()
-
     try:
-        # 根据标签决定是否启用真实交易
-        # 根据扫描标签确定是否启用真实交易模式
-        dry_run = True  # 默认为模拟模式
-        
-        # 只有特定标签才启用真实交易，其他都为模拟模式
-        if args.tag in ['cas_execute', 'final_confirm']:
-            dry_run = False  # 启用真实交易
-        else:
-            dry_run = True   # 模拟模式
-
         # 初始化交易系统
-        trader = FutuHKVisualTrading(dry_run=dry_run)
-        
-        # 根据标签执行不同的操作
-        if args.tag in ['core_scan_am', 'core_scan_pm', 'core_scan']:
-            # 核心扫描：执行完整扫描和交易逻辑
-            trader.scan_and_trade()
-        elif args.tag in ['open_predict', 'close_predict', 'cas_predict']:
-            # 预测扫描：可能只进行分析不执行交易
-            trader.scan_and_trade()
-        elif args.tag in ['cas_execute', 'final_confirm']:
-            # 执行扫描：执行交易
-            trader.scan_and_trade()
-        else:
-            # 默认行为
-            trader.scan_and_trade()
-            
+        trader = FutuHKVisualTrading()
+        trader.scan_and_trade()
     except KeyboardInterrupt:
         logger.info("收到中断信号，正在退出...")
     except Exception as e:
@@ -1242,5 +1091,4 @@ def main():
             pass
 
 if __name__ == "__main__":
-
     main()

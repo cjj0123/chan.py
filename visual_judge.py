@@ -6,11 +6,16 @@ import json
 import base64
 from PIL import Image
 import re
+from dotenv import load_dotenv
+
+# 加载环境变量
+load_dotenv()
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), 'email_config.env'))
 
 # 尝试导入 google.genai (Gemini)
 try:
-    import google_genai as genai
-    from google_genai.types import GenerationConfig
+    import google.generativeai as genai
+    from google.generativeai.types import GenerationConfig
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False
@@ -35,9 +40,9 @@ MASTER_PROMPT = """System / Role Definition
 You are a Master Quantitative Trader specializing in Chan Theory (缠论). You are evaluating a specific algorithmic signal that has already been identified by our system. You possess strict, objective visual reasoning capabilities regarding "Interval Recursion" (区间套) and "MACD Dynamics" (动力学).
 
 User Instruction Input Context:
-I have provided two K-line charts for the same stock at the same time:
-1. Image 1 (Left/Top): 30-Minute Level (30M) - PRIMARY SIGNAL SOURCE. This is where the algorithm has identified a specific buy/sell signal.
-2. Image 2 (Right/Bottom): 5-Minute Level (5M) - CONFIRMATION & REFERENCE. Use this to validate the 30M signal with finer granularity.
+I have provided K-line chart(s) for the same stock at the same time:
+1. Single Image Mode: 30-Minute Level (30M) - PRIMARY SIGNAL SOURCE. This is where the algorithm has identified a specific buy/sell signal.
+2. Dual Image Mode: Image 1: 30-Minute Level (30M) - PRIMARY SIGNAL SOURCE. Image 2: 5-Minute Level (5M) - CONFIRMATION & REFERENCE.
 
 Visual Legend (Crucial):
 * Black Lines: Bi (Strokes/笔) - Strictly calculated trend segments.
@@ -60,19 +65,19 @@ Signal Code Definitions (Lookup Table):
   * b3b / s3b: 3rd Buy/Sell Confirmed. Focus: Pullback does not touch Pivot High (Buy) / Rebound does not touch Pivot Low (Sell).
 
 CRITICAL INSTRUCTION:
-The algorithm has ALREADY identified a specific signal on the 30M chart. Your task is to EVALUATE the quality and reliability of this signal, not to detect it yourself.
+The algorithm has ALREADY identified a specific signal on the chart(s). Your task is to EVALUATE the quality and reliability of this signal, not to detect it yourself.
 
 Your Task:
 1. Confirm (on 30M Chart):
    - Verify the presence of the signal that the algorithm has identified
    - Assess the quality of the signal formation
    
-2. Validate (using 5M Chart):
+2. Validate (using 5M Chart if available):
    - Check if the 5M chart shows confirming structure (interval recursion) for the 30M signal.
    
 3. Evaluate: Rate the Quality/Confidence of this signal (0-100).
-   * High Score (80-100): Textbook 30M pattern + Strong 5M confirmation + MACD alignment.
-   * Medium Score (50-79): Clear 30M signal with moderate 5M confirmation.
+   * High Score (80-100): Textbook 30M pattern + Strong 5M confirmation (if available) + MACD alignment.
+   * Medium Score (50-79): Clear 30M signal with possible 5M confirmation (if available).
    * Low Score (0-49): Weak 30M structure, no 5M confirmation, or counter-trend risk.
 
 Analysis Logic (Step-by-Step):
@@ -82,9 +87,9 @@ Analysis Logic (Step-by-Step):
   * Evaluate the Seg (Purple Line) structure: Does the higher-level trend support the signal?
   * Check ZhongShu (Orange Rectangle) context: Is the signal at a key support/resistance level?
   * Examine MACD on 30M: Is there divergence? Is momentum favorable?
-
-* Step 2: 5M Confirmation Analysis (Interval Recursion)
-  * Locate the corresponding time period on the 5M chart.
+ 
+* Step 2: 5M Confirmation Analysis (Interval Recursion) - SKIP if 5M chart not provided
+  * Locate the corresponding time period on the 5M chart (if available).
   * Does the 5M show finer-grained confirmation of the 30M signal?
   * Evaluate both Bi and Seg structures on 5M: Do they align with 30M analysis?
   * For BUY signals: Does 5M show a completed bottom structure or bullish breakout?
@@ -93,7 +98,7 @@ Analysis Logic (Step-by-Step):
 
 * Step 3: Overall Signal Quality Assessment
   * Multi-level Alignment: Do Bi, Seg, and ZhongShu all support the same direction?
-  * Strength: Is the breakout/breakdown decisive across multiple levels?
+  * Strength: Is the breakout/breakdown decisive across multiple levels (considering available levels)?
   * Risk: Are there nearby pivot levels or conflicting Seg directions that could act as obstacles?
 
 Output Requirement: Return ONLY a valid JSON object. No other text.
@@ -155,9 +160,11 @@ class VisualJudge:
                 print(f"⚠️ 图片不存在: {img_path}")
                 return None
         
-        if len(images) < 2:
-            print("⚠️ 需要至少2张图片（30M和5M）")
+        if len(images) < 1:
+            print("⚠️ 需要至少1张图片")
             return None
+        elif len(images) < 2:
+            print("⚠️ 只有1张图片，将使用单图模式进行分析")
         return images
 
     def _parse_llm_response(self, response_text):
@@ -226,7 +233,7 @@ class VisualJudge:
 
     def call_qwen_api(self, image_paths, signal_type):
         """调用 Qwen API"""
-        print("   🤖 调用 Qwen-VL-Plus (备用)...")
+        print("   🤖 调用 Qwen3.5-Plus (备用)...")
         
         prompt = f"已知信号类型: {signal_type}\n\n{MASTER_PROMPT}" if signal_type else MASTER_PROMPT
         
@@ -235,19 +242,40 @@ class VisualJudge:
         for path in image_paths:
             messages[0]['content'].append({'image': f'file://{os.path.abspath(path)}'})
 
-        response = MultiModalConversation.call(
-            model='qwen-vl-plus',
-            messages=messages,
-            temperature=0.1,
-        )
-
-        if response and response.status_code == 200:
-            content = response.output.choices[0].message.content
-            result = self._parse_llm_response(content)
-            if result:
-                return self._post_process_result(result, "Qwen")
-        else:
-            print(f"⚠️ Qwen API 调用失败: {response.code if response else 'No response'} - {response.message if response else 'N/A'}")
+        try:
+            response = MultiModalConversation.call(
+                model='qwen3.5-plus',
+                messages=messages,
+                temperature=0.1,
+            )
+            
+            if response and response.status_code == 200:
+                content = response.output.choices[0].message.content
+                result = self._parse_llm_response(content)
+                if result:
+                    return self._post_process_result(result, "Qwen")
+            else:
+                error_msg = f"{response.code if response else 'No response'} - {response.message if response else 'N/A'}"
+                print(f"⚠️ Qwen API 调用失败: {error_msg}")
+                
+                # 如果是API密钥问题，禁用Qwen客户端
+                if "InvalidApiKey" in error_msg or "Invalid API-key" in error_msg:
+                    print("🔒 检测到API密钥无效，将禁用Qwen服务")
+                    self.qwen_client = False
+                
+                if hasattr(response, 'request_id'):
+                    print(f"   请求ID: {response.request_id}")
+        except Exception as e:
+            error_str = str(e)
+            print(f"⚠️ Qwen API 调用异常: {e}")
+            
+            # 如果是API密钥问题，禁用Qwen客户端
+            if "InvalidApiKey" in error_str or "Invalid API-key" in error_str:
+                print("🔒 检测到API密钥无效，将禁用Qwen服务")
+                self.qwen_client = False
+            
+            import traceback
+            print(f"详细错误信息: {traceback.format_exc()}")
         return None
 
     def evaluate(self, image_paths, signal_type=None):
@@ -268,9 +296,14 @@ class VisualJudge:
             try:
                 result = self.call_gemini_api(images, signal_type)
                 if result:
+                    print(f"-> Gemini 返回结果: {result}")
                     return result
+                else:
+                    print("-> Gemini 未返回有效结果")
             except Exception as e:
                 print(f"⚠️ Gemini API 调用异常: {e}")
+                import traceback
+                print(f"详细错误信息: {traceback.format_exc()}")
         else:
             print("-> Gemini 不可用，跳过。")
 
@@ -280,9 +313,14 @@ class VisualJudge:
                 print("-> 降级至 Qwen 模型...")
                 result = self.call_qwen_api(images, signal_type)
                 if result:
+                    print(f"-> Qwen 返回结果: {result}")
                     return result
+                else:
+                    print("-> Qwen 未返回有效结果")
             except Exception as e:
                 print(f"⚠️ Qwen API 调用异常: {e}")
+                import traceback
+                print(f"详细错误信息: {traceback.format_exc()}")
         else:
             print("-> Qwen 不可用，跳过。")
             

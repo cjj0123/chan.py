@@ -8,13 +8,16 @@ import sys
 import json
 from datetime import datetime
 
-sys.path.insert(0, '/Users/jijunchen/.openclaw/workspace/chan.py')
+import sys
+import os
+# 添加当前项目路径
+sys.path.insert(0, os.path.dirname(__file__))
 
 from futu_hk_visual_trading_fixed import FutuHKVisualTrading
 import logging
 
 # 信号保存文件
-SIGNALS_FILE = '/Users/jijunchen/.openclaw/workspace/chan.py/pending_signals.json'
+SIGNALS_FILE = 'pending_signals.json'
 
 # 配置日志
 logging.basicConfig(
@@ -78,7 +81,7 @@ def scan_and_save():
                 logger.info(f"{code} 无持仓，跳过卖出")
                 continue
             
-            chart_paths = trader.generate_charts(code, chan_result['chan_analysis']['chan_30m'])
+            chart_paths = trader.generate_charts(code, chan_result['chan_analysis']['chan_multi_level'])
             if not chart_paths:
                 continue
             
