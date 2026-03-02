@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-期货港股视觉交易系统 - 修复版
+期货港股视觉交易系统 - 5分钟图表修复版
 """
 
 import os
@@ -48,16 +48,13 @@ from config import TRADING_CONFIG, CHAN_CONFIG
 # 导入交易日检查函数
 from scheduler_config import is_trading_day
 
-# 配置日志
+# 设置日志
+logger = logging.getLogger(__name__)
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('futu_hk_trading.log'),
-        logging.StreamHandler()
-    ]
+    format='%(asctime)s | %(process)d | %(thread)d | %(levelname)s:%(name)s:%(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
 )
-logger = logging.getLogger(__name__)
 
 class FutuHKVisualTrading:
     def __init__(self,
@@ -174,7 +171,7 @@ class FutuHKVisualTrading:
 
             now = datetime.now()
             subject = f"港股交易信号 - {now.strftime('%Y-%m-%d %H:%M')}"
-
+            
             send_stock_report(all_signals, all_chart_paths, subject=subject)
         except Exception as e:
             logger.error(f"发送邮件通知异常: {e}")
@@ -1123,5 +1120,4 @@ def main():
             pass
 
 if __name__ == "__main__":
-
     main()
