@@ -15,11 +15,14 @@ from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 
-# 尝试从配置文件加载环境变量
-env_file = Path(__file__).parent / "email_config.env"
-if env_file.exists():
-    load_dotenv(env_file)
-    print(f"✅ 已从 {env_file} 加载邮件配置")
+# 尝试从配置文件加载环境变量 (优化)
+# 优先使用项目根目录下的 .env 文件
+load_dotenv(dotenv_path=Path(__file__).parent.parent / '.env')
+# 其次尝试当前目录下的 email_config.env
+load_dotenv(dotenv_path=Path(__file__).parent / 'email_config.env')
+
+if os.getenv("SENDER_EMAIL"):
+    print("✅ 已从 .env 或 email_config.env 加载邮件配置")
 
 
 def send_stock_report(signals, chart_paths, subject=None):
@@ -67,22 +70,44 @@ def send_stock_report(signals, chart_paths, subject=None):
                     img.add_header('Content-Disposition', 'inline', filename=os.path.basename(chart_path))
                     msg.attach(img)
         
-        # 发送邮件 - 尝试 TLS 连接
+        # 发送邮件 - 使用 TLS 连接 (端口 587)
+        # Gmail SMTP 配置：
+        # - 端口 587: 使用 SMTP + starttls() 升级加密（推荐）
+        # - 端口 465: 使用 SMTP_SSL 直接建立 SSL 连接
+        # 错误"EOF occurred in violation of protocol"通常表示 SSL 握手失败
+        # 可能原因：Gmail 需要应用专用密码 (App Password) 或 2FA 配置
+        import ssl
         try:
-            # 尝试 TLS (端口 587)
-            with smtplib.SMTP(smtp_server, smtp_port) as server:
-                server.set_debuglevel(1)  # 开启详细调试日志
-                server.starttls()
-                server.login(sender_email, sender_password)
-                server.sendmail(sender_email, [recipient_email], msg.as_string())
-        except smtplib.SMTPAuthenticationError:
+            # 使用 TLS 连接 (端口 587) - 先建立普通连接，再升级 TLS
+            server = smtplib.SMTP(smtp_server, 587, timeout=30)
+            server.set_debuglevel(0)
+            server.ehlo()
+            # 使用系统默认的 SSL 上下文进行 TLS 升级
+            server.starttls()
+            server.ehlo()
+            server.login(sender_email, sender_password)
+            server.sendmail(sender_email, [recipient_email], msg.as_string())
+            server.quit()
+            
+            print(f"✅ 邮件已发送：{recipient_email}")
+            return True
+        except Exception as e:
             # TLS 失败，尝试 SSL (端口 465)
-            import ssl
-            context = ssl.create_default_context()
-            with smtplib.SMTP_SSL(smtp_server, 465, context=context) as server:
-                server.set_debuglevel(1)  # 开启详细调试日志
-                server.login(sender_email, sender_password)
-                server.sendmail(sender_email, [recipient_email], msg.as_string())
+            print(f"⚠️ TLS 连接失败，尝试 SSL: {e}")
+            try:
+                ssl_context = ssl.create_default_context()
+                ssl_context.minimum_version = ssl.TLSVersion.TLSv1_2
+                
+                with smtplib.SMTP_SSL(smtp_server, 465, context=ssl_context, timeout=30) as server:
+                    server.set_debuglevel(0)
+                    server.login(sender_email, sender_password)
+                    server.sendmail(sender_email, [recipient_email], msg.as_string())
+                
+                print(f"✅ 邮件已发送：{recipient_email}")
+                return True
+            except Exception as ssl_error:
+                print(f"❌ SSL 连接也失败：{ssl_error}")
+                raise ssl_error from e
         
         print(f"✅ 邮件已发送：{recipient_email}")
         return True

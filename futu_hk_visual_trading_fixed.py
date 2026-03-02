@@ -11,7 +11,7 @@ import logging
 import shutil
 import subprocess
 import json
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import asyncio
 import aiohttp
 
@@ -34,6 +34,11 @@ import matplotlib.pyplot as plt
 from futu import *
 from visual_judge import VisualJudge
 from send_email_report import send_stock_report
+
+# 添加 dotenv 支持
+from dotenv import load_dotenv
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), 'email_config.env'))
 
 # 导入配置
 from config import TRADING_CONFIG, CHAN_CONFIG
@@ -82,7 +87,7 @@ class FutuHKVisualTrading:
         self.trd_ctx = OpenHKTradeContext(host='127.0.0.1', port=11111)
         
         # 交易环境
-        self.trd_env = TrdEnv.SIMULATE if dry_run else TrdEnv.REAL
+        self.trd_env = TrdEnv.SIMULATE # if dry_run else TrdEnv.REAL # 强制使用模拟盘进行调试
         
         # 缠论配置 - 启用MACD计算（严格模式 + 线段）
         self.chan_config = CChanConfig(CHAN_CONFIG)
@@ -126,11 +131,11 @@ class FutuHKVisualTrading:
             True 如果存在待成交订单
         """
         try:
-            ret, data = self.trd_ctx.order_list_query(
-                status_list=[OrderStatus.SUBMITTING, OrderStatus.SUBMITTED, OrderStatus.WAITING_SUBMIT], 
-                trd_env=self.trd_env
-            )
+            ret, data = self.trd_ctx.order_list_query(trd_env=self.trd_env)
             if ret == RET_OK and not data.empty:
+                # 过滤出正在处理的订单
+                active_statuses = [OrderStatus.SUBMITTING, OrderStatus.SUBMITTED, OrderStatus.WAITING_SUBMIT]
+                data = data[data['status'].isin(active_statuses)]
                 futu_side = TrdSide.BUY if side.upper() == 'BUY' else TrdSide.SELL
                 # 过滤出对应代码和方向的活跃订单
                 pending = data[(data['code'] == code) & (data['trd_side'] == futu_side)]
@@ -288,8 +293,8 @@ class FutuHKVisualTrading:
             
             # 遍历每个交易日
             for index, row in schedule.iterrows():
-                market_open = row['market_open'].to_pydatetime()
-                market_close = row['market_close'].to_pydatetime()
+                market_open = row['market_open'].to_pydatetime().replace(tzinfo=None)
+                market_close = row['market_close'].to_pydatetime().replace(tzinfo=None)
                 
                 # 确定当天的计算范围
                 day_start = max(start_time, market_open)
@@ -366,15 +371,28 @@ class FutuHKVisualTrading:
             end_time = datetime.now()
             start_time = end_time - timedelta(days=30)  # 30天数据用于30M分析
             
-            # 一次性初始化包含30M和5M两个级别的CChan对象
-            chan_multi_level = CChan(
-                code=code,
-                begin_time=start_time.strftime("%Y-%m-%d"),
-                end_time=end_time.strftime("%Y-%m-%d %H:%M:%S"),
-                data_src=DATA_SRC.FUTU,
-                lv_list=[KL_TYPE.K_30M, KL_TYPE.K_5M],  # 同时获取30M和5M数据
-                config=self.chan_config
-            )
+            # 首先尝试获取30M数据
+            try:
+                # 一次性初始化包含30M和5M两个级别的CChan对象
+                chan_multi_level = CChan(
+                    code=code,
+                    begin_time=start_time.strftime("%Y-%m-%d"),
+                    end_time=end_time.strftime("%Y-%m-%d %H:%M:%S"),
+                    data_src=DATA_SRC.FUTU,
+                    lv_list=[KL_TYPE.K_30M, KL_TYPE.K_5M],  # 同时获取30M和5M数据
+                    config=self.chan_config
+                )
+            except Exception as e:
+                logger.warning(f"{code} 获取多级别数据失败: {e}，尝试仅使用30M数据")
+                # 如果5M数据有问题，只使用30M数据
+                chan_multi_level = CChan(
+                    code=code,
+                    begin_time=start_time.strftime("%Y-%m-%d"),
+                    end_time=end_time.strftime("%Y-%m-%d %H:%M:%S"),
+                    data_src=DATA_SRC.FUTU,
+                    lv_list=[KL_TYPE.K_30M],  # 仅使用30M数据
+                    config=self.chan_config
+                )
             
             # 从30M级别获取最新的买卖点
             # 修复：使用 CChan.get_latest_bsp 并在 KLine_List 上正确调用
@@ -412,7 +430,6 @@ class FutuHKVisualTrading:
                 'bsp_datetime': bsp.klu.time,
                 'bsp_datetime_str': bsp_time.strftime("%Y-%m-%d %H:%M:%S"),
                 'chan_analysis': {
-                    'chan_30m': chan_30m,
                     'chan_multi_level': chan_multi_level  # 保存多级别对象，供后续图表生成使用
                 }
             }
@@ -422,52 +439,11 @@ class FutuHKVisualTrading:
             
         except Exception as e:
             logger.error(f"CChan分析异常 {code}: {e}")
+            # 捕获特定的K线数据不足错误
+            if "在次级别找不到K线条数超过" in str(e) or "次级别" in str(e):
+                logger.warning(f"{code} 因K线数据不足跳过分析")
             return None
     
-    def _customize_macd_colors(self, plot_driver):
-        """
-        自定义MACD颜色 - AI视觉优化版
-        红柱: 上涨动能 (鲜红 #FF0000)
-        绿柱: 下跌动能 (鲜绿 #00FF00)
-        DIF线: 快线 (白色 #FFFFFF)
-        DEA线: 慢线 (黄色 #FFFF00)
-        """
-        try:
-            # 遍历所有axes，找到MACD副图
-            for ax in plot_driver.figure.axes:
-                # 设置MACD柱状图颜色
-                for container in ax.containers:
-                    if hasattr(container, '__iter__'):  # bar容器
-                        for bar in container:
-                            if hasattr(bar, 'get_height'):
-                                if bar.get_height() >= 0:
-                                    bar.set_color('#FF0000')  # 鲜艳红色（上涨）
-                                    bar.set_edgecolor('#8B0000')  # 深红边框
-                                else:
-                                    bar.set_color('#00FF00')  # 鲜艳绿色（下跌）
-                                    bar.set_edgecolor('#006400')  # 深绿边框
-                                bar.set_alpha(0.85)  # 高透明度
-                
-                # 修改DIF和DEA线颜色
-                for line in ax.lines:
-                    label = str(line.get_label()).lower() if line.get_label() else ''
-                    if 'dif' in label or 'DIF' in str(line.get_label()):
-                        line.set_color('#FFFFFF')  # 白色DIF线（快线）
-                        line.set_linewidth(2.0)
-                        line.set_alpha(0.9)
-                    elif 'dea' in label or 'DEA' in str(line.get_label()):
-                        line.set_color('#FFFF00')  # 黄色DEA线（慢线）
-                        line.set_linewidth(2.0)
-                        line.set_alpha(0.9)
-                    
-                # 设置MACD图背景色为深色，增强对比度
-                ax.set_facecolor('#1a1a1a')  # 深灰背景
-                ax.tick_params(colors='white')  # 白色刻度
-                ax.xaxis.label.set_color('white')
-                ax.yaxis.label.set_color('white')
-                
-        except Exception as e:
-            logger.warning(f"自定义MACD颜色失败: {e}")
     
     def generate_charts(self, code: str, chan_multi_level: CChan) -> List[str]:
         """
@@ -483,7 +459,7 @@ class FutuHKVisualTrading:
                 # 暂时修改级别列表以生成单层图表
                 chan_multi_level.lv_list = [lv]
                 
-                # 生成技术图表（AI视觉优化配置）
+                # 生成技术图表（统一为 A 股格式）
                 plot_driver = CPlotDriver(
                     chan_multi_level,
                     plot_config={
@@ -492,13 +468,13 @@ class FutuHKVisualTrading:
                     },
                     plot_para={
                         "figure": {"w": 16, "h": 12, "macd_h": 0.25, "grid": None},
-                        "bi": {"color": "#FFFF00", "show_num": False},
-                        "zs": {"color": "#4169E1", "linewidth": 2},
-                        "bsp": {"fontsize": 12, "buy_color": "red", "sell_color": "green"},
+                        "bi": {"show_num": False},
+                        "seg": {"color": "#9932CC", "width": 5},  # 紫色线段
+                        "zs": {"linewidth": 2},
+                        "bsp": {"fontsize": 12, "buy_color": "#C71585", "sell_color": "#C71585"},  # 品红色买卖点
                         "macd": {"width": 0.6}
                     }
                 )
-                self._customize_macd_colors(plot_driver)
                 
                 chart_path = f"{self.charts_dir}/{safe_code}_{timestamp}_{lv.name.replace('K_','')}.png"
                 plt.savefig(chart_path, bbox_inches='tight', dpi=120, facecolor='white')
@@ -709,7 +685,7 @@ class FutuHKVisualTrading:
         signals_with_charts = []
         max_workers = min(4, len(candidate_signals))  # 限制并发数避免资源耗尽
         
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # 提交所有任务
             future_to_signal = {
                 executor.submit(self._generate_single_chart, signal): signal

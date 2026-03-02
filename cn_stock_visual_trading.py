@@ -19,6 +19,11 @@ import aiohttp
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
+# 添加 dotenv 支持
+from dotenv import load_dotenv
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), 'email_config.env'))
+
 # TODO: 每年需要手动更新此节假日列表
 CN_HOLIDAYS_2026 = [
     '2026-01-01',  # 元旦
@@ -114,10 +119,39 @@ class CNStockVisualTrading:
         """发送扫描结果邮件"""
         try:
             all_signals = scan_summary.get('all_signals', [])
+            
+            # 计算原始信号数量（未过滤阈值的）
+            original_signals = scan_summary.get('original_signals', [])
+            total_scanned = len(original_signals)
+            passed_threshold = len(all_signals)
+            
+            # 如果没有任何信号，仍然发送邮件通知
             if not all_signals:
-                logger.info("没有发现交易信号 (评分 >= 阈值)，不发送邮件。")
+                # 创建一个特殊的通知信号来告知没有达到阈值的信号
+                logger.info("没有发现交易信号 (评分 >= 阈值)，但仍发送通知邮件。")
+                
+                # 准备一个空的信号列表，但包含扫描摘要
+                summary_signal = {
+                    'code': 'SUMMARY',
+                    'stock_name': '扫描摘要',
+                    'is_buy': None,
+                    'score': 0,
+                    'visual_result': {'summary': f'本次扫描共分析 {total_scanned} 个信号，但没有信号达到评分阈值。'},
+                    'chart_paths': [],
+                    'type': 'summary'
+                }
+                
+                now = datetime.now()
+                subject = f"A 股扫描结果 - {now.strftime('%Y-%m-%d %H:%M')} - 无有效信号"
+                
+                logger.info(f"发送扫描摘要邮件: {subject}")
+                success = send_stock_report([summary_signal], [], subject=subject)
+                if success:
+                    logger.info("扫描摘要邮件发送成功")
+                else:
+                    logger.error("扫描摘要邮件发送失败")
                 return
-
+            
             logger.info(f"正在为 {len(all_signals)} 个信号准备邮件报告...")
             all_chart_paths = []
             for signal in all_signals:
@@ -263,6 +297,9 @@ class CNStockVisualTrading:
 
     def generate_charts(self, code: str, chan_multi_level: CChan) -> List[str]:
         """生成 30M+5M 图表"""
+        import matplotlib
+        matplotlib.use('Agg')  # 使用非GUI后端以避免某些图形界面相关的问题
+        import matplotlib.pyplot as plt  # 导入matplotlib
         chart_paths = []
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_code = code.replace('.', '_')
@@ -278,18 +315,36 @@ class CNStockVisualTrading:
                     "plot_zs": True, "plot_macd": True, "plot_bsp": True,
                 })
                 chart_path = f"{self.charts_dir}/{safe_code}_{timestamp}_{lv.name.replace('K_','')}.png"
-                plt.savefig(chart_path, bbox_inches='tight', dpi=120, facecolor='white')
-                plt.close('all')
+                plot_driver.save2img(chart_path)  # 使用CPlotDriver的save2img方法
+                plt.close(plot_driver.figure)  # 关闭特定图形
                 chart_paths.append(chart_path)
             
             logger.info(f"生成图表：{chart_paths}")
             return chart_paths
+        except BrokenPipeError as e:
+            logger.error(f"生成图表时发生Broken pipe错误 {code}: {e}")
+            # 清理资源
+            try:
+                plt.close('all')
+            except:
+                pass
+            return []
         except Exception as e:
             logger.error(f"生成图表异常 {code}: {e}")
+            # 清理资源
+            try:
+                plt.close('all')
+            except:
+                pass
             return []
         finally:
             # 必须在 finally 块恢复原始级别列表
             chan_multi_level.lv_list = original_lv_list
+            # 确保清理所有图形资源
+            try:
+                plt.close('all')
+            except:
+                pass
 
     def _collect_candidate_signals(self, watchlist_codes: List[str]) -> List[Dict]:
         """第一阶段：快速收集所有有效信号"""
@@ -343,11 +398,11 @@ class CNStockVisualTrading:
             score = visual_result.get('score', 0)
             logger.info(f"{signal['code']} 视觉评分: {score}/100")
             
-            if score >= self.min_visual_score:
-                signal['score'] = score
-                signal['visual_result'] = visual_result
-                return signal
-            return None
+            # 总是返回信号，但标记是否达到阈值
+            signal['score'] = score
+            signal['visual_result'] = visual_result
+            signal['passed_threshold'] = score >= self.min_visual_score
+            return signal
         except Exception as e:
             logger.error(f"视觉评分异常 {signal['code']}: {e}")
             return None
@@ -372,11 +427,14 @@ class CNStockVisualTrading:
         
         scored_signals = asyncio.run(self._batch_score_signals_async(signals_with_charts))
         
-        # 按买卖和评分排序
-        buy_signals = sorted([s for s in scored_signals if s.get('is_buy', s.get('is_buy_signal'))], key=lambda x: x['score'], reverse=True)
-        sell_signals = sorted([s for s in scored_signals if not s.get('is_buy', s.get('is_buy_signal'))], key=lambda x: x['score'], reverse=True)
+        # 只返回达到阈值的信号
+        filtered_signals = [s for s in scored_signals if s.get('passed_threshold', False)]
         
-        logger.info(f"评分完成. 买入信号: {len(buy_signals)}个, 卖出信号: {len(sell_signals)}个")
+        # 按买卖和评分排序
+        buy_signals = sorted([s for s in filtered_signals if s.get('is_buy', s.get('is_buy_signal'))], key=lambda x: x['score'], reverse=True)
+        sell_signals = sorted([s for s in filtered_signals if not s.get('is_buy', s.get('is_buy_signal'))], key=lambda x: x['score'], reverse=True)
+        
+        logger.info(f"评分完成. 原始信号: {len(scored_signals)}个, 达标信号: {len(filtered_signals)}个, 买入信号: {len(buy_signals)}个, 卖出信号: {len(sell_signals)}个")
         return sell_signals + buy_signals # 卖点优先
 
     def is_cn_trading_day(self) -> bool:
@@ -421,6 +479,7 @@ class CNStockVisualTrading:
         scan_summary = {
             'total_stocks': len(watchlist_codes),
             'all_signals': final_signals,
+            'original_signals': signals_with_charts,  # 添加原始信号用于统计
         }
         self.send_email_notification(scan_summary)
         

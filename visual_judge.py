@@ -9,13 +9,13 @@ import re
 
 # 尝试导入 google.genai (Gemini)
 try:
-    import google.generativeai as genai
-    from google.generativeai.types import GenerationConfig
+    import google_genai as genai
+    from google_genai.types import GenerationConfig
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False
-    print("⚠️ google.generativeai 未安装，Gemini 模型不可用。")
-    print("   安装命令: pip install google-generativeai")
+    print("⚠️ google-genai 未安装，Gemini 模型不可用。")
+    print("   安装命令: pip install google-genai")
 
 # 尝试导入 dashscope (Qwen)
 try:
@@ -40,13 +40,13 @@ I have provided two K-line charts for the same stock at the same time:
 2. Image 2 (Right/Bottom): 5-Minute Level (5M) - CONFIRMATION & REFERENCE. Use this to validate the 30M signal with finer granularity.
 
 Visual Legend (Crucial):
-* Yellow Lines: Bi (Strokes/笔) - Strictly calculated trend segments.
-* Red Lines: Seg (Segments/线段) - Higher-level trend segments composed of multiple Bi.
-* Blue Rectangles: ZhongShu (Pivots/Centers/中枢) - Consolidation zones.
-* Purple Text/Arrows: BUY signals (b1, b2, b3a, b3b, etc.)
-* Orange Text/Arrows: SELL signals (s1, s2, s3a, s3b, etc.)
-* Dashed Yellow Line: The latest/incomplete Bi stroke.
-* Dashed Red Line: The latest/incomplete Seg stroke.
+* Black Lines: Bi (Strokes/笔) - Strictly calculated trend segments.
+* Purple Lines: Seg (Segments/线段) - Higher-level trend segments composed of multiple Bi.
+* Orange Rectangles: ZhongShu (Pivots/Centers/中枢) - Consolidation zones.
+* Magenta Text/Arrows: BUY signals (b1, b2, b3a, b3b, etc.)
+* Magenta Text/Arrows: SELL signals (s1, s2, s3a, s3b, etc.)
+* Dashed Black Line: The latest/incomplete Bi stroke.
+* Dashed Purple Line: The latest/incomplete Seg stroke.
 
 Signal Code Definitions (Lookup Table):
 * Divergence Phase (Bottom/Top):
@@ -78,9 +78,9 @@ Your Task:
 Analysis Logic (Step-by-Step):
 * Step 1: 30M Primary Signal Evaluation
   * Confirm the signal type that was identified (b1/b2/b3a/b3b or s1/s2/s3a/s3b) on the 30M chart.
-  * Evaluate the Bi (Yellow Line) structure: Is it clear and well-formed?
-  * Evaluate the Seg (Red Line) structure: Does the higher-level trend support the signal?
-  * Check ZhongShu (Blue Rectangle) context: Is the signal at a key support/resistance level?
+  * Evaluate the Bi (Black Line) structure: Is it clear and well-formed?
+  * Evaluate the Seg (Purple Line) structure: Does the higher-level trend support the signal?
+  * Check ZhongShu (Orange Rectangle) context: Is the signal at a key support/resistance level?
   * Examine MACD on 30M: Is there divergence? Is momentum favorable?
 
 * Step 2: 5M Confirmation Analysis (Interval Recursion)
