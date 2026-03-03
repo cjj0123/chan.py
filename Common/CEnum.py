@@ -7,6 +7,7 @@ class DATA_SRC(Enum):
     CCXT = auto()
     CSV = auto()
     AKSHARE = auto()
+    FUTU = auto()
 
 
 class KL_TYPE(Enum):

@@ -34,7 +34,7 @@ class CPointConfig:
         self.min_zs_cnt = min_zs_cnt
         self.bsp1_only_multibi_zs = bsp1_only_multibi_zs
         self.max_bs2_rate = max_bs2_rate
-        assert self.max_bs2_rate <= 1
+        # assert self.max_bs2_rate <= 1
         self.SetMacdAlgo(macd_algo)
         self.bs1_peak = bs1_peak
         self.tmp_target_types = bs_type

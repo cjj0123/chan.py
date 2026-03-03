@@ -1,0 +1,10 @@
+streamlit
+matplotlib
+pandas
+futu-api
+baostock
+akshare
+pandas_market_calendars
+aiohttp
+google-generativeai
+dashscope

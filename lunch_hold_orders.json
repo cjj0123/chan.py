@@ -1,0 +1,22 @@
+[
+  {
+    "code": "HK.00288",
+    "bsp_type": "\u4e70\u5165 1p",
+    "price": 10.2,
+    "visual_score": 8,
+    "order_type": "ENHANCED",
+    "position_ratio": 0.2,
+    "timestamp": "2026-02-24 11:06:17",
+    "hold_for_lunch": true
+  },
+  {
+    "code": "HK.02259",
+    "bsp_type": "\u4e70\u5165 1",
+    "price": 232.4,
+    "visual_score": 9,
+    "order_type": "ENHANCED",
+    "position_ratio": 0.2,
+    "timestamp": "2026-02-24 11:06:19",
+    "hold_for_lunch": true
+  }
+]

@@ -1,0 +1,99 @@
+# 港股缠论回测配置文件
+# ========================
+
+# 基础回测配置
+backtest:
+  initial_funds: 100000      # 初始资金 (港元)
+  start_date: "2024-01-01"   # 回测开始日期 (YYYY-MM-DD)
+  end_date: "2025-12-31"     # 回测结束日期 (YYYY-MM-DD)
+  main_freq: "30M"           # 主操作周期 (30M/5M/DAY)
+  watchlist: "港股"          # 自选股组名，或指定股票列表
+  
+# 股票列表 (如果 watchlist 是字符串则从富途获取，是列表则直接使用)
+stocks:
+  - "HK.00700"  # 腾讯控股
+  - "HK.00836"  # 华润电力
+  - "HK.02688"  # 新奥能源
+  - "HK.00005"  # 汇丰控股
+  - "HK.00941"  # 中国移动
+  - "HK.01810"  # 小米集团
+  - "HK.03690"  # 美团 -W
+  - "HK.09988"  # 阿里巴巴 -SW
+  - "HK.02899"  # 紫金矿业
+  - "HK.03378"  # 厦门国际
+
+# 交易配置
+trading:
+  max_position_ratio: 0.2    # 单票最大仓位比例 (20%)
+  min_visual_score: 60       # 最小视觉评分阈值 (回测中模拟)
+  max_signal_age_hours: 4    # 信号最大有效期 (小时)
+  max_stocks: 5              # 最大同时持仓股票数
+  
+# 缠论配置
+chan:
+  bi_strict: true            # 严格笔
+  one_bi_zs: false           # 一笔中枢
+  seg_algo: "chan"           # 线段算法 (chan/dyh/def)
+  bs_type: "1,1p,2,2s,3a,3b" # 买卖点类型
+  min_zs_cnt: 0              # 最小中枢数量
+  bsp2_follow_1: false       # 二类买卖点是否跟随一类
+  bsp3_follow_1: false       # 三类买卖点是否跟随一类
+  bs1_peak: false            # 一类买卖点是否要求峰值
+  macd_algo: "peak"          # MACD 算法
+  zs_algo: "normal"          # 中枢算法
+  
+  # MACD 参数
+  macd:
+    fast: 12
+    slow: 26
+    signal: 9
+
+# 成本配置 (港股精确费用)
+cost:
+  enabled: true              # 是否启用精确成本计算
+  commission_rate: 0.0003    # 佣金费率 (0.03%)
+  commission_min: 3.0        # 最低佣金 (3 港元)
+  stamp_duty: 0.001          # 印花税 (0.1%)
+  trading_fee: 0.0000565     # 交易费 (0.00565%)
+  clearing_fee: 0.00002      # 中央结算费 (0.002%)
+
+# 图表配置
+chart:
+  enabled: false             # 是否生成图表
+  plot_kline: true
+  plot_bi: true
+  plot_seg: true
+  plot_zs: true
+  plot_macd: true
+  plot_bsp: true
+  figure:
+    width: 16
+    height: 12
+
+# 参数优化配置
+optimization:
+  enabled: false             # 是否启用参数优化
+  method: "grid_search"      # 优化方法 (grid_search/random_search)
+  n_iter: 100                # 随机搜索迭代次数
+  
+  # 参数搜索范围
+  param_grid:
+    macd_fast: [8, 12, 16]
+    macd_slow: [20, 26, 32]
+    macd_signal: [6, 9, 12]
+    min_zs_cnt: [0, 1, 2]
+    max_position_ratio: [0.1, 0.2, 0.3]
+    min_visual_score: [50, 60, 70, 80]
+
+# 输出配置
+output:
+  report_dir: "backtest_reports"
+  save_json: true
+  save_csv: true
+  save_equity_curve: true
+
+# 日志配置
+logging:
+  level: "INFO"              # DEBUG/INFO/WARNING/ERROR
+  file: "backtest.log"
+  console: true
