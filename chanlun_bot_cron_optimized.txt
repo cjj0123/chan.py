@@ -1,0 +1,18 @@
+# Chanlun Bot - 30M 周期优化扫描方案 (周一至周五)
+# 基于 /Users/jijunchen/Documents/Projects/Chanlun_Bot/cn_stock_visual_trading.py
+
+# 1. 开盘高频预判扫描 (9:35)
+35 9 * * 1-5 python3 /Users/jijunchen/Documents/Projects/Chanlun_Bot/cn_stock_visual_trading.py --freq 5m --tag open_predict
+
+# 2. 核心交易时段 - 30M 对齐扫描
+# 上午: 10:01, 10:31, 11:01, 11:31
+1,31 10,11 * * 1-5 python3 /Users/jijunchen/Documents/Projects/Chanlun_Bot/cn_stock_visual_trading.py --freq 30m --tag core_scan
+
+# 下午: 13:31, 14:01, 14:31
+1,31 13,14 * * 1-5 python3 /Users/jijunchen/Documents/Projects/Chanlun_Bot/cn_stock_visual_trading.py --freq 30m --tag core_scan
+
+# 3. 收盘高频预判扫描 (14:55)
+55 14 * * 1-5 python3 /Users/jijunchen/Documents/Projects/Chanlun_Bot/cn_stock_visual_trading.py --freq 5m --tag close_predict
+
+# 4. 收盘后最终确认扫描 (15:01)
+1 15 * * 1-5 python3 /Users/jijunchen/Documents/Projects/Chanlun_Bot/cn_stock_visual_trading.py --freq 30m --tag final_confirm
