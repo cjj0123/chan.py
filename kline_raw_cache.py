@@ -27,8 +27,61 @@ class KLineRawCache:
         os.makedirs(cache_dir, exist_ok=True)
         
     def _get_cache_key(self, code: str, ktype: KL_TYPE, start_time: str, end_time: str) -> str:
-        """生成缓存键"""
-        return f"{code}_{ktype.name}_{start_time}_{end_time}"
+        """
+        生成缓存键
+        
+        为了解决5分钟和30分钟K线时间不一致的问题，对时间进行标准化处理：
+        - 开始时间只保留日期部分（YYYY-MM-DD）
+        - 结束时间根据K线类型进行对齐：
+          * 5分钟K线：对齐到最近的5分钟边界
+          * 30分钟K线：对齐到最近的30分钟边界
+          * 其他类型：对齐到小时边界
+        """
+        # 标准化开始时间（只保留日期）
+        if ' ' in start_time:
+            std_start_time = start_time.split(' ')[0]
+        else:
+            std_start_time = start_time
+            
+        # 标准化结束时间
+        from datetime import datetime
+        try:
+            # 解析结束时间
+            if ' ' in end_time:
+                dt = datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S")
+            else:
+                dt = datetime.strptime(end_time, "%Y-%m-%d")
+                
+            # 根据K线类型对齐时间
+            if ktype == KL_TYPE.K_5M:
+                # 对齐到5分钟边界，但如果是接近下一个5分钟点（<2分钟），则使用下一个边界
+                current_minute = dt.minute
+                current_second = dt.second
+                aligned_minute = (current_minute // 5) * 5
+                minutes_to_next = 5 - (current_minute % 5)
+                seconds_to_next = minutes_to_next * 60 - current_second
+                
+                if seconds_to_next < 120:  # 如果距离下一个5分钟点少于2分钟
+                    next_aligned_minute = aligned_minute + 5
+                    if next_aligned_minute >= 60:
+                        # 跨小时处理
+                        std_end_time = dt.replace(hour=dt.hour + 1, minute=next_aligned_minute - 60, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        std_end_time = dt.replace(minute=next_aligned_minute, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+                else:
+                    std_end_time = dt.replace(minute=aligned_minute, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+            elif ktype == KL_TYPE.K_30M:
+                # 对齐到30分钟边界
+                aligned_minute = (dt.minute // 30) * 30
+                std_end_time = dt.replace(minute=aligned_minute, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                # 其他类型对齐到小时边界
+                std_end_time = dt.replace(minute=0, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            # 如果解析失败，使用原始结束时间
+            std_end_time = end_time
+            
+        return f"{code}_{ktype.name}_{std_start_time}_{std_end_time}"
     
     def _get_cache_path(self, cache_key: str) -> str:
         """获取缓存文件路径"""
