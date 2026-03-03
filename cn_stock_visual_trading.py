@@ -10,6 +10,7 @@ import sys
 import time
 import logging
 import shutil
+import json
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 import pandas as pd
@@ -113,7 +114,49 @@ class CNStockVisualTrading:
         except Exception as e:
             logger.error(f"Futu 连接失败：{e}")
         
+        # 信号历史记录文件（A股使用独立的文件）
+        self.executed_signals_file = "cn_executed_signals.json"
+        self.discovered_signals_file = "cn_discovered_signals.json"
+        self.executed_signals = self._load_executed_signals()
+        self.discovered_signals = self._load_discovered_signals()
+        
         logger.info(f"A 股扫描初始化完成 - 评分阈值：{min_visual_score}")
+
+    def _load_executed_signals(self) -> Dict:
+        """加载已执行信号记录"""
+        if os.path.exists(self.executed_signals_file):
+            try:
+                with open(self.executed_signals_file, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"加载已执行信号记录失败: {e}")
+        return {}
+
+    def _save_executed_signals(self):
+        """保存已执行信号记录"""
+        try:
+            with open(self.executed_signals_file, 'w') as f:
+                json.dump(self.executed_signals, f, indent=4)
+        except Exception as e:
+            logger.error(f"保存已执行信号记录失败: {e}")
+
+    def _load_discovered_signals(self) -> Dict:
+        """加载已发现信号记录（包括未执行的信号）"""
+        if os.path.exists(self.discovered_signals_file):
+            try:
+                with open(self.discovered_signals_file, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"加载已发现信号记录失败: {e}")
+        return {}
+
+    def _save_discovered_signals(self):
+        """保存已发现信号记录"""
+        try:
+            with open(self.discovered_signals_file, 'w') as f:
+                json.dump(self.discovered_signals, f, indent=4)
+        except Exception as e:
+            logger.error(f"保存已发现信号记录失败: {e}")
 
     def send_email_notification(self, scan_summary: Dict):
         """发送扫描结果邮件"""
@@ -245,12 +288,17 @@ class CNStockVisualTrading:
                 return None
             
             logger.info(f"{code} {bsp.type2str()} 信号在 4 小时窗口内 ({trading_hours:.1f}h)")
+            
+            # 添加信号时间戳用于去重
+            bsp_time_str = bsp_time.strftime("%Y-%m-%d %H:%M:%S")
+            
             return {
                 'code': code,
                 'bsp_type': bsp.type2str(),
                 'is_buy': bsp.is_buy,
                 'is_buy_signal': bsp.is_buy,
-                'chan_multi_level': chan_multi_level
+                'chan_multi_level': chan_multi_level,
+                'bsp_datetime_str': bsp_time_str
             }
         except Exception as e:
             logger.error(f"CChan 分析异常 {code}: {e}")
@@ -357,7 +405,29 @@ class CNStockVisualTrading:
             
             chan_result = self.analyze_with_chan(code)
             if chan_result:
+                # ====== 信号去重逻辑：检查持久化记录 ======
+                bsp_time_str = chan_result.get('bsp_datetime_str', '')
+                bsp_type_display = f"{'b' if chan_result.get('is_buy', False) else 's'}{chan_result.get('bsp_type', '未知')}"
+                
+                # 检查是否已经执行过该信号
+                last_executed_time = self.executed_signals.get(code, "")
+                if last_executed_time == bsp_time_str:
+                    logger.info(f"{code} {bsp_type_display} 信号时间 {bsp_time_str} 已执行过，跳过重复处理")
+                    continue
+                    
+                # 检查是否已经发现过该信号（避免重复通知未执行的信号）
+                last_discovered_time = self.discovered_signals.get(code, "")
+                if last_discovered_time == bsp_time_str:
+                    logger.info(f"{code} {bsp_type_display} 信号时间 {bsp_time_str} 已发现过，跳过重复通知")
+                    continue
+                
                 signal_data = {**stock_info, **chan_result}
+                
+                # 记录已发现的信号（无论是否最终执行，都避免重复通知）
+                if bsp_time_str:
+                    self.discovered_signals[code] = bsp_time_str
+                    self._save_discovered_signals()
+                
                 candidate_signals.append(signal_data)
                 logger.info(f"✅ {code} 候选信号已收集 ({chan_result['bsp_type']})")
         logger.info(f"共收集到 {len(candidate_signals)} 个候选信号")
