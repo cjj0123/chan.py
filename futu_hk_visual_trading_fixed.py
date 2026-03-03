@@ -1088,6 +1088,15 @@ class FutuHKVisualTrading:
             self.send_email_notification(scan_summary)
         except Exception as e:
             logger.error(f"发送扫描结果到备忘录失败: {e}")
+        
+        # ========== 第八阶段：生成并发送每日监控报告 ==========
+        try:
+            from Monitoring.reporter import CReporter
+            reporter = CReporter()
+            # 生成过去7天的报告
+            reporter.send_daily_report(days=7)
+        except Exception as e:
+            logger.error(f"生成或发送监控报告失败: {e}")
 
     def get_position_quantity(self, code: str) -> int:
         """

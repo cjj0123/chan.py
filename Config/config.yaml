@@ -1,0 +1,93 @@
+# 全局配置文件
+trading:
+  # 富途相关配置
+  hk_watchlist_group: "港股"
+  min_visual_score: 70
+  max_position_ratio: 0.2
+  dry_run: true
+  
+  # 交易时间配置
+  trading_hours_start: "09:30"
+  trading_hours_end: "16:00"
+  lunch_break_start: "12:00"
+  lunch_break_end: "13:00"
+  
+  # 信号时间过滤
+  max_signal_age_hours: 4
+
+chan:
+  # 缠论配置
+  bi_strict: true
+  one_bi_zs: false
+  seg_algo: "chan"
+  bs_type: "1,1p,2,2s,3a,3b"
+  macd:
+    fast: 12
+    slow: 26
+    signal: 9
+  divergence_rate: .inf  # 无限大，禁用背驰率过滤
+  min_zs_cnt: 0
+  bsp2_follow_1: false
+  bsp3_follow_1: false
+  bs1_peak: false
+  macd_algo: "peak"
+  zs_algo: "normal"
+
+chart:
+  # 图表配置
+  plot_kline: true
+  plot_kline_combine: true
+  plot_bi: true
+  plot_seg: true
+  plot_eigen: false
+  plot_zs: true
+  plot_macd: true
+  plot_mean: false
+  plot_channel: false
+  plot_bsp: true
+  plot_extrainfo: false
+  plot_demark: false
+  plot_marker: false
+  plot_rsi: false
+  plot_kdj: false
+
+chart_para:
+  # 图表参数配置
+  seg: {}
+  bi:
+    color: "#FFFF00"  # 黄色
+    show_num: false
+  zs:
+    color: "#4169E1"  # 皇家蓝
+    linewidth: 2
+  bsp:
+    fontsize: 12
+    buy_color: "red"
+    sell_color: "green"
+  macd:
+    width: 0.6
+  figure:
+    w: 16
+    h: 12
+    macd_h: 0.25
+    grid: null
+
+api:
+  # API配置
+  # GOOGLE_API_KEY 将从环境变量中读取
+
+data:
+  # 数据源配置
+  default_data_source: "FUTU"
+  cache_enabled: true
+  cache_dir: "stock_cache"
+
+database:
+  # 数据库配置
+  type: "sqlite"  # 或 "mysql"
+  path: "chan_trading.db"  # SQLite文件路径
+  host: "localhost"  # MySQL主机
+  port: 3306         # MySQL端口
+  username: ""
+  password: ""
+  name: "chan_trading"  # MySQL数据库名
