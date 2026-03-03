@@ -382,7 +382,7 @@ class CPlotDriver:
         ax: Axes,
         lv,
         width=5,
-        color="g",
+        color="purple",
         sub_lv_cnt=None,
         facecolor='green',
         alpha=0.1,
@@ -622,7 +622,7 @@ class CPlotDriver:
             if bsp.y-arrow_len*arrow_dir > self.y_max:
                 self.y_max = bsp.y-arrow_len*arrow_dir
 
-    def draw_bs_point(self, meta: CChanPlotMeta, ax: Axes, buy_color='r', sell_color='g', fontsize=15, arrow_l=0.15, arrow_h=0.2, arrow_w=1):
+    def draw_bs_point(self, meta: CChanPlotMeta, ax: Axes, buy_color='magenta', sell_color='magenta', fontsize=15, arrow_l=0.15, arrow_h=0.2, arrow_w=1):
         self.bsp_common_draw(
             bsp_list=meta.bs_point_lst,
             ax=ax,
@@ -634,7 +634,7 @@ class CPlotDriver:
             arrow_w=arrow_w,
         )
 
-    def draw_seg_bs_point(self, meta: CChanPlotMeta, ax: Axes, buy_color='r', sell_color='g', fontsize=18, arrow_l=0.2, arrow_h=0.25, arrow_w=1.2):
+    def draw_seg_bs_point(self, meta: CChanPlotMeta, ax: Axes, buy_color='magenta', sell_color='magenta', fontsize=18, arrow_l=0.2, arrow_h=0.25, arrow_w=1.2):
         self.bsp_common_draw(
             bsp_list=meta.seg_bsp_lst,
             ax=ax,

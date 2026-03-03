@@ -98,12 +98,20 @@ class FutuHKVisualTrading:
         # 初始化并行K线获取器
         self.kline_fetcher = ParallelKLineFetcher(self.chan_config, max_workers=2)
         
+        # 设置缓存有效期为10分钟，以平衡实时性和性能
+        from kline_raw_cache import kline_raw_cache
+        kline_raw_cache.cache_duration = 10 * 60  # 10分钟
+        
         # 视觉评分器
         self.visual_judge = VisualJudge()
         
         # 信号执行历史记录文件
         self.executed_signals_file = "executed_signals.json"
         self.executed_signals = self._load_executed_signals()
+        
+        # 信号发现历史记录文件（用于避免重复通知未执行的信号）
+        self.discovered_signals_file = "discovered_signals.json"
+        self.discovered_signals = self._load_discovered_signals()
         
         # 图表生成锁，用于解决多线程环境下的matplotlib渲染冲突
         self.chart_generation_lock = threading.Lock()
@@ -127,6 +135,24 @@ class FutuHKVisualTrading:
                 json.dump(self.executed_signals, f, indent=4)
         except Exception as e:
             logger.error(f"保存已执行信号记录失败: {e}")
+
+    def _load_discovered_signals(self) -> Dict:
+        """加载已发现信号记录（包括未执行的信号）"""
+        if os.path.exists(self.discovered_signals_file):
+            try:
+                with open(self.discovered_signals_file, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"加载已发现信号记录失败: {e}")
+        return {}
+
+    def _save_discovered_signals(self):
+        """保存已发现信号记录"""
+        try:
+            with open(self.discovered_signals_file, 'w') as f:
+                json.dump(self.discovered_signals, f, indent=4)
+        except Exception as e:
+            logger.error(f"保存已发现信号记录失败: {e}")
 
     def check_pending_orders(self, code: str, side: str) -> bool:
         """
@@ -380,7 +406,12 @@ class FutuHKVisualTrading:
             end_time = datetime.now()
             start_time = end_time - timedelta(days=30)  # 30天数据用于30M分析
             start_time_str = start_time.strftime("%Y-%m-%d")
-            end_time_str = end_time.strftime("%Y-%m-%d %H:%M:%S")
+            
+            # 标准化结束时间到最近的5分钟边界，以提高缓存命中率
+            # 例如：10:34:23 -> 10:35:00
+            minutes = (end_time.minute // 5) * 5
+            end_time_rounded = end_time.replace(minute=minutes, second=0, microsecond=0)
+            end_time_str = end_time_rounded.strftime("%Y-%m-%d %H:%M:%S")
             
             # 使用并行获取器获取30M和5M数据
             async def _fetch_data_async():
@@ -659,9 +690,16 @@ class FutuHKVisualTrading:
             bsp_type_display = f"{'b' if is_buy else 's'}{bsp_type}"
             
             # ====== 信号去重逻辑：检查持久化记录 ======
+            # 检查是否已经执行过该信号
             last_executed_time = self.executed_signals.get(code, "")
             if last_executed_time == bsp_time_str:
-                logger.info(f"{code} {bsp_type_display} 信号时间 {bsp_time_str} 与历史记录一致，跳过重复处理")
+                logger.info(f"{code} {bsp_type_display} 信号时间 {bsp_time_str} 已执行过，跳过重复处理")
+                continue
+                
+            # 检查是否已经发现过该信号（避免重复通知未执行的信号）
+            last_discovered_time = self.discovered_signals.get(code, "")
+            if last_discovered_time == bsp_time_str:
+                logger.info(f"{code} {bsp_type_display} 信号时间 {bsp_time_str} 已发现过，跳过重复通知")
                 continue
 
             logger.info(f"{code} 信号类型: {bsp_type_display}, 是否买入: {is_buy}")
@@ -693,6 +731,12 @@ class FutuHKVisualTrading:
                 'lot_size': stock_info.get('lot_size', 100),
                 'chan_result': chan_result  # 保存完整的缠论分析结果
             }
+            
+            # 记录已发现的信号（无论是否最终执行，都避免重复通知）
+            if bsp_time_str:
+                self.discovered_signals[code] = bsp_time_str
+                self._save_discovered_signals()
+            
             candidate_signals.append(signal_data)
             logger.info(f"✅ {code} 候选信号已收集")
         

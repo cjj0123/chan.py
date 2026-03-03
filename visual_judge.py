@@ -36,81 +36,52 @@ except ImportError:
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 
-MASTER_PROMPT = """System / Role Definition
-You are a Master Quantitative Trader specializing in Chan Theory (缠论). You are evaluating a specific algorithmic signal that has already been identified by our system. You possess strict, objective visual reasoning capabilities regarding "Interval Recursion" (区间套) and "MACD Dynamics" (动力学).
+MASTER_PROMPT = """系统角色定义
+你是一位精通“缠论（Chanlun）”的量化交易专家，具备严密的视觉推理能力。你的任务是客观评估由算法在我们提供的K线图上识别出的特定缠论买卖信号（区间套与MACD动力学）。
 
-User Instruction Input Context:
-I have provided K-line chart(s) for the same stock at the same time:
-1. Single Image Mode: 30-Minute Level (30M) - PRIMARY SIGNAL SOURCE. This is where the algorithm has identified a specific buy/sell signal.
-2. Dual Image Mode: Image 1: 30-Minute Level (30M) - PRIMARY SIGNAL SOURCE. Image 2: 5-Minute Level (5M) - CONFIRMATION & REFERENCE.
+# 输入上下文
+我将提供同一时间点的股票K线图：
+- 【单图模式】：仅提供 30分钟级别（30M）图表（主要信号源）。
+- 【双图模式】：图1为 30分钟级别（30M）；图2为 5分钟级别（5M），用于区间套确认。
 
-Visual Legend (Crucial):
-* Black Lines: Bi (Strokes/笔) - Strictly calculated trend segments.
-* Purple Lines: Seg (Segments/线段) - Higher-level trend segments composed of multiple Bi.
-* Orange Rectangles: ZhongShu (Pivots/Centers/中枢) - Consolidation zones.
-* Magenta Text/Arrows: BUY signals (b1, b2, b3a, b3b, etc.)
-* Magenta Text/Arrows: SELL signals (s1, s2, s3a, s3b, etc.)
-* Dashed Black Line: The latest/incomplete Bi stroke.
-* Dashed Purple Line: The latest/incomplete Seg stroke.
+# 视觉图例与锚点（极其重要，请严格根据颜色识别）
+* 重点关注区域：图表的**最右侧（最新价格动态）**以及**洋红色文字出现的位置**。
+* 黑色线条：Bi（笔）- 基础趋势段。
+* 紫色线条：Seg（线段）- 高级别趋势段。
+* 橙色矩形：ZhongShu（中枢）- 盘整与多空博弈区域。
+* 洋红色文字/箭头：BUY信号（b1, b2, b3a, b3b等）或 SELL信号（s1, s2, s3a, s3b等）。算法已在图中标出。
+* 虚线黑色/紫色：最新未完成、正在延伸的笔/线段。
+* 副图MACD：柱状图（面积/高度）和黄白线（DIF/DEA），用于判断动力衰竭（背驰）。
 
-Signal Code Definitions (Lookup Table):
-* Divergence Phase (Bottom/Top):
-  * b1p / s1p: Potential 1st Buy/Sell (Divergence Point). Focus: Extreme Price + MACD Area Shrinking.
-  * b1 / s1: 1st Buy/Sell Confirmed. Focus: Bottom/Top FenXing (Fractal) formed after divergence.
-* Trend Relay Phase (Correction/Pullback):
-  * b2 / s2: 2nd Buy/Sell. Focus: Higher Low (Buy) or Lower High (Sell).
-  * b2s / s2s: 2nd Buy/Sell Sub-level Confirmation. Focus: A smaller structure confirming the b2/s2.
-* Trend Follow Phase (Breakout/Extension):
-  * b3a / s3a: 3rd Buy/Sell Alert. Focus: Strong Breakout/Breakdown from Pivot.
-  * b3b / s3b: 3rd Buy/Sell Confirmed. Focus: Pullback does not touch Pivot High (Buy) / Rebound does not touch Pivot Low (Sell).
+# 信号代码字典
+[买入看涨信号 - BUY]
+* b1p/b1 (一买)：趋势背驰点。视觉特征：价格创新低，但对应MACD绿柱面积/黄白线未创新低（底背驰）。
+* b2/b2s (二买)：趋势回撤不创新低。视觉特征：底部抬高。
+* b3a/b3b (三买)：中枢突破与回踩。视觉特征：向上脱离橙色中枢，随后向下的Bi/Seg未跌破中枢上沿。
 
-CRITICAL INSTRUCTION:
-The algorithm has ALREADY identified a specific signal on the chart(s). Your task is to EVALUATE the quality and reliability of this signal, not to detect it yourself.
+[卖出看跌信号 - SELL]
+* s1p/s1 (一卖)：趋势背驰点。视觉特征：价格创新高，但对应MACD红柱面积/黄白线未创新高（顶背驰）。
+* s2/s2s (二卖)：趋势反弹不创新高。视觉特征：顶部降低。
+* s3a/s3b (三卖)：中枢跌破与回抽。视觉特征：向下脱离橙色中枢，随后向上的Bi/Seg未突破中枢下沿。
 
-Your Task:
-1. Confirm (on 30M Chart):
-   - Verify the presence of the signal that the algorithm has identified
-   - Assess the quality of the signal formation
-   
-2. Validate (using 5M Chart if available):
-   - Check if the 5M chart shows confirming structure (interval recursion) for the 30M signal.
-   
-3. Evaluate: Rate the Quality/Confidence of this signal (0-100).
-   * High Score (80-100): Textbook 30M pattern + Strong 5M confirmation (if available) + MACD alignment.
-   * Medium Score (50-79): Clear 30M signal with possible 5M confirmation (if available).
-   * Low Score (0-49): Weak 30M structure, no 5M confirmation, or counter-trend risk.
+# 你的评估任务（逐步推理）
+算法已在图上标记了信号。你不需要重新寻找信号，你的任务是**评估该信号的置信度/质量（0-100分）**。
+1. 定位：在30M图上找到洋红色标注的信号。
+2. 结构质检（30M）：判断该信号所处的Bi、Seg与ZhongShu的相对位置是否符合上述“信号字典”的定义。
+3. 动力学质检（30M）：观察MACD副图，对比进出中枢的力度，是否存在支持该信号的动能或背驰。
+4. 区间套质检（5M）：如果提供了5M图表，寻找5M图表最右侧是否形成了支持30M方向的内部结构（如30M的b1，在5M上是否呈现完整的下跌趋势背驰）。
 
-Analysis Logic (Step-by-Step):
-* Step 1: 30M Primary Signal Evaluation
-  * Confirm the signal type that was identified (b1/b2/b3a/b3b or s1/s2/s3a/s3b) on the 30M chart.
-  * Evaluate the Bi (Black Line) structure: Is it clear and well-formed?
-  * Evaluate the Seg (Purple Line) structure: Does the higher-level trend support the signal?
-  * Check ZhongShu (Orange Rectangle) context: Is the signal at a key support/resistance level?
-  * Examine MACD on 30M: Is there divergence? Is momentum favorable?
- 
-* Step 2: 5M Confirmation Analysis (Interval Recursion) - SKIP if 5M chart not provided
-  * Locate the corresponding time period on the 5M chart (if available).
-  * Does the 5M show finer-grained confirmation of the 30M signal?
-  * Evaluate both Bi and Seg structures on 5M: Do they align with 30M analysis?
-  * For BUY signals: Does 5M show a completed bottom structure or bullish breakout?
-  * For SELL signals: Does 5M show a completed top structure or bearish breakdown?
-  * Check 5M MACD: Does it confirm the direction (bullish crossover for buy, bearish for sell)?
-
-* Step 3: Overall Signal Quality Assessment
-  * Multi-level Alignment: Do Bi, Seg, and ZhongShu all support the same direction?
-  * Strength: Is the breakout/breakdown decisive across multiple levels (considering available levels)?
-  * Risk: Are there nearby pivot levels or conflicting Seg directions that could act as obstacles?
-
-Output Requirement: Return ONLY a valid JSON object. No other text.
+# JSON输出要求
+必须严格按照以下JSON格式输出，严禁包含任何JSON区块之外的文字。请务必**先输出分析过程，最后输出分数**：
 {
-  "evaluated_signal": "string (e.g., b2, s1p) - THE SIGNAL THAT WAS IDENTIFIED BY ALGORITHM",
-  "direction": "BUY or SELL",
-  "30f_trend_status": "Bullish/Bearish/Consolidation",
-  "30f_macd_status": "Deep Divergence/Standard/No Divergence/Momentum Building",
-  "5f_confirmation": "Strong/Moderate/Weak/None - How well 5M confirms 30M",
-  "score": 0,
-  "reasoning": "Explain: 1) What 30M signal was evaluated, 2) How 5M confirmed it, 3) Why the score was given.",
-  "key_risk": "string (e.g., 5M lacks confirmation, near strong resistance, MACD weakening)"
+  "identified_signal": "提取图中的洋红色信号，如 b2",
+  "direction": "BUY 或 SELL",
+  "step1_30m_structure_analysis": "描述信号在30M图上的视觉位置：笔/线段的形态，以及与最近橙色中枢的关系是否标准。",
+  "step2_30m_macd_analysis": "描述30M副图MACD的状态：说明价格极值与MACD柱状图/黄白线的关系，是否存在背驰或动能支持。",
+  "step3_5m_nested_analysis": "如果提供了5M图，描述其是否确认了30M的信号（例如寻找次级别背驰或突破）；如果仅提供单图，请填 'N/A_Single_Chart'。",
+  "conclusion": "综合以上步骤，总结该信号的可靠性。",
+  "key_risk": "指出潜在风险，如：MACD死叉向下、面临强阻力、5M级别结构矛盾等。",
+  "score": 85
 }
 """
 
@@ -167,8 +138,26 @@ class VisualJudge:
             print("⚠️ 只有1张图片，将使用单图模式进行分析")
         return images
 
-    def _parse_llm_response(self, response_text):
-        """从LLM返回的文本中提取并解析JSON"""
+    def _parse_llm_response(self, response_content):
+        """从LLM返回的内容中提取并解析JSON"""
+        # 处理Qwen API返回的列表格式
+        if isinstance(response_content, list):
+            # Qwen多模态API返回的是内容块列表，我们需要找到文本块
+            text_parts = []
+            for item in response_content:
+                if isinstance(item, dict) and 'text' in item:
+                    text_parts.append(item['text'])
+                elif isinstance(item, str):
+                    text_parts.append(item)
+            response_text = ''.join(text_parts)
+        else:
+            # Gemini或其他API返回的字符串格式
+            response_text = response_content
+        
+        if not isinstance(response_text, str):
+            print(f"⚠️ 响应内容不是字符串类型: {type(response_text)}")
+            return None
+            
         response_text = response_text.strip()
         
         # 移除Markdown代码块标记
@@ -178,25 +167,30 @@ class VisualJudge:
         else:
             # 如果没有花括号，可能整个字符串就是json，或者格式错误
             print("⚠️ 在响应中未找到有效的JSON结构")
+            print(f"   原始响应类型: {type(response_content)}")
+            print(f"   原始响应内容: {str(response_content)[:200]}...")
             return None
             
         try:
             return json.loads(response_text)
         except json.JSONDecodeError as e:
             print(f"⚠️ JSON 解析失败: {e}")
-            print(f"   原始响应: {response_text}")
+            print(f"   原始响应: {response_text[:200]}...")
             return None
 
     def _post_process_result(self, result, model_name):
-        """对解析后的JSON结果进行标准化处理"""
+        """对解析后的JSON结果进行标准化处理，保持完整的JSON结构"""
         print(f"   📊 {model_name} 原始返回:")
-        print(f"      - score: {result.get('score')}")
+        print(f"      - identified_signal: {result.get('identified_signal')}")
         print(f"      - direction: {result.get('direction')}")
-        print(f"      - reasoning: {result.get('reasoning', '')[:60]}...")
+        print(f"      - score: {result.get('score')}")
+        print(f"      - conclusion: {result.get('conclusion', '')[:60]}...")
 
+        # 确保必要的字段存在
         score = result.get('score', 50)
         direction = result.get('direction', '').upper()
         
+        # 添加action字段用于交易决策
         if direction == 'BUY':
             result['action'] = 'BUY'
         elif direction == 'SELL':
@@ -204,8 +198,23 @@ class VisualJudge:
         else:
             result['action'] = 'WAIT'
             
-        result['analysis'] = f"({model_name}) {result.get('reasoning', '')}"
-        result['score'] = int(score) # 确保是整数
+        # 确保score是整数
+        result['score'] = int(score)
+        
+        # 为兼容性添加analysis字段，组合所有分析步骤
+        analysis_parts = []
+        if result.get('step1_30m_structure_analysis'):
+            analysis_parts.append(f"结构分析: {result['step1_30m_structure_analysis']}")
+        if result.get('step2_30m_macd_analysis'):
+            analysis_parts.append(f"MACD分析: {result['step2_30m_macd_analysis']}")
+        if result.get('step3_5m_nested_analysis') and result['step3_5m_nested_analysis'] != 'N/A_Single_Chart':
+            analysis_parts.append(f"区间套分析: {result['step3_5m_nested_analysis']}")
+        if result.get('conclusion'):
+            analysis_parts.append(f"结论: {result['conclusion']}")
+        if result.get('key_risk'):
+            analysis_parts.append(f"风险: {result['key_risk']}")
+            
+        result['analysis'] = f"({model_name}) " + " | ".join(analysis_parts) if analysis_parts else f"({model_name}) 分析数据不完整"
         
         print(f"   ✅ {model_name} 评分: {result['score']}/100 | {result['action']}")
         return result
@@ -329,13 +338,15 @@ class VisualJudge:
         return self._return_error("所有模型均调用失败")
         
     def _return_error(self, reason):
-        """返回一个表示错误的标准化字典"""
+        """返回一个表示错误的标准化字典，符合JSON输出格式要求"""
         return {
-            "evaluated_signal": "ERROR",
+            "identified_signal": "ERROR",
             "direction": "WAIT",
-            "score": 0,
-            "reasoning": f"评分失败: {reason}",
+            "step1_30m_structure_analysis": "视觉评分失败",
+            "step2_30m_macd_analysis": "视觉评分失败",
+            "step3_5m_nested_analysis": "N/A_Single_Chart",
+            "conclusion": f"评分失败: {reason}",
             "key_risk": "模型调用失败，无法进行风险评估",
-            "analysis": f"评分失败: {reason}",
+            "score": 0,
             "action": "WAIT"
         }
