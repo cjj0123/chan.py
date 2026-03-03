@@ -8,3 +8,4 @@ config.yaml
 OpenConfig.yaml
 gotify_push.py
 cos_config.yaml
+email_config.env
