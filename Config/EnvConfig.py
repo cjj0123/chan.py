@@ -70,6 +70,5 @@ class EnvConfig:
         except (KeyError, TypeError):
             return default
 
-
 # 创建全局配置实例
 config = EnvConfig()
