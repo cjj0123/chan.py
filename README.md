@@ -167,6 +167,11 @@ crontab -e
 - **`enhanced_backtester.py`**: 增强版回测引擎，精确计算港股交易成本
 - **`reports/`**: 包含详细的回测报告和测试结果
 
+### 测试执行
+- **`scripts/run_all_tests.sh`**: 一键执行完整测试计划的脚本
+- **`config/test_config.yaml`**: 测试配置文件，可自定义测试参数
+- **`reports/COMPREHENSIVE_TEST_EXECUTION_PLAN.md`**: 详细的测试执行计划文档
+
 ## 🛡️ 开发原则
 
 - **模块解耦**: 视觉判断逻辑与下单逻辑完全分离
@@ -184,6 +189,8 @@ crontab -e
 - [交易策略更新说明](./reports/TRADING_STRATEGY_UPDATE_2026-02-26.md)
 - [优化扫描方案](./reports/optimized_scan_plan.md)
 - [港股回测方案](./reports/HK_BACKTEST_PLAN.md)
+- [全面测试执行计划](./reports/COMPREHENSIVE_TEST_EXECUTION_PLAN.md)
+- [测试执行指南](./reports/TEST_EXECUTION_README.md)
 
 ## 📞 联系方式
 

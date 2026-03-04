@@ -1,0 +1,99 @@
+# 缠论交易系统测试配置文件
+
+# 测试执行选项
+test_execution:
+  # 是否执行单元测试
+  run_unit_tests: true
+  
+  # 是否执行集成测试  
+  run_integration_tests: true
+  
+  # 是否执行回测测试
+  run_backtest_tests: true
+  
+  # 是否执行实盘模拟测试
+  run_simulation_test: true
+  
+  # 是否执行性能测试
+  run_performance_test: false
+
+# 回测测试配置
+backtest:
+  # 初始资金（港币）
+  initial_funds: 1000000.0
+  
+  # 回测开始日期
+  start_date: "2024-01-01"
+  
+  # 回测结束日期  
+  end_date: "2024-12-31"
+  
+  # 测试股票列表（留空则使用自选股）
+  test_stocks: []
+    # - "HK.00700"
+    # - "HK.00836" 
+    # - "HK.02688"
+  
+  # 最大测试股票数量（0表示不限制）
+  max_stocks: 5
+  
+  # 使用港股精确成本计算
+  use_hk_costs: true
+
+# 实盘模拟配置
+simulation:
+  # 干运行模式（true=不实际下单）
+  dry_run: true
+  
+  # 单次扫描模式
+  single_scan: true
+  
+  # 超时时间（秒）
+  timeout: 300
+
+# 数据下载配置
+data_download:
+  # 自选股组名称
+  watchlist: "港股"
+  
+  # K线频率
+  frequencies: ["30M", "5M", "DAY"]
+  
+  # 数据缓存目录
+  cache_dir: "stock_cache"
+  
+  # 覆盖已存在的文件
+  overwrite: false
+
+# API配置检查
+api_check:
+  # 检查Gemini API密钥
+  check_gemini: true
+  
+  # 检查Qwen API密钥  
+  check_qwen: true
+  
+  # 检查邮件配置
+  check_email: true
+
+# 日志配置
+logging:
+  # 日志级别
+  level: "INFO"
+  
+  # 日志文件
+  file: "test_execution.log"
+  
+  # 控制台输出
+  console: true
+
+# 性能测试配置
+performance:
+  # 并发股票数量
+  concurrent_stocks: 20
+  
+  # 长时间运行小时数
+  long_run_hours: 2
+  
+  # 内存监控间隔（秒）
+  memory_check_interval: 60
