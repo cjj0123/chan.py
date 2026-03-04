@@ -15,6 +15,7 @@
 - **回退机制**: 当主模型不可用时自动切换到备用模型
 - **智能过滤**: 仅对评分≥70分的高质量信号进行处理
 - **时间窗口**: 4小时时间窗口过滤，避免重复信号
+- **快速通道**: 评分≥0.9的信号立即执行交易，评分<0.9的信号按分数排序后执行
 
 ### 🧠 机器学习优化
 - **特征工程**: 自动提取500+缠论特征用于机器学习模型
@@ -31,6 +32,7 @@
 - **高频预判**: 港股15:55预判扫描，为CAS收盘竞价提前准备
 - **30分钟周期对齐**: 精确对齐30M K线周期，确保信号准确性
 - **快速通道**: 优先处理持仓股票，提高风险控制效率
+- **开盘跳空处理**: 09:26开盘前扫描，及时响应隔夜消息影响
 
 ### 🔔 通知系统
 - **邮件通知**: 自动发送包含缠论图表的交易报告
@@ -54,7 +56,7 @@
 ├── config.py                       # 交易配置
 ├── scheduler_config.py             # 调度配置
 ├── crontab_cn_stock_trading.txt    # 定时任务配置
-├── run_cn_stock_scan.sh            # 手动启动脚本
+├── scripts/run_scheduled_scan.sh   # 手动启动脚本
 ├── requirements.txt                # 依赖包列表
 ├── .env                            # API密钥配置
 ├── email_config.env                # 邮件配置
@@ -62,8 +64,7 @@
 ├── stock_cache/                    # 股票数据缓存
 ├── backtesting/                    # 回测系统
 │   ├── enhanced_backtester.py      # 增强回测引擎（精确成本、参数优化）
-│   ├── backtest_config.yaml        # 回测配置文件
-│   └── param_grid.yaml             # 参数优化配置
+│   └── README.md                   # 回测系统使用指南
 ├── ChanModel/                      # 机器学习模型
 │   └── Features.py                 # 特征计算
 ├── Trade/
@@ -112,7 +113,7 @@ RECIPIENT_EMAIL=recipient@example.com
 - **港股扫描（可交易）**: 
   - 模拟模式: `python futu_hk_visual_trading_fixed.py --tag core_scan`
   - 真实交易: `python futu_hk_visual_trading_fixed.py --tag cas_execute`
-- **手动启动**: `./run_cn_stock_scan.sh`
+- **手动启动**: `./scripts/run_scheduled_scan.sh`
 
 ### 6. 定时任务
 使用crontab设置定时任务：
@@ -121,7 +122,7 @@ RECIPIENT_EMAIL=recipient@example.com
 crontab -e
 
 # 添加以下内容（根据实际路径调整）
-*/5 * * * 1-5 /path/to/Chanlun_Bot/run_cn_stock_scan.sh
+*/5 * * * 1-5 /path/to/Chanlun_Bot/scripts/run_scheduled_scan.sh
 ```
 
 ## 📋 功能模块说明
@@ -130,6 +131,7 @@ crontab -e
 - **A股程序**: 扫描A股缠论买卖点，支持1买、2买、3买、1卖、2卖、3卖，仅通过邮件发送报告
 - **港股程序**: 基于Futu API的港股缠论分析，支持真实交易执行（买入/卖出订单）
 - **视觉评分**: 使用大模型对缠论图表进行质量评分，确保信号质量
+- **快速通道**: 评分≥0.9的信号立即执行，评分<0.9的信号按分数排序后执行
 
 ### 机器学习与优化
 - **特征提取**: 自动计算500+缠论特征，支持自定义特征扩展
@@ -148,14 +150,13 @@ crontab -e
 - **CAS预判**: 港股15:55高频预判扫描，为16:00-16:10收盘竞价提前准备
 - **30M对齐**: 精确对齐30分钟K线周期，确保信号生成时机准确
 - **持仓优先**: 优先处理持仓股票的信号，提高风险控制效率
+- **开盘跳空**: 09:26开盘前扫描，及时响应隔夜消息造成的跳空缺口
 
 ### 配置文件
 - **`.env`**: 存储Google Gemini和DashScope API密钥
 - **`email_config.env`**: 邮件服务器和账户配置
 - **`config.py`**: 交易参数和策略配置
-- **`scheduler_config.py`**: 扫描时间调度配置
-- **`backtest_config.yaml`**: 回测参数配置
-- **`param_grid.yaml`**: 参数优化范围配置
+- **`scheduler_config.py`**: 扫描时间调度配置（支持港股完整交易时段）
 
 ### 数据存储
 - **`charts/`**: 存储生成的缠论分析图表
@@ -164,6 +165,7 @@ crontab -e
 
 ### 回测系统
 - **`backtesting/`**: 独立的回测框架，支持策略验证和参数优化
+- **`enhanced_backtester.py`**: 增强版回测引擎，精确计算港股交易成本
 - **`reports/`**: 包含详细的回测报告和测试结果
 
 ## 🛡️ 开发原则
@@ -182,6 +184,7 @@ crontab -e
 - [快速上手指南](./reports/quick_guide.md)
 - [交易策略更新说明](./reports/TRADING_STRATEGY_UPDATE_2026-02-26.md)
 - [优化扫描方案](./reports/optimized_scan_plan.md)
+- [港股回测方案](./reports/HK_BACKTEST_PLAN.md)
 
 ## 📞 联系方式
 
