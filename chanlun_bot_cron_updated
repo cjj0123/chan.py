@@ -1,9 +1,0 @@
-# HK Stock Visual Trading Scan: 9:30-16:00 every 30 minutes on trading days (Mon-Fri)
-0,30 9-15 * * 1-5 python3 /Users/jijunchen/Documents/Projects/Chanlun_Bot/futu_hk_visual_trading_fixed.py
-0 16 * * 1-5 python3 /Users/jijunchen/Documents/Projects/Chanlun_Bot/futu_hk_visual_trading_fixed.py
-
-# CN Stock Visual Trading Scan: 9:26, 9:31, 10:01, 10:31, 11:01, 11:31, 13:01, 13:31, 14:01, 14:31, 15:01 on trading days (Mon-Fri)
-26 9 * * 1-5 python3 /Users/jijunchen/Documents/Projects/Chanlun_Bot/cn_stock_visual_trading.py
-31 9,10,11 * * 1-5 python3 /Users/jijunchen/Documents/Projects/Chanlun_Bot/cn_stock_visual_trading.py
-1 10,11,13,14,15 * * 1-5 python3 /Users/jijunchen/Documents/Projects/Chanlun_Bot/cn_stock_visual_trading.py
-31 13,14 * * 1-5 python3 /Users/jijunchen/Documents/Projects/Chanlun_Bot/cn_stock_visual_trading.py

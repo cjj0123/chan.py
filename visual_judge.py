@@ -8,8 +8,8 @@ from PIL import Image
 import re
 from dotenv import load_dotenv
 
-# 加载环境变量
-load_dotenv()
+# 加载环境变量 - 确保从项目根目录加载 .env
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), 'email_config.env'))
 
 # 尝试导入 google.genai (Gemini)
@@ -32,9 +32,20 @@ except ImportError:
     print("⚠️ dashscope 未安装，Qwen 模型不可用。")
     print("   安装命令: pip install dashscope")
 
-# API 密钥配置
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
+# API 密钥配置 - 从 .env 文件强制加载，忽略系统环境变量
+env_path = os.path.join(os.path.dirname(__file__), '.env')
+if os.path.exists(env_path):
+    with open(env_path, 'r') as f:
+        for line in f:
+            if line.strip() and not line.startswith('#'):
+                key, value = line.strip().split('=', 1)
+                if key == 'GOOGLE_API_KEY':
+                    GOOGLE_API_KEY = value
+                elif key == 'DASHSCOPE_API_KEY':
+                    DASHSCOPE_API_KEY = value
+else:
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+    DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 
 MASTER_PROMPT = """系统角色定义
 你是一位精通“缠论（Chanlun）”的量化交易专家，具备严密的视觉推理能力。你的任务是客观评估由算法在我们提供的K线图上识别出的特定缠论买卖信号（区间套与MACD动力学）。

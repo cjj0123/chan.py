@@ -13,7 +13,6 @@ import subprocess
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import asyncio
-from parallel_kline_fetcher import ParallelKLineFetcher
 import aiohttp
 
 from datetime import datetime, timedelta
@@ -95,12 +94,8 @@ class FutuHKVisualTrading:
         # 缠论配置 - 启用MACD计算（严格模式 + 线段）
         self.chan_config = CChanConfig(CHAN_CONFIG)
         
-        # 初始化并行K线获取器
-        self.kline_fetcher = ParallelKLineFetcher(self.chan_config, max_workers=2)
-        
-        # 设置缓存有效期为10分钟，以平衡实时性和性能
-        from kline_raw_cache import kline_raw_cache
-        kline_raw_cache.cache_duration = 10 * 60  # 10分钟
+        # 移除并行K线获取器，改用顺序获取以确保数据实时性
+        # 不设置缓存，确保每次获取最新数据（与A股系统保持一致）
         
         # 视觉评分器
         self.visual_judge = VisualJudge()
@@ -402,10 +397,8 @@ class FutuHKVisualTrading:
             分析结果字典
         """
         try:
-            # 获取30分钟和5分钟K线数据（分别获取）
+            # 获取30分钟和5分钟K线数据（分别获取，使用不同的时间范围）
             end_time = datetime.now()
-            start_time = end_time - timedelta(days=30)  # 30天数据用于30M分析
-            start_time_str = start_time.strftime("%Y-%m-%d")
             
             # 标准化结束时间到最近的5分钟边界，以提高缓存命中率
             # 例如：10:34:23 -> 10:35:00
@@ -413,17 +406,38 @@ class FutuHKVisualTrading:
             end_time_rounded = end_time.replace(minute=minutes, second=0, microsecond=0)
             end_time_str = end_time_rounded.strftime("%Y-%m-%d %H:%M:%S")
             
-            # 使用并行获取器获取30M和5M数据
-            async def _fetch_data_async():
-                return await self.kline_fetcher.fetch_both_levels(code, start_time_str, end_time_str)
+            # 30M数据使用30天范围（历史数据充足）
+            start_time_30m = end_time - timedelta(days=30)
+            start_time_30m_str = start_time_30m.strftime("%Y-%m-%d")
             
-            # 运行异步函数
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            # 5M数据使用7天范围（避免Futu API的1000根K线限制）
+            start_time_5m = end_time - timedelta(days=7)
+            start_time_5m_str = start_time_5m.strftime("%Y-%m-%d")
+            
+            # 顺序获取30M和5M数据（与A股系统保持一致）
             try:
-                chan_30m, chan_5m = loop.run_until_complete(_fetch_data_async())
-            finally:
-                loop.close()
+                # 获取30M数据
+                chan_30m = CChan(
+                    code=code,
+                    begin_time=start_time_30m_str,
+                    end_time=end_time_str,
+                    data_src=DATA_SRC.FUTU,
+                    lv_list=[KL_TYPE.K_30M],
+                    config=self.chan_config
+                )
+                
+                # 获取5M数据（使用7天范围确保获取最新数据）
+                chan_5m = CChan(
+                    code=code,
+                    begin_time=start_time_5m_str,
+                    end_time=end_time_str,
+                    data_src=DATA_SRC.FUTU,
+                    lv_list=[KL_TYPE.K_5M],
+                    config=self.chan_config
+                )
+            except Exception as e:
+                logger.error(f"获取K线数据异常 {code}: {e}")
+                return None
             
             # 检查30M数据是否足够
             if chan_30m is None:
