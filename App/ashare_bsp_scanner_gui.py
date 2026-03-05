@@ -224,6 +224,172 @@ class ScanThread(QThread):
         self.finished.emit(success_count, fail_count)
 
 
+class OfflineScanThread(QThread):
+    """
+    离线批量扫描股票的后台线程
+    
+    在独立线程中遍历股票列表，从SQLite数据库读取K线数据进行缠论分析，
+    检测最近3天内是否出现买点。
+    
+    Signals:
+        progress: (int, int, str) 当前进度、总数、当前股票信息
+        found_signal: (dict) 发现买点时发出，包含股票详情和 CChan 对象
+        finished: (int, int) 扫描完成，返回成功数和失败数
+        log_signal: (str) 日志消息
+    """
+    progress = pyqtSignal(int, int, str)
+    found_signal = pyqtSignal(dict)
+    finished = pyqtSignal(int, int)
+    log_signal = pyqtSignal(str)
+    
+    def __init__(self, stock_list, config, days=365):
+        """
+        初始化离线扫描线程
+        
+        Args:
+            stock_list: pd.DataFrame, 待扫描的股票列表
+            config: CChanConfig, 缠论配置
+            days: int, 获取多少天的历史数据，默认365天
+        """
+        super().__init__()
+        self.stock_list = stock_list
+        self.config = config
+        self.days = days
+        self.is_running = True
+        
+    def stop(self):
+        """停止扫描，设置标志位让 run() 循环退出"""
+        self.is_running = False
+        
+    def run(self):
+        """
+        线程主函数，遍历股票列表进行缠论分析
+        
+        扫描逻辑:
+            1. 跳过无K线数据的股票
+            2. 跳过停牌超过15天的股票
+            3. 检测最近3天内是否出现买点
+            4. 发现买点时通过 found_signal 发出通知
+        """
+        begin_time = (datetime.now() - timedelta(days=self.days)).strftime("%Y-%m-%d")
+        end_time = datetime.now().strftime("%Y-%m-%d")
+        total = len(self.stock_list)
+        success_count = 0
+        fail_count = 0
+        
+        for idx, row in self.stock_list.iterrows():
+            if not self.is_running:
+                break
+                
+            code = row['代码']
+            name = row['名称']
+            self.progress.emit(idx + 1, total, f"{code} {name}")
+            self.log_signal.emit(f"🔍 扫描 {code} {name}...")
+            
+            try:
+                chan = CChan(
+                    code=code,
+                    begin_time=begin_time,
+                    end_time=end_time,
+                    data_src=DATA_SRC.CUSTOM,  # 使用自定义数据源（SQLite）
+                    lv_list=[KL_TYPE.K_DAY],
+                    config=self.config,
+                    autype=AUTYPE.QFQ,
+                )
+                
+                # 检查最近15天是否有数据
+                if len(chan[0]) == 0:
+                    fail_count += 1
+                    self.log_signal.emit(f"⏭️ {code} {name}: 无K线数据")
+                    continue
+                last_klu = chan[0][-1][-1]
+                last_time = last_klu.time
+                last_date = datetime(last_time.year, last_time.month, last_time.day)
+                if (datetime.now() - last_date).days > 15:
+                    fail_count += 1
+                    self.log_signal.emit(f"⏸️ {code} {name}: 停牌超过15天")
+                    continue
+                    
+                success_count += 1
+                
+                # 检查是否有买点（只找最近3天内出现的买点）
+                bsp_list = chan.get_latest_bsp(number=0)
+                cutoff_date = datetime.now() - timedelta(days=3)
+                buy_points = [
+                    bsp for bsp in bsp_list
+                    if bsp.is_buy and datetime(bsp.klu.time.year, bsp.klu.time.month, bsp.klu.time.day) >= cutoff_date
+                ]
+                
+                if buy_points:
+                    # 获取最近的买点
+                    latest_buy = buy_points[0]
+                    self.log_signal.emit(f"✅ {code} {name}: 发现买点 {latest_buy.type2str()}")
+                    self.found_signal.emit({
+                        'code': code,
+                        'name': name,
+                        'price': row['最新价'],
+                        'change': row['涨跌幅'],
+                        'bsp_type': latest_buy.type2str(),
+                        'bsp_time': str(latest_buy.klu.time),
+                        'chan': chan,
+                    })
+                else:
+                    self.log_signal.emit(f"➖ {code} {name}: 无近期买点")
+            except Exception as e:
+                fail_count += 1
+                self.log_signal.emit(f"❌ {code} {name}: {str(e)[:50]}")
+                continue
+                
+        self.finished.emit(success_count, fail_count)
+
+
+class OfflineSingleAnalysisThread(QThread):
+    """
+    离线单只股票分析的后台线程
+
+    用于分析用户手动输入的股票代码，从SQLite数据库读取数据，避免阻塞 UI。
+
+    Signals:
+        finished: (CChan) 分析完成，返回 CChan 对象
+        error: (str) 分析出错时返回错误信息
+    """
+    finished = pyqtSignal(object)
+    error = pyqtSignal(str)
+
+    def __init__(self, code, config, days=365):
+        """
+        初始化分析线程
+
+        Args:
+            code: str, 股票代码（如 '000001'）
+            config: CChanConfig, 缠论配置
+            days: int, 获取多少天的历史数据
+        """
+        super().__init__()
+        self.code = code
+        self.config = config
+        self.days = days
+
+    def run(self):
+        """执行缠论分析，完成后通过信号返回结果"""
+        try:
+            begin_time = (datetime.now() - timedelta(days=self.days)).strftime("%Y-%m-%d")
+            end_time = datetime.now().strftime("%Y-%m-%d")
+
+            chan = CChan(
+                code=self.code,
+                begin_time=begin_time,
+                end_time=end_time,
+                data_src=DATA_SRC.CUSTOM,  # 使用自定义数据源（SQLite）
+                lv_list=[KL_TYPE.K_DAY],
+                config=self.config,
+                autype=AUTYPE.QFQ,
+            )
+            self.finished.emit(chan)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
 class SingleAnalysisThread(QThread):
     """
     单只股票分析的后台线程
@@ -363,6 +529,19 @@ class AkshareGUI(QMainWindow):
         self.bi_strict_cb = QCheckBox("笔严格模式")
         self.bi_strict_cb.setChecked(True)
         scan_layout.addWidget(self.bi_strict_cb)
+
+        # 在线/离线模式选择
+        mode_layout = QHBoxLayout()
+        mode_layout.addWidget(QLabel("数据源模式:"))
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(["在线 (AKShare)", "离线 (SQLite)"])
+        mode_layout.addWidget(self.mode_combo)
+        scan_layout.addLayout(mode_layout)
+
+        # 更新本地数据库按钮
+        self.update_db_btn = QPushButton("更新本地数据库")
+        self.update_db_btn.clicked.connect(self.update_local_database)
+        scan_layout.addWidget(self.update_db_btn)
 
         # 扫描按钮
         btn_layout = QHBoxLayout()
@@ -607,14 +786,49 @@ class AkshareGUI(QMainWindow):
         self.statusBar.showMessage(f'获取到 {len(stock_list)} 只可交易股票，开始扫描...')
         self.progress_bar.setMaximum(len(stock_list))
 
-        # 启动扫描线程
+        # 根据模式选择启动不同的扫描线程
         config = self.get_chan_config()
-        self.scan_thread = ScanThread(stock_list, config, days=365)
+        if self.mode_combo.currentText() == "离线 (SQLite)":
+            self.scan_thread = OfflineScanThread(stock_list, config, days=365)
+        else:
+            self.scan_thread = ScanThread(stock_list, config, days=365)
+            
         self.scan_thread.progress.connect(self.on_scan_progress)
         self.scan_thread.found_signal.connect(self.on_buy_point_found)
         self.scan_thread.finished.connect(self.on_scan_finished)
         self.scan_thread.log_signal.connect(self.on_log_message)
         self.scan_thread.start()
+
+    def update_local_database(self):
+        """更新本地数据库"""
+        self.update_db_btn.setEnabled(False)
+        self.statusBar.showMessage('开始下载并更新本地数据库...')
+        
+        # 获取所有可交易股票
+        stock_list = get_tradable_stocks()
+        if stock_list.empty:
+            QMessageBox.warning(self, "警告", "获取股票列表失败")
+            self.update_db_btn.setEnabled(True)
+            return
+            
+        # 启动后台线程下载数据
+        from DataAPI.SQLiteAPI import download_and_save_all_stocks
+        from threading import Thread
+        
+        def download_task():
+            try:
+                download_and_save_all_stocks(stock_list['代码'].tolist())
+                self.statusBar.showMessage(f'本地数据库更新完成！共处理 {len(stock_list)} 只股票。')
+                self.log_text.append("✅ 本地数据库更新完成！")
+            except Exception as e:
+                self.statusBar.showMessage(f'更新失败: {str(e)}')
+                self.log_text.append(f"❌ 更新失败: {str(e)}")
+            finally:
+                self.update_db_btn.setEnabled(True)
+                
+        thread = Thread(target=download_task)
+        thread.daemon = True
+        thread.start()
 
     def stop_scan(self):
         """停止扫描"""
@@ -685,7 +899,10 @@ class AkshareGUI(QMainWindow):
         self.statusBar.showMessage(f'正在分析 {code}...')
 
         config = self.get_chan_config()
-        self.analysis_thread = SingleAnalysisThread(code, config, days=365)
+        if self.mode_combo.currentText() == "离线 (SQLite)":
+            self.analysis_thread = OfflineSingleAnalysisThread(code, config, days=365)
+        else:
+            self.analysis_thread = SingleAnalysisThread(code, config, days=365)
         self.analysis_thread.finished.connect(self.on_analysis_finished)
         self.analysis_thread.error.connect(self.on_analysis_error)
         self.analysis_thread.start()
