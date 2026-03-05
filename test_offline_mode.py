@@ -15,7 +15,7 @@ def test_sqlite_api():
     print("测试 SQLiteAPI...")
     
     # 创建 SQLiteAPI 实例，使用数据库中存在的代码
-    api = SQLiteAPI("TEST.001", k_type=KL_TYPE.K_DAY, begin_date="2024-01-01", end_date="2024-01-05", autype=AUTYPE.QFQ)
+    api = SQLiteAPI("SZ.300772", k_type=KL_TYPE.K_DAY, begin_date="2025-01-01", end_date="2026-12-31", autype=AUTYPE.QFQ)
     
     # 获取数据
     kl_data = list(api.get_kl_data())
@@ -36,9 +36,9 @@ def test_chan_with_sqlite():
         chan_config = CChanConfig()
         # 使用字符串方式指定 custom 数据源
         chan = CChan(
-            code="TEST.001",
-            begin_time="2024-01-01",
-            end_time="2024-01-05",
+            code="SZ.300772",
+            begin_time="2025-01-01",
+            end_time="2026-12-31",
             data_src="custom:SQLiteAPI.SQLiteAPI",  # 正确的方式
             lv_list=[KL_TYPE.K_DAY],
             config=chan_config,

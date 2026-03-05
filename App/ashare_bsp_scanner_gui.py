@@ -34,7 +34,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QComboBox, QCheckBox, QGroupBox,
     QMessageBox, QStatusBar, QSplitter, QTableWidget, QTableWidgetItem,
-    QProgressBar, QHeaderView, QTextEdit
+    QProgressBar, QHeaderView, QTextEdit, QSpinBox
 )
 from PyQt6.QtCore import QDate, Qt, QThread, pyqtSignal
 
@@ -595,6 +595,7 @@ class AkshareGUI(QMainWindow):
         - 左侧面板: 扫描控制、单股输入、买点列表、扫描日志
         - 右侧面板: 图表显示区域，支持缩放和导航
     """
+    log_signal = pyqtSignal(str)
 
     def __init__(self):
         """初始化主窗口"""
@@ -604,6 +605,7 @@ class AkshareGUI(QMainWindow):
         self.analysis_thread = None  # 单股分析线程
         self.stock_cache = {}  # 缓存已分析的股票 {code: CChan}
         self.futu_monitor = None  # 富途监控器
+        self.log_signal.connect(self.on_log_message)
         self.init_ui()
 
     def init_ui(self):
@@ -659,6 +661,16 @@ class AkshareGUI(QMainWindow):
         mode_layout.addWidget(self.mode_combo)
         scan_layout.addLayout(mode_layout)
 
+        # 数据下载时间设置
+        time_layout = QHBoxLayout()
+        time_layout.addWidget(QLabel("数据时间范围:"))
+        self.days_input = QSpinBox()
+        self.days_input.setRange(30, 1095)  # 30天到3年
+        self.days_input.setValue(365)  # 默认1年
+        self.days_input.setSuffix(" 天")
+        time_layout.addWidget(self.days_input)
+        scan_layout.addLayout(time_layout)
+        
         # 更新本地数据库按钮
         self.update_db_btn = QPushButton("更新本地数据库")
         self.update_db_btn.clicked.connect(self.update_local_database)
@@ -926,7 +938,9 @@ class AkshareGUI(QMainWindow):
     def update_local_database(self):
         """更新本地数据库"""
         self.update_db_btn.setEnabled(False)
-        self.statusBar.showMessage('开始下载并更新本地数据库...')
+        days = self.days_input.value()
+        self.statusBar.showMessage(f'开始下载并更新本地数据库... (数据时间范围: {days} 天)')
+        self.log_text.append(f"🔄 开始更新本地数据库，下载最近 {days} 天的数据...")
         
         # 优先使用富途自选股进行数据库更新
         stock_list = get_futu_watchlist_stocks()
@@ -945,7 +959,13 @@ class AkshareGUI(QMainWindow):
                     self.log_text.append("❌ 股票列表为空，无法更新数据库")
                 else:
                     stock_codes = stock_list['代码'].tolist()
-                    download_and_save_all_stocks(stock_codes)
+                    self.log_text.append(f"📊 准备下载 {len(stock_codes)} 只股票的数据...")
+                    
+                    # 修改 download_and_save_all_stocks 以支持日志回调
+                    def log_callback(msg):
+                        self.log_signal.emit(msg)
+                    
+                    download_and_save_all_stocks(stock_codes, days=days, log_callback=log_callback)
                     
                     # 统计实际下载成功的股票
                     from Trade.db_util import CChanDB
@@ -953,18 +973,35 @@ class AkshareGUI(QMainWindow):
                     downloaded_codes = db.execute_query("SELECT DISTINCT code FROM kline_day")['code'].tolist()
                     success_count = len(downloaded_codes)
                     
+                    # 统计各市场数据量
+                    market_stats = {}
+                    total_klines = 0
+                    for code in downloaded_codes:
+                        count = db.execute_query(f"SELECT COUNT(*) as cnt FROM kline_day WHERE code = '{code}'")['cnt'].iloc[0]
+                        total_klines += count
+                        market = code.split('.')[0]
+                        market_stats[market] = market_stats.get(market, 0) + 1
+                    
                     self.statusBar.showMessage(f'本地数据库更新完成！成功下载 {success_count}/{len(stock_codes)} 只股票。')
-                    self.log_text.append(f"✅ 本地数据库更新完成！成功下载 {success_count}/{len(stock_codes)} 只股票。")
+                    self.log_text.append(f"✅ 本地数据库更新完成！")
+                    self.log_text.append(f"   • 成功下载: {success_count} 只股票")
+                    self.log_text.append(f"   • 总K线数: {total_klines} 条")
+                    self.log_text.append(f"   • 市场分布: {', '.join([f'{k}:{v}' for k, v in market_stats.items()])}")
                     
                     # 显示失败的股票（如果有的话）
                     failed_codes = [code for code in stock_codes if code not in downloaded_codes]
                     if failed_codes:
-                        self.log_text.append(f"⚠️ 下载失败的股票 ({len(failed_codes)} 只): {', '.join(failed_codes[:10])}")
+                        self.log_text.append(f"⚠️ 下载失败的股票 ({len(failed_codes)} 只):")
+                        for i, code in enumerate(failed_codes[:10]):
+                            self.log_text.append(f"   • {code}")
                         if len(failed_codes) > 10:
-                            self.log_text.append(f"  ... 还有 {len(failed_codes) - 10} 只股票下载失败")
+                            self.log_text.append(f"   ... 还有 {len(failed_codes) - 10} 只股票下载失败")
+                            
             except Exception as e:
                 self.statusBar.showMessage(f'更新失败: {str(e)}')
                 self.log_text.append(f"❌ 更新失败: {str(e)}")
+                import traceback
+                self.log_text.append(f"   错误详情: {traceback.format_exc()}")
             finally:
                 self.update_db_btn.setEnabled(True)
                 

@@ -1,71 +1,76 @@
+#!/usr/bin/env python3
 """
-完整离线模式测试
+完整测试离线模式功能 - 测试所有17只股票
 """
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from DataAPI.SQLiteAPI import download_and_save_all_stocks
-from Common.CEnum import AUTYPE, KL_TYPE
+from DataAPI.SQLiteAPI import SQLiteAPI
+from Common.CEnum import AUTYPE, KL_TYPE, DATA_SRC
 from Chan import CChan
 from ChanConfig import CChanConfig
+from Trade.db_util import CChanDB
+import pandas as pd
 
-def test_download_data():
-    """测试下载数据到数据库"""
-    print("测试下载数据到数据库...")
+def test_all_stocks():
+    """测试所有数据库中的股票"""
+    print("=== 完整离线模式测试 ===")
     
-    # 下载测试数据
-    test_codes = ["TEST.001", "TEST.002"]
-    try:
-        download_and_save_all_stocks(test_codes, days=5)
-        print("✅ 数据下载成功")
-        return True
-    except Exception as e:
-        print(f"❌ 数据下载失败: {e}")
-        return False
-
-def test_offline_scan():
-    """测试离线扫描功能"""
-    print("\n测试离线扫描功能...")
+    # 获取所有有数据的股票
+    db = CChanDB()
+    df = db.execute_query('SELECT DISTINCT code FROM kline_day')
+    stock_codes = df['code'].tolist()
     
-    try:
-        # 创建配置
-        config = CChanConfig()
+    print(f"发现 {len(stock_codes)} 只股票有K线数据")
+    
+    success_count = 0
+    fail_count = 0
+    
+    for i, code in enumerate(stock_codes, 1):
+        print(f"\n[{i}/{len(stock_codes)}] 测试股票 {code}...")
         
-        # 创建 CChan 对象
-        chan = CChan(
-            code="TEST.001",
-            begin_time="2024-01-01",
-            end_time="2024-01-05",
-            data_src="custom:SQLiteAPI.SQLiteAPI",
-            lv_list=[KL_TYPE.K_DAY],
-            config=config,
-            autype=AUTYPE.QFQ,
-        )
-        
-        # 检查K线数量
-        kline_count = len(chan[0]) if len(chan.lv_list) > 0 else 0
-        print(f"✅ 成功创建 CChan 对象，包含 {kline_count} 个K线")
-        
-        if kline_count > 0:
-            return True
-        else:
-            print("❌ K线数量为0")
-            return False
+        try:
+            # 测试 SQLiteAPI
+            api = SQLiteAPI(code, k_type=KL_TYPE.K_DAY, begin_date="2025-01-01", end_date="2026-12-31", autype=AUTYPE.QFQ)
+            kl_data = list(api.get_kl_data())
+            if len(kl_data) == 0:
+                print(f"  ⚠️  {code}: SQLiteAPI 返回0根K线")
+                fail_count += 1
+                continue
             
-    except Exception as e:
-        print(f"❌ 离线扫描失败: {e}")
-        import traceback
-        traceback.print_exc()
+            # 测试 CChan 集成
+            chan_config = CChanConfig()
+            chan = CChan(
+                code=code,
+                begin_time="2025-01-01",
+                end_time="2026-12-31",
+                data_src="custom:SQLiteAPI.SQLiteAPI",
+                lv_list=[KL_TYPE.K_DAY],
+                config=chan_config,
+                autype=AUTYPE.QFQ,
+            )
+            
+            kline_count = len(chan[0]) if len(chan.lv_list) > 0 else 0
+            print(f"  ✅ {code}: 成功创建 CChan 对象，包含 {kline_count} 个K线 (原始 {len(kl_data)} 根)")
+            success_count += 1
+            
+        except Exception as e:
+            print(f"  ❌ {code}: 创建 CChan 失败 - {e}")
+            fail_count += 1
+    
+    print(f"\n=== 测试结果 ===")
+    print(f"成功: {success_count} 只股票")
+    print(f"失败: {fail_count} 只股票")
+    print(f"总计: {len(stock_codes)} 只股票")
+    
+    if fail_count == 0:
+        print("\n🎉 所有股票离线模式测试通过！")
+        return True
+    else:
+        print(f"\n⚠️  有 {fail_count} 只股票测试失败，请检查")
         return False
 
 if __name__ == "__main__":
-    print("=== 完整离线模式测试 ===")
-    
-    success1 = test_download_data()
-    success2 = test_offline_scan()
-    
-    if success1 and success2:
-        print("\n✅ 所有测试通过！离线模式完全正常。")
-    else:
-        print("\n❌ 测试失败，请检查实现。")
+    success = test_all_stocks()
+    sys.exit(0 if success else 1)

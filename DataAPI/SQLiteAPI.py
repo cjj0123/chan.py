@@ -128,13 +128,14 @@ class SQLiteAPI(CCommonStockApi):
         pass
 
 
-def download_and_save_all_stocks(stock_codes, days=365):
+def download_and_save_all_stocks(stock_codes, days=365, log_callback=None):
     """
     Download and save all stock data to SQLite database using multiple data sources
     
     Args:
         stock_codes: list of stock codes to download
         days: number of days to download, default 365
+        log_callback: optional callback function for logging messages
     """
     from datetime import datetime, timedelta
     from Trade.db_util import CChanDB
@@ -177,12 +178,21 @@ def download_and_save_all_stocks(stock_codes, days=365):
                     # 先删除该股票的旧数据
                     conn.execute("DELETE FROM kline_day WHERE code = ?", (code,))
                     df.to_sql('kline_day', conn, if_exists='append', index=False)
-                print(f"✅ 成功下载 {code} ({len(kl_data)} 条数据) - 数据源: {source_used}")
+                if log_callback:
+                    log_callback(f"✅ 成功下载 {code} ({len(kl_data)} 条数据) - 数据源: {source_used}")
+                else:
+                    print(f"✅ 成功下载 {code} ({len(kl_data)} 条数据) - 数据源: {source_used}")
             else:
-                print(f"⚠️  {code} 无有效数据")
+                if log_callback:
+                    log_callback(f"⚠️  {code} 无有效数据")
+                else:
+                    print(f"⚠️  {code} 无有效数据")
                 
         except Exception as e:
-            print(f"❌ 下载 {code} 失败: {e}")
+            if log_callback:
+                log_callback(f"❌ 下载 {code} 失败: {e}")
+            else:
+                print(f"❌ 下载 {code} 失败: {e}")
             continue
 
 def _download_us_stock_data(code, begin_time, end_time):
@@ -212,7 +222,7 @@ def _download_hk_stock_data(code, begin_time, end_time):
         if kl_data and len(kl_data) > 0:
             return kl_data, "Futu"
         else:
-            print(f"  ⚠️  Futu下载港股 {code} 成功但无有效数据")
+            print(f"  ℹ️  Futu下载港股 {code} 无历史数据（可能是新股或停牌）")
     except Exception as e:
         print(f"  ⚠️  Futu下载港股 {code} 失败: {e}")
     
@@ -224,12 +234,12 @@ def _download_hk_stock_data(code, begin_time, end_time):
         if kl_data and len(kl_data) > 0:
             return kl_data, "AKShare"
         else:
-            print(f"  ⚠️  AKShare下载港股 {code} 成功但无有效数据")
+            print(f"  ℹ️  AKShare下载港股 {code} 无历史数据")
     except Exception as e:
         print(f"  ⚠️  AKShare下载港股 {code} 失败: {e}")
     
     # 所有方法都失败
-    print(f"  ❌ 港股 {code} 所有数据源均无法获取有效数据")
+    print(f"  ℹ️  港股 {code} 无可用历史数据（不影响其他股票扫描）")
     return None, "None"
 
 def _download_a_stock_data(code, begin_time, end_time):
