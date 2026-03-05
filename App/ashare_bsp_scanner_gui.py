@@ -7,7 +7,7 @@ A股缠论买点扫描器 - Powered by chan.py
     - 可视化显示K线、笔、线段、中枢、买卖点、MACD等
 
 数据来源:
-    - 使用 akshare 获取A股实时行情和历史K线数据
+    - 使用 Futu 获取A股实时行情和历史K线数据（支持5分钟级别）
 
 过滤规则:
     - 剔除ST股票、科创板(688)、北交所、B股
@@ -16,7 +16,7 @@ A股缠论买点扫描器 - Powered by chan.py
 依赖:
     - PyQt6: GUI框架
     - matplotlib: 图表绑定
-    - akshare: A股数据接口
+    - futu: A股数据接口（支持5分钟级别）
     - chan.py: 缠论分析核心库
 
 使用方法:
@@ -279,7 +279,7 @@ class ScanThread(QThread):
                     code=code,
                     begin_time=begin_time,
                     end_time=end_time,
-                    data_src=DATA_SRC.AKSHARE,
+                    data_src=DATA_SRC.FUTU,
                     lv_list=[self.kl_type],
                     config=self.config,
                     autype=AUTYPE.QFQ,
@@ -671,7 +671,7 @@ class SingleAnalysisThread(QThread):
                 code=self.code,
                 begin_time=begin_time,
                 end_time=end_time,
-                data_src=DATA_SRC.AKSHARE,
+                data_src=DATA_SRC.FUTU,
                 lv_list=[self.get_timeframe_kl_type()],
                 config=self.config,
                 autype=AUTYPE.QFQ,
