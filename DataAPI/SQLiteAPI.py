@@ -208,18 +208,29 @@ def _download_hk_stock_data(code, begin_time, end_time):
     # 首先尝试Futu
     try:
         api = CFutuAPI(code, k_type=KL_TYPE.K_DAY, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
-        return _extract_kl_data(api, code), "Futu"
+        kl_data = _extract_kl_data(api, code)
+        if kl_data and len(kl_data) > 0:
+            return kl_data, "Futu"
+        else:
+            print(f"  ⚠️  Futu下载港股 {code} 成功但无有效数据")
     except Exception as e:
         print(f"  ⚠️  Futu下载港股 {code} 失败: {e}")
     
-    # Futu失败，尝试AKShare
+    # Futu失败或无数据，尝试AKShare
     try:
         akshare_code = convert_stock_code_for_akshare(code)
         api = CAkshare(akshare_code, k_type=KL_TYPE.K_DAY, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
-        return _extract_kl_data(api, code), "AKShare"
+        kl_data = _extract_kl_data(api, code)
+        if kl_data and len(kl_data) > 0:
+            return kl_data, "AKShare"
+        else:
+            print(f"  ⚠️  AKShare下载港股 {code} 成功但无有效数据")
     except Exception as e:
         print(f"  ⚠️  AKShare下载港股 {code} 失败: {e}")
-        return None, "None"
+    
+    # 所有方法都失败
+    print(f"  ❌ 港股 {code} 所有数据源均无法获取有效数据")
+    return None, "None"
 
 def _download_a_stock_data(code, begin_time, end_time):
     """下载A股数据 - 优先使用BaoStock，失败则使用AKShare"""

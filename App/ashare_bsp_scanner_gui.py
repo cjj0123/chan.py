@@ -944,9 +944,24 @@ class AkshareGUI(QMainWindow):
                     self.statusBar.showMessage('股票列表为空，无法更新数据库')
                     self.log_text.append("❌ 股票列表为空，无法更新数据库")
                 else:
-                    download_and_save_all_stocks(stock_list['代码'].tolist())
-                    self.statusBar.showMessage(f'本地数据库更新完成！共处理 {len(stock_list)} 只股票。')
-                    self.log_text.append(f"✅ 本地数据库更新完成！共处理 {len(stock_list)} 只股票。")
+                    stock_codes = stock_list['代码'].tolist()
+                    download_and_save_all_stocks(stock_codes)
+                    
+                    # 统计实际下载成功的股票
+                    from Trade.db_util import CChanDB
+                    db = CChanDB()
+                    downloaded_codes = db.execute_query("SELECT DISTINCT code FROM kline_day")['code'].tolist()
+                    success_count = len(downloaded_codes)
+                    
+                    self.statusBar.showMessage(f'本地数据库更新完成！成功下载 {success_count}/{len(stock_codes)} 只股票。')
+                    self.log_text.append(f"✅ 本地数据库更新完成！成功下载 {success_count}/{len(stock_codes)} 只股票。")
+                    
+                    # 显示失败的股票（如果有的话）
+                    failed_codes = [code for code in stock_codes if code not in downloaded_codes]
+                    if failed_codes:
+                        self.log_text.append(f"⚠️ 下载失败的股票 ({len(failed_codes)} 只): {', '.join(failed_codes[:10])}")
+                        if len(failed_codes) > 10:
+                            self.log_text.append(f"  ... 还有 {len(failed_codes) - 10} 只股票下载失败")
             except Exception as e:
                 self.statusBar.showMessage(f'更新失败: {str(e)}')
                 self.log_text.append(f"❌ 更新失败: {str(e)}")
