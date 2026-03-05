@@ -26,66 +26,114 @@ class CChanDB:
         self.init_db()
     
     def init_db(self):
-            """初始化数据库表结构"""
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # 交易信号表
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS trading_signals (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    stock_code TEXT NOT NULL,
-                    add_date TEXT NOT NULL,
-                    bstype TEXT NOT NULL,
-                    open_price REAL,
-                    quota REAL,
-                    model_score_before REAL,
-                    status TEXT DEFAULT 'pending'
-                )
-            ''')
-            
-            # 交易订单表
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS trading_orders (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    stock_code TEXT NOT NULL,
-                    side TEXT NOT NULL,
-                    price REAL NOT NULL,
-                    quantity INTEGER NOT NULL,
-                    status TEXT NOT NULL,
-                    add_time TEXT NOT NULL
-                )
-            ''')
-            
-            # 交易持仓表
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS trading_positions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    stock_code TEXT NOT NULL UNIQUE,
-                    quantity INTEGER NOT NULL,
-                    avg_cost REAL NOT NULL
-                )
-            ''')
-            
-            # K线数据表
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS kline_day (
-                    code TEXT NOT NULL,
-                    date TEXT NOT NULL,
-                    open REAL NOT NULL,
-                    high REAL NOT NULL,
-                    low REAL NOT NULL,
-                    close REAL NOT NULL,
-                    volume INTEGER NOT NULL,
-                    turnover REAL,
-                    turnrate REAL,
-                    PRIMARY KEY (code, date)
-                )
-            ''')
-            
-            conn.commit()
-            conn.close()
+        """初始化数据库表结构"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
         
+        # 交易信号表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS trading_signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                stock_code TEXT NOT NULL,
+                add_date TEXT NOT NULL,
+                bstype TEXT NOT NULL,
+                open_price REAL,
+                quota REAL,
+                model_score_before REAL,
+                status TEXT DEFAULT 'pending'
+            )
+        ''')
+        
+        # 交易订单表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS trading_orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                stock_code TEXT NOT NULL,
+                side TEXT NOT NULL,
+                price REAL NOT NULL,
+                quantity INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                add_time TEXT NOT NULL
+            )
+        ''')
+        
+        # 交易持仓表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS trading_positions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                stock_code TEXT NOT NULL UNIQUE,
+                quantity INTEGER NOT NULL,
+                avg_cost REAL NOT NULL
+            )
+        ''')
+        
+        # K线数据表 - 日线
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS kline_day (
+                code TEXT NOT NULL,
+                date TEXT NOT NULL,
+                open REAL NOT NULL,
+                high REAL NOT NULL,
+                low REAL NOT NULL,
+                close REAL NOT NULL,
+                volume INTEGER NOT NULL,
+                turnover REAL,
+                turnrate REAL,
+                PRIMARY KEY (code, date)
+            )
+        ''')
+        
+        # K线数据表 - 30分钟线
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS kline_30m (
+                code TEXT NOT NULL,
+                date TEXT NOT NULL,
+                open REAL NOT NULL,
+                high REAL NOT NULL,
+                low REAL NOT NULL,
+                close REAL NOT NULL,
+                volume INTEGER NOT NULL,
+                turnover REAL,
+                turnrate REAL,
+                PRIMARY KEY (code, date)
+            )
+        ''')
+        
+        # K线数据表 - 5分钟线  
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS kline_5m (
+                code TEXT NOT NULL,
+                date TEXT NOT NULL,
+                open REAL NOT NULL,
+                high REAL NOT NULL,
+                low REAL NOT NULL,
+                close REAL NOT NULL,
+                volume INTEGER NOT NULL,
+                turnover REAL,
+                turnrate REAL,
+                PRIMARY KEY (code, date)
+            )
+        ''')
+        
+        # K线数据表 - 1分钟线
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS kline_1m (
+                code TEXT NOT NULL,
+                date TEXT NOT NULL,
+                open REAL NOT NULL,
+                high REAL NOT NULL,
+                low REAL NOT NULL,
+                close REAL NOT NULL,
+                volume INTEGER NOT NULL,
+                turnover REAL,
+                turnrate REAL,
+                PRIMARY KEY (code, date)
+            )
+        ''')
+        
+        conn.commit()
+        conn.close()
+    
     def execute_query(self, query: str, params: tuple = ()) -> pd.DataFrame:
         """
         执行SQL查询并返回DataFrame
@@ -101,87 +149,6 @@ class CChanDB:
         df = pd.read_sql_query(query, conn, params=params)
         conn.close()
         return df
-    def _ensure_db_directory(self):
-        """确保数据库文件所在的目录存在。"""
-        db_dir = os.path.dirname(self.db_path)
-        if db_dir:
-            os.makedirs(db_dir, exist_ok=True)
-
-    def _init_database(self):
-        """初始化数据库表结构。"""
-        with sqlite3.connect(self.db_path) as conn:
-            cursor = conn.cursor()
-            
-            # 创建信号表
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS signals (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    code TEXT NOT NULL,
-                    signal_type TEXT NOT NULL,
-                    score REAL,
-                    chart_path TEXT,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    status TEXT DEFAULT 'active' -- active, executed, expired
-                )
-            ''')
-            
-            # 创建订单表
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS orders (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    code TEXT NOT NULL,
-                    action TEXT NOT NULL, -- BUY, SELL
-                    quantity INTEGER NOT NULL,
-                    price REAL NOT NULL,
-                    order_status TEXT DEFAULT 'pending', -- pending, filled, cancelled
-                    signal_id INTEGER,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY(signal_id) REFERENCES signals(id)
-                )
-            ''')
-            
-            # 创建持仓表
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS positions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    code TEXT NOT NULL UNIQUE,
-                    quantity INTEGER NOT NULL,
-                    avg_cost REAL NOT NULL,
-                    last_update DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-            
-            # 创建K线数据表
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS kline_day (
-                    code TEXT NOT NULL,
-                    date TEXT NOT NULL,
-                    open REAL NOT NULL,
-                    high REAL NOT NULL,
-                    low REAL NOT NULL,
-                    close REAL NOT NULL,
-                    volume INTEGER NOT NULL,
-                    turnover REAL,
-                    turnrate REAL,
-                    PRIMARY KEY (code, date)
-                )
-            ''')
-            
-            conn.commit()
-
-    def execute_query(self, query: str, params: tuple = ()) -> pd.DataFrame:
-        """
-        执行一个SQL查询并返回pandas DataFrame。
-
-        Args:
-            query: SQL查询语句。
-            params: 查询参数。
-
-        Returns:
-            查询结果的DataFrame。
-        """
-        with sqlite3.connect(self.db_path) as conn:
-            return pd.read_sql_query(query, conn, params=params)
 
     def save_signal(self, code: str, signal_type: str, score: float, chart_path: str) -> int:
         """
@@ -329,4 +296,3 @@ class CChanDB:
         if df.empty:
             return None
         return df.iloc[0].to_dict()
-
