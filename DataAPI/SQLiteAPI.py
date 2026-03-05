@@ -488,12 +488,21 @@ def _download_hk_stock_data_with_timeframe(code, begin_time, end_time, k_type):
     return None, "None"
 
 def _download_a_stock_data_with_timeframe(code, begin_time, end_time, k_type):
-    """下载A股数据（支持多时间级别） - 优先使用BaoStock，失败则使用AKShare"""
+    """下载A股数据（支持多时间级别） - 优先使用Futu，失败则使用BaoStock，再失败则使用AKShare"""
+    from DataAPI.FutuAPI import CFutuAPI
     from DataAPI.BaoStockAPI import CBaoStock
     from DataAPI.AkshareAPI import CAkshare
     from Common.CEnum import AUTYPE
     
-    # 首先尝试BaoStock
+    # 首先尝试Futu
+    try:
+        # Futu API可以直接使用 SH.600000 或 SZ.000001 格式
+        api = CFutuAPI(code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
+        return _extract_kl_data(api, code), "Futu"
+    except Exception as e:
+        print(f"  ⚠️  Futu下载A股 {code} {k_type} 失败: {e}")
+    
+    # Futu失败，尝试BaoStock
     try:
         # BaoStock需要完整的9位代码格式 (sh.600000 或 sz.000001)
         market, stock_num = code.split(".")
@@ -567,12 +576,21 @@ def _download_hk_stock_data(code, begin_time, end_time):
     return None, "None"
 
 def _download_a_stock_data(code, begin_time, end_time):
-    """下载A股数据 - 优先使用BaoStock，失败则使用AKShare"""
+    """下载A股数据 - 优先使用Futu，失败则使用BaoStock，再失败则使用AKShare"""
+    from DataAPI.FutuAPI import CFutuAPI
     from DataAPI.BaoStockAPI import CBaoStock
     from DataAPI.AkshareAPI import CAkshare
     from Common.CEnum import AUTYPE, KL_TYPE
     
-    # 首先尝试BaoStock
+    # 首先尝试Futu
+    try:
+        # Futu API可以直接使用 SH.600000 或 SZ.000001 格式
+        api = CFutuAPI(code, k_type=KL_TYPE.K_DAY, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
+        return _extract_kl_data(api, code), "Futu"
+    except Exception as e:
+        print(f"  ⚠️  Futu下载A股 {code} 失败: {e}")
+    
+    # Futu失败，尝试BaoStock
     try:
         # BaoStock需要完整的9位代码格式 (sh.600000 或 sz.000001)
         market, stock_num = code.split(".")

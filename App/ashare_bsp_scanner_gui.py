@@ -594,18 +594,20 @@ class OfflineSingleAnalysisThread(QThread):
     finished = pyqtSignal(object)
     error = pyqtSignal(str)
 
-    def __init__(self, code, config, days=365):
+    def __init__(self, code, config, kl_type, days=365):
         """
         初始化分析线程
 
         Args:
             code: str, 股票代码（如 '000001'）
             config: CChanConfig, 缠论配置
+            kl_type: KL_TYPE, 时间级别
             days: int, 获取多少天的历史数据
         """
         super().__init__()
         self.code = code
         self.config = config
+        self.kl_type = kl_type
         self.days = days
 
     def run(self):
@@ -619,7 +621,7 @@ class OfflineSingleAnalysisThread(QThread):
                 begin_time=begin_time,
                 end_time=end_time,
                 data_src="custom:SQLiteAPI.SQLiteAPI",  # 使用自定义数据源（SQLite）
-                lv_list=[self.get_timeframe_kl_type()],
+                lv_list=[self.kl_type],
                 config=self.config,
                 autype=AUTYPE.QFQ,
             )
@@ -647,18 +649,20 @@ class SingleAnalysisThread(QThread):
     finished = pyqtSignal(object)
     error = pyqtSignal(str)
 
-    def __init__(self, code, config, days=365):
+    def __init__(self, code, config, kl_type, days=365):
         """
         初始化分析线程
 
         Args:
             code: str, 股票代码（如 '000001'）
             config: CChanConfig, 缠论配置
+            kl_type: KL_TYPE, 时间级别
             days: int, 获取多少天的历史数据
         """
         super().__init__()
         self.code = code
         self.config = config
+        self.kl_type = kl_type
         self.days = days
 
     def run(self):
@@ -672,7 +676,7 @@ class SingleAnalysisThread(QThread):
                 begin_time=begin_time,
                 end_time=end_time,
                 data_src=DATA_SRC.FUTU,
-                lv_list=[self.get_timeframe_kl_type()],
+                lv_list=[self.kl_type],
                 config=self.config,
                 autype=AUTYPE.QFQ,
             )
@@ -1256,10 +1260,11 @@ class AkshareGUI(QMainWindow):
         self.statusBar.showMessage(f'正在分析 {code}...')
 
         config = self.get_chan_config()
+        kl_type = self.get_timeframe_kl_type()
         if self.mode_combo.currentText() == "离线 (SQLite)":
-            self.analysis_thread = OfflineSingleAnalysisThread(code, config, days=365)
+            self.analysis_thread = OfflineSingleAnalysisThread(code, config, kl_type, days=365)
         else:
-            self.analysis_thread = SingleAnalysisThread(code, config, days=365)
+            self.analysis_thread = SingleAnalysisThread(code, config, kl_type, days=365)
         self.analysis_thread.finished.connect(self.on_analysis_finished)
         self.analysis_thread.error.connect(self.on_analysis_error)
         self.analysis_thread.start()
@@ -1301,9 +1306,19 @@ class AkshareGUI(QMainWindow):
             fig_width = canvas_width / dpi
             fig_height = fig_width * 0.5  # 宽高比 2:1
 
+            # 根据时间级别设置合适的x_range值
+            current_kl_type = self.get_timeframe_kl_type()
+            x_range_map = {
+                KL_TYPE.K_DAY: 250,    # 日线显示250根K线
+                KL_TYPE.K_30M: 150,    # 30分钟显示150根K线
+                KL_TYPE.K_5M: 80,      # 5分钟显示80根K线
+                KL_TYPE.K_1M: 40,      # 1分钟显示40根K线
+            }
+            x_range = x_range_map.get(current_kl_type, 0)
+            
             plot_para = {
                 "figure": {
-                    "x_range": 200,
+                    "x_range": x_range,
                     "w": fig_width,
                     "h": fig_height,
                 }
