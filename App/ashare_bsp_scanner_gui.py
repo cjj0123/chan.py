@@ -928,8 +928,11 @@ class AkshareGUI(QMainWindow):
         self.update_db_btn.setEnabled(False)
         self.statusBar.showMessage('开始下载并更新本地数据库...')
         
-        # 获取所有可交易股票（现在会自动回退到测试股票列表）
-        stock_list = get_tradable_stocks()
+        # 优先使用富途自选股进行数据库更新
+        stock_list = get_futu_watchlist_stocks()
+        if stock_list.empty:
+            # 如果富途获取失败，回退到其他方法
+            stock_list = get_tradable_stocks()
         
         # 启动后台线程下载数据
         from DataAPI.SQLiteAPI import download_and_save_all_stocks

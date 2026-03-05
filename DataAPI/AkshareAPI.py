@@ -18,7 +18,14 @@ def create_item_dict(row, autype):
     else:
         dt = pd.to_datetime(str(date_val))
 
-    item[DATA_FIELD.FIELD_TIME] = CTime(dt.year, dt.month, dt.day, dt.hour, dt.minute)
+    # 处理 datetime.date 对象（只有年月日）和 datetime.datetime 对象（包含时分秒）
+    if hasattr(dt, 'hour') and hasattr(dt, 'minute'):
+        hour = dt.hour
+        minute = dt.minute
+    else:
+        hour = 0
+        minute = 0
+    item[DATA_FIELD.FIELD_TIME] = CTime(dt.year, dt.month, dt.day, hour, minute)
     
     # 提取价格
     o = str2float(row['开盘'])
@@ -45,7 +52,8 @@ def create_item_dict(row, autype):
     item[DATA_FIELD.FIELD_HIGH] = h
     item[DATA_FIELD.FIELD_LOW] = l
     item[DATA_FIELD.FIELD_CLOSE] = c
-    item[DATA_FIELD.FIELD_VOLUME] = str2float(row['成交量'])
+    # 安全获取成交量和成交额，如果不存在则设为0
+    item[DATA_FIELD.FIELD_VOLUME] = str2float(row.get('成交量', 0))
     item[DATA_FIELD.FIELD_TURNOVER] = str2float(row.get('成交额', 0))
 
     if '换手率' in row:
@@ -83,7 +91,7 @@ class CAkshare(CCommonStockApi):
                 # 优先使用新浪接口获取历史长数据
                 df = ak.stock_us_daily(symbol=symbol, adjust="qfq")
                 df['日期'] = pd.to_datetime(df['date'])
-                df = df.rename(columns={'open': '开盘', 'high': '最高', 'low': '最低', 'close': '收盘', 'volume': '成交量'})
+                df = df.rename(columns={'open': '开盘', 'high': '最高', 'low': '最低', 'close': '收盘', 'volume': '成交量', 'amount': '成交额'})
                 df = df[(df['日期'] >= pd.to_datetime(self.begin_date)) & (df['日期'] <= pd.to_datetime(self.end_date))]
 
             # 3. A股逻辑
