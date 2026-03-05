@@ -328,6 +328,8 @@ class ScanThread(QThread):
                 error_msg = str(e)
                 if "list index out of range" in error_msg:
                     self.log_signal.emit(f"❌ {code} {name}: 数据不足，无法分析")
+                elif "Broken pipe" in error_msg or "Errno 32" in error_msg:
+                    self.log_signal.emit(f"❌ {code} {name}: 数据处理中断，可能是分钟级别数据格式问题")
                 else:
                     self.log_signal.emit(f"❌ {code} {name}: {error_msg[:50]}")
                 continue
@@ -455,6 +457,8 @@ class OfflineScanThread(QThread):
                     self.log_signal.emit(f"❌ {code} {name}: 数据不足，无法分析")
                 elif "custom" in error_msg.lower():
                     self.log_signal.emit(f"❌ {code} {name}: 数据源错误，请检查数据库")
+                elif "Broken pipe" in error_msg or "Errno 32" in error_msg:
+                    self.log_signal.emit(f"❌ {code} {name}: 数据处理中断，可能是分钟级别数据格式问题")
                 else:
                     self.log_signal.emit(f"❌ {code} {name}: {error_msg[:50]}")
                 continue

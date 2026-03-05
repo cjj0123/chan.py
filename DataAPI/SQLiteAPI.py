@@ -62,6 +62,10 @@ def create_item_dict_from_db(row, autype):
     else:
         dt = date_val
     
+    # 检查是否是分钟级别数据但只有日期信息
+    # 如果是这种情况，我们需要确保时间戳是唯一的
+    # 从调用上下文获取k_type信息比较困难，所以我们在SQLiteAPI.get_kl_data中处理
+    
     item[DATA_FIELD.FIELD_TIME] = CTime(dt.year, dt.month, dt.day, dt.hour, dt.minute)
     
     # 提取价格
@@ -134,8 +138,44 @@ class SQLiteAPI(CCommonStockApi):
         df = self.db.execute_query(sql)
         if not df.empty:
             # 遍历生成 K 线单元
+            prev_time = None
+            minute_counter = 0  # 用于为分钟级别数据生成唯一时间戳
+            
+            # 判断是否是分钟级别
+            is_minute_level = self.k_type in [KL_TYPE.K_1M, KL_TYPE.K_5M, KL_TYPE.K_15M, KL_TYPE.K_30M, KL_TYPE.K_60M]
+            
             for _, row in df.iterrows():
-                yield CKLine_Unit(create_item_dict_from_db(row, self.autype))
+                klu = CKLine_Unit(create_item_dict_from_db(row, self.autype))
+                
+                # 对于分钟级别数据，如果时间戳只有日期部分（小时和分钟都是0），则需要生成合理的时间戳
+                if is_minute_level and klu.time.hour == 0 and klu.time.minute == 0:
+                    # 检查原始日期字符串是否包含时间信息
+                    date_str = row['date']
+                    if isinstance(date_str, str) and (' ' in date_str and ':' in date_str):
+                        # 如果原始数据包含时间信息，保持原样
+                        pass
+                    else:
+                        # 如果原始数据只有日期，为分钟级别数据生成递增的时间戳
+                        # 从9:30开始（美股交易时间）
+                        hour = 9 + (minute_counter // 60)
+                        minute = 30 + (minute_counter % 60)
+                        if minute >= 60:
+                            minute -= 60
+                            hour += 1
+                        # 美股交易时间通常是9:30-16:00，所以限制在合理范围内
+                        if hour > 16:
+                            hour = 9
+                            minute = 30
+                            minute_counter = 0
+                        klu.time = CTime(klu.time.year, klu.time.month, klu.time.day, hour, minute)
+                        minute_counter += 5  # 假设5分钟间隔
+                
+                # 检查时间是否严格递增，避免重复时间戳导致的错误
+                if prev_time is not None and klu.time <= prev_time:
+                    # 如果时间不严格递增，跳过这条数据
+                    continue
+                prev_time = klu.time
+                yield klu
         else:
             return
 
