@@ -45,6 +45,8 @@ import matplotlib.pyplot as plt
 
 import akshare as ak
 import pandas as pd
+import os
+import yaml
 
 from Chan import CChan
 from ChanConfig import CChanConfig
@@ -102,11 +104,12 @@ def get_tradable_stocks():
     """
     获取所有可交易的A股股票列表
     
-    优先尝试从富途自选股列表获取，如果失败则回退到akshare API
+    优先尝试从富途自选股列表获取，如果失败则回退到akshare API，
+    如果都失败则使用测试股票列表
     
     Returns:
         pd.DataFrame: 包含 ['代码', '名称', '最新价', '涨跌幅'] 列的股票列表
-                      获取失败时返回空 DataFrame
+                      获取失败时返回测试股票列表
     """
     # 首先尝试从富途自选股获取
     df = get_futu_watchlist_stocks()
@@ -142,11 +145,40 @@ def get_tradable_stocks():
         # 7. 剔除新股（上市不足60天的，这里简化处理，只保留有数据的）
         df = df[df['最新价'] > 0]
 
-        return df[['代码', '名称', '最新价', '涨跌幅']].reset_index(drop=True)
+        if not df.empty:
+            return df[['代码', '名称', '最新价', '涨跌幅']].reset_index(drop=True)
+            
     except Exception as e:
         print(f"获取股票列表失败: {e}")
-        # 尝试返回一个空的DataFrame但包含正确的列名
-        return pd.DataFrame(columns=['代码', '名称', '最新价', '涨跌幅'])
+    
+    # 如果所有方法都失败，使用测试股票列表
+    try:
+        import yaml
+        test_config_path = "Config/test_stocks.yaml"
+        if os.path.exists(test_config_path):
+            with open(test_config_path, 'r', encoding='utf-8') as f:
+                test_config = yaml.safe_load(f)
+                if test_config and 'test_stocks' in test_config:
+                    test_stocks = test_config['test_stocks']
+                    codes = [stock['code'] for stock in test_stocks]
+                    names = [stock['name'] for stock in test_stocks]
+                    return pd.DataFrame({
+                        '代码': codes,
+                        '名称': names,
+                        '最新价': [0.0] * len(codes),
+                        '涨跌幅': [0.0] * len(codes)
+                    })
+    except Exception as e:
+        print(f"加载测试股票列表失败: {e}")
+    
+    # 最后的备选方案：返回默认的5只股票
+    default_stocks = ['000001', '600000', '600519', '000858', '601318']
+    return pd.DataFrame({
+        '代码': default_stocks,
+        '名称': ['平安银行', '浦发银行', '贵州茅台', '五粮液', '中国平安'],
+        '最新价': [0.0] * len(default_stocks),
+        '涨跌幅': [0.0] * len(default_stocks)
+    })
 
 def get_local_stock_list():
     """
@@ -291,7 +323,11 @@ class ScanThread(QThread):
                     self.log_signal.emit(f"➖ {code} {name}: 无近期买点")
             except Exception as e:
                 fail_count += 1
-                self.log_signal.emit(f"❌ {code} {name}: {str(e)[:50]}")
+                error_msg = str(e)
+                if "list index out of range" in error_msg:
+                    self.log_signal.emit(f"❌ {code} {name}: 数据不足，无法分析")
+                else:
+                    self.log_signal.emit(f"❌ {code} {name}: {error_msg[:50]}")
                 continue
 
         self.finished.emit(success_count, fail_count)
@@ -371,7 +407,7 @@ class OfflineScanThread(QThread):
                 )
                 
                 # 检查最近15天是否有数据
-                if len(chan[0]) == 0:
+                if len(chan[0]) == 0 or len(chan[0][-1]) == 0:
                     fail_count += 1
                     self.log_signal.emit(f"⏭️ {code} {name}: 无K线数据")
                     continue
@@ -410,7 +446,13 @@ class OfflineScanThread(QThread):
                     self.log_signal.emit(f"➖ {code} {name}: 无近期买点")
             except Exception as e:
                 fail_count += 1
-                self.log_signal.emit(f"❌ {code} {name}: {str(e)[:50]}")
+                error_msg = str(e)
+                if "list index out of range" in error_msg:
+                    self.log_signal.emit(f"❌ {code} {name}: 数据不足，无法分析")
+                elif "custom" in error_msg.lower():
+                    self.log_signal.emit(f"❌ {code} {name}: 数据源错误，请检查数据库")
+                else:
+                    self.log_signal.emit(f"❌ {code} {name}: {error_msg[:50]}")
                 continue
                 
         self.finished.emit(success_count, fail_count)
@@ -460,7 +502,13 @@ class OfflineSingleAnalysisThread(QThread):
             )
             self.finished.emit(chan)
         except Exception as e:
-            self.error.emit(str(e))
+            error_msg = str(e)
+            if "list index out of range" in error_msg:
+                self.error.emit("数据不足，无法分析。请确保数据库中有足够的历史K线数据（至少30天以上）。")
+            elif "custom" in error_msg.lower():
+                self.error.emit("数据源错误，请检查数据库连接和表结构。")
+            else:
+                self.error.emit(f"分析失败: {error_msg}")
 
 
 class SingleAnalysisThread(QThread):
@@ -847,8 +895,11 @@ class AkshareGUI(QMainWindow):
         self.statusBar.showMessage('正在获取股票列表...')
         QApplication.processEvents()
 
-        # 获取股票列表
-        stock_list = get_tradable_stocks()
+        # 根据模式选择获取股票列表的方式
+        if self.mode_combo.currentText() == "离线 (SQLite)":
+            stock_list = get_local_stock_list()
+        else:
+            stock_list = get_tradable_stocks()
         if stock_list.empty:
             QMessageBox.warning(self, "警告", "获取股票列表失败")
             self.scan_btn.setEnabled(True)
@@ -877,37 +928,22 @@ class AkshareGUI(QMainWindow):
         self.update_db_btn.setEnabled(False)
         self.statusBar.showMessage('开始下载并更新本地数据库...')
         
-        # 获取所有可交易股票
+        # 获取所有可交易股票（现在会自动回退到测试股票列表）
         stock_list = get_tradable_stocks()
-        if stock_list.empty:
-            # 如果获取股票列表失败，尝试使用一个默认的股票列表
-            # 这里可以添加一些常见的股票代码作为备选
-            default_stocks = ['000001', '600000', '600519', '000858', '601318']
-            reply = QMessageBox.question(
-                self, "警告",
-                "获取股票列表失败，是否使用默认股票列表进行更新？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-            )
-            if reply == QMessageBox.StandardButton.Yes:
-                stock_list = pd.DataFrame({
-                    '代码': default_stocks,
-                    '名称': ['平安银行', '浦发银行', '贵州茅台', '五粮液', '中国平安'],
-                    '最新价': [0.0] * len(default_stocks),
-                    '涨跌幅': [0.0] * len(default_stocks)
-                })
-            else:
-                self.update_db_btn.setEnabled(True)
-                return
-            
+        
         # 启动后台线程下载数据
         from DataAPI.SQLiteAPI import download_and_save_all_stocks
         from threading import Thread
         
         def download_task():
             try:
-                download_and_save_all_stocks(stock_list['代码'].tolist())
-                self.statusBar.showMessage(f'本地数据库更新完成！共处理 {len(stock_list)} 只股票。')
-                self.log_text.append("✅ 本地数据库更新完成！")
+                if stock_list.empty:
+                    self.statusBar.showMessage('股票列表为空，无法更新数据库')
+                    self.log_text.append("❌ 股票列表为空，无法更新数据库")
+                else:
+                    download_and_save_all_stocks(stock_list['代码'].tolist())
+                    self.statusBar.showMessage(f'本地数据库更新完成！共处理 {len(stock_list)} 只股票。')
+                    self.log_text.append(f"✅ 本地数据库更新完成！共处理 {len(stock_list)} 只股票。")
             except Exception as e:
                 self.statusBar.showMessage(f'更新失败: {str(e)}')
                 self.log_text.append(f"❌ 更新失败: {str(e)}")

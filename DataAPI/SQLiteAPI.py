@@ -1,10 +1,6 @@
 """
 DataAPI for SQLite
 """
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 import pandas as pd
 import sqlite3
 from datetime import datetime
@@ -14,6 +10,30 @@ from Common.func_util import str2float
 from KLine.KLine_Unit import CKLine_Unit
 from DataAPI.CommonStockAPI import CCommonStockApi
 from Trade.db_util import CChanDB
+
+
+def convert_stock_code_for_akshare(code):
+    """
+    Convert stock code format from Futu/OpenD to AKShare format
+    
+    Args:
+        code: Stock code in Futu format (e.g., "HK.02649", "SZ.300772", "SH.600000")
+    
+    Returns:
+        str: Stock code in AKShare format (e.g., "hk.02649", "000001")
+    """
+    if code.startswith("HK."):
+        # 港股: HK.02649 -> hk.02649
+        return "hk." + code.split(".")[1]
+    elif code.startswith("SZ.") or code.startswith("SH."):
+        # A股: SZ.300772 -> 300772, SH.600000 -> 600000
+        return code.split(".")[1]
+    elif code.startswith("US."):
+        # 美股: US.AAPL -> us.AAPL
+        return "us." + code.split(".")[1].upper()
+    else:
+        # 如果已经是纯数字格式，直接返回
+        return code
 
 
 def create_item_dict_from_db(row, autype):
@@ -36,16 +56,20 @@ def create_item_dict_from_db(row, autype):
     c = str2float(row['close'])
     
     # --- 核心修正逻辑：处理 0.0 价格 ---
-    valid_price = max(o, h, l, c)
-    if valid_price <= 0:
-        # 如果整根K线都是0，建议跳过或设为一个极小值（由Chan引擎过滤）
-        o = h = l = c = 0.001 
-    else:
-        # 如果只有部分字段为0（比如开盘价），用收盘价或有效价格填充它
-        if o <= 0: o = c if c > 0 else valid_price
-        if h <= 0: h = valid_price
-        if l <= 0: l = min(p for p in [o, h, c] if p > 0)
-        if c <= 0: c = o
+    # 首先，确保所有价格至少为一个极小的正数，以防止后续计算出错
+    EPSILON = 1e-6
+    o = max(o, EPSILON)
+    h = max(h, EPSILON)
+    l = max(l, EPSILON)
+    c = max(c, EPSILON)
+    
+    # 然后，确保价格之间的逻辑关系：low <= open/close <= high
+    low_val = min(o, h, l, c)
+    high_val = max(o, h, l, c)
+    o = max(min(o, high_val), low_val)
+    c = max(min(c, high_val), low_val)
+    h = high_val
+    l = low_val
     # --------------------------------
 
     item[DATA_FIELD.FIELD_OPEN] = o
@@ -124,12 +148,15 @@ def download_and_save_all_stocks(stock_codes, days=365):
     
     for code in stock_codes:
         try:
+            # 转换股票代码格式以适配AKShare
+            akshare_code = convert_stock_code_for_akshare(code)
+            
             # Get K-line data from AKShare
-            ak_api = CAkshare(code, k_type=KL_TYPE.K_DAY, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
+            ak_api = CAkshare(akshare_code, k_type=KL_TYPE.K_DAY, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
             kl_data = []
             for kl_unit in ak_api.get_kl_data():
                 kl_data.append({
-                    'code': code,
+                    'code': code,  # 使用原始代码存储到数据库
                     'date': f"{kl_unit.time.year}-{kl_unit.time.month:02d}-{kl_unit.time.day:02d}",
                     'open': kl_unit.open,
                     'high': kl_unit.high,

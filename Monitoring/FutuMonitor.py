@@ -32,8 +32,7 @@ class FutuMonitor:
             self.quote_ctx.set_handler(BrokerHandler())
             self.quote_ctx.unlock_trade(futu_config['key'])
         
-        # 初始化本地数据库接口
-        self.sqlite_api = SQLiteAPI()
+        # 不再需要单独的 SQLiteAPI 实例，因为使用字符串方式指定数据源
         # 用于存储每个股票的 CChan 对象
         self.chan_objects = {}
         # UI 回调函数
