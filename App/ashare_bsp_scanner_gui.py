@@ -228,7 +228,7 @@ class ScanThread(QThread):
     finished = pyqtSignal(int, int)
     log_signal = pyqtSignal(str)
 
-    def __init__(self, stock_list, config, days=365):
+    def __init__(self, stock_list, config, days=365, kl_type=KL_TYPE.K_DAY):
         """
         初始化扫描线程
 
@@ -236,11 +236,13 @@ class ScanThread(QThread):
             stock_list: pd.DataFrame, 待扫描的股票列表
             config: CChanConfig, 缠论配置
             days: int, 获取多少天的历史数据，默认365天
+            kl_type: KL_TYPE, 时间级别，默认为日线
         """
         super().__init__()
         self.stock_list = stock_list
         self.config = config
         self.days = days
+        self.kl_type = kl_type
         self.is_running = True
 
     def stop(self):
@@ -278,7 +280,7 @@ class ScanThread(QThread):
                     begin_time=begin_time,
                     end_time=end_time,
                     data_src=DATA_SRC.AKSHARE,
-                    lv_list=[KL_TYPE.K_DAY],
+                    lv_list=[self.kl_type],
                     config=self.config,
                     autype=AUTYPE.QFQ,
                 )
@@ -351,7 +353,7 @@ class OfflineScanThread(QThread):
     finished = pyqtSignal(int, int)
     log_signal = pyqtSignal(str)
     
-    def __init__(self, stock_list, config, days=365):
+    def __init__(self, stock_list, config, days=365, kl_type=KL_TYPE.K_DAY):
         """
         初始化离线扫描线程
         
@@ -359,11 +361,13 @@ class OfflineScanThread(QThread):
             stock_list: pd.DataFrame, 待扫描的股票列表
             config: CChanConfig, 缠论配置
             days: int, 获取多少天的历史数据，默认365天
+            kl_type: KL_TYPE, 时间级别，默认为日线
         """
         super().__init__()
         self.stock_list = stock_list
         self.config = config
         self.days = days
+        self.kl_type = kl_type
         self.is_running = True
         
     def stop(self):
@@ -401,7 +405,7 @@ class OfflineScanThread(QThread):
                     begin_time=begin_time,
                     end_time=end_time,
                     data_src="custom:SQLiteAPI.SQLiteAPI",  # 使用自定义数据源（SQLite）
-                    lv_list=[KL_TYPE.K_DAY],
+                    lv_list=[self.kl_type],
                     config=self.config,
                     autype=AUTYPE.QFQ,
                 )
@@ -496,7 +500,7 @@ class OfflineSingleAnalysisThread(QThread):
                 begin_time=begin_time,
                 end_time=end_time,
                 data_src="custom:SQLiteAPI.SQLiteAPI",  # 使用自定义数据源（SQLite）
-                lv_list=[KL_TYPE.K_DAY],
+                lv_list=[self.get_timeframe_kl_type()],
                 config=self.config,
                 autype=AUTYPE.QFQ,
             )
@@ -549,7 +553,7 @@ class SingleAnalysisThread(QThread):
                 begin_time=begin_time,
                 end_time=end_time,
                 data_src=DATA_SRC.AKSHARE,
-                lv_list=[KL_TYPE.K_DAY],
+                lv_list=[self.get_timeframe_kl_type()],
                 config=self.config,
                 autype=AUTYPE.QFQ,
             )
@@ -670,6 +674,15 @@ class AkshareGUI(QMainWindow):
         self.days_input.setSuffix(" 天")
         time_layout.addWidget(self.days_input)
         scan_layout.addLayout(time_layout)
+        
+        # 时间级别选择
+        timeframe_layout = QHBoxLayout()
+        timeframe_layout.addWidget(QLabel("时间级别:"))
+        self.timeframe_combo = QComboBox()
+        self.timeframe_combo.addItems(["日线", "30分钟", "5分钟", "1分钟"])
+        self.timeframe_combo.setCurrentText("日线")
+        timeframe_layout.addWidget(self.timeframe_combo)
+        scan_layout.addLayout(timeframe_layout)
         
         # 更新本地数据库按钮
         self.update_db_btn = QPushButton("更新本地数据库")
@@ -879,6 +892,22 @@ class AkshareGUI(QMainWindow):
             "zs_algo": "normal",  # 中枢算法
         })
 
+    def get_timeframe_kl_type(self):
+        """
+        根据GUI中选择的时间级别返回对应的KL_TYPE
+        
+        Returns:
+            KL_TYPE: 对应的时间级别枚举
+        """
+        timeframe_map = {
+            "日线": KL_TYPE.K_DAY,
+            "30分钟": KL_TYPE.K_30M,
+            "5分钟": KL_TYPE.K_5M,
+            "1分钟": KL_TYPE.K_1M,
+        }
+        selected_text = self.timeframe_combo.currentText()
+        return timeframe_map.get(selected_text, KL_TYPE.K_DAY)
+
     def get_plot_config(self):
         """
         获取图表绑定配置
@@ -924,10 +953,11 @@ class AkshareGUI(QMainWindow):
 
         # 根据模式选择启动不同的扫描线程
         config = self.get_chan_config()
+        kl_type = self.get_timeframe_kl_type()
         if self.mode_combo.currentText() == "离线 (SQLite)":
-            self.scan_thread = OfflineScanThread(stock_list, config, days=365)
+            self.scan_thread = OfflineScanThread(stock_list, config, days=365, kl_type=kl_type)
         else:
-            self.scan_thread = ScanThread(stock_list, config, days=365)
+            self.scan_thread = ScanThread(stock_list, config, days=365, kl_type=kl_type)
             
         self.scan_thread.progress.connect(self.on_scan_progress)
         self.scan_thread.found_signal.connect(self.on_buy_point_found)
@@ -949,8 +979,18 @@ class AkshareGUI(QMainWindow):
             stock_list = get_tradable_stocks()
         
         # 启动后台线程下载数据
-        from DataAPI.SQLiteAPI import download_and_save_all_stocks
+        from DataAPI.SQLiteAPI import download_and_save_all_stocks_multi_timeframe
         from threading import Thread
+        
+        # 获取选择的时间级别
+        selected_timeframe = self.timeframe_combo.currentText()
+        timeframe_map = {
+            "日线": ['day'],
+            "30分钟": ['30m'],
+            "5分钟": ['5m'],
+            "1分钟": ['1m'],
+        }
+        timeframes_to_download = timeframe_map.get(selected_timeframe, ['day'])
         
         def download_task():
             try:
@@ -959,13 +999,18 @@ class AkshareGUI(QMainWindow):
                     self.log_text.append("❌ 股票列表为空，无法更新数据库")
                 else:
                     stock_codes = stock_list['代码'].tolist()
-                    self.log_text.append(f"📊 准备下载 {len(stock_codes)} 只股票的数据...")
+                    self.log_text.append(f"📊 准备下载 {len(stock_codes)} 只股票的 {selected_timeframe} 数据...")
                     
-                    # 修改 download_and_save_all_stocks 以支持日志回调
+                    # 修改 download_and_save_all_stocks_multi_timeframe 以支持日志回调
                     def log_callback(msg):
                         self.log_signal.emit(msg)
                     
-                    download_and_save_all_stocks(stock_codes, days=days, log_callback=log_callback)
+                    download_and_save_all_stocks_multi_timeframe(
+                        stock_codes,
+                        days=days,
+                        timeframes=timeframes_to_download,
+                        log_callback=log_callback
+                    )
                     
                     # 统计实际下载成功的股票
                     from Trade.db_util import CChanDB

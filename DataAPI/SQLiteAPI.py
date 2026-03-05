@@ -43,11 +43,26 @@ def create_item_dict_from_db(row, autype):
     # 处理时间
     date_val = row['date']
     if isinstance(date_val, str):
-        dt = datetime.strptime(date_val, "%Y-%m-%d")
+        # 尝试不同的日期格式
+        if ' ' in date_val and ':' in date_val:
+            # 包含时间的格式，如 "2026-03-05 10:00:00"
+            try:
+                dt = datetime.strptime(date_val, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                # 如果秒数不是00，可能需要其他格式
+                try:
+                    dt = datetime.strptime(date_val, "%Y-%m-%d %H:%M")
+                except ValueError:
+                    # 回退到只解析日期部分
+                    date_part = date_val.split(' ')[0]
+                    dt = datetime.strptime(date_part, "%Y-%m-%d")
+        else:
+            # 只有日期的格式，如 "2026-03-05"
+            dt = datetime.strptime(date_val, "%Y-%m-%d")
     else:
         dt = date_val
     
-    item[DATA_FIELD.FIELD_TIME] = CTime(dt.year, dt.month, dt.day, 0, 0)
+    item[DATA_FIELD.FIELD_TIME] = CTime(dt.year, dt.month, dt.day, dt.hour, dt.minute)
     
     # 提取价格
     o = str2float(row['open'])
@@ -96,10 +111,19 @@ class SQLiteAPI(CCommonStockApi):
         """
         get kline data from sqlite
         """
-        if self.k_type != KL_TYPE.K_DAY:
-            raise ValueError("Only day kline is supported for SQLiteAPI")
+        # Map KL_TYPE to table names
+        table_map = {
+            KL_TYPE.K_DAY: "kline_day",
+            KL_TYPE.K_30M: "kline_30m",
+            KL_TYPE.K_5M: "kline_5m",
+            KL_TYPE.K_1M: "kline_1m",
+        }
         
-        sql = f"SELECT * FROM kline_day WHERE code = '{self.code}'"
+        if self.k_type not in table_map:
+            raise ValueError(f"KLine type {self.k_type} is not supported for SQLiteAPI")
+            
+        table_name = table_map[self.k_type]
+        sql = f"SELECT * FROM {table_name} WHERE code = '{self.code}'"
         if self.begin_date:
             sql += f" AND date >= '{self.begin_date}'"
         if self.end_date:
@@ -195,6 +219,85 @@ def download_and_save_all_stocks(stock_codes, days=365, log_callback=None):
                 print(f"❌ 下载 {code} 失败: {e}")
             continue
 
+def download_and_save_all_stocks_multi_timeframe(stock_codes, days=365, timeframes=['day', '30m', '5m', '1m'], log_callback=None):
+    """
+    Download and save all stock data to SQLite database for multiple timeframes
+    
+    Args:
+        stock_codes: list of stock codes to download
+        days: number of days to download for day timeframe, default 365
+        timeframes: list of timeframes to download ['day', '30m', '5m', '1m']
+        log_callback: optional callback function for logging messages
+    """
+    from datetime import datetime, timedelta
+    from Trade.db_util import CChanDB
+    from Common.CEnum import AUTYPE, KL_TYPE
+    import sqlite3
+    import pandas as pd
+    
+    db = CChanDB()
+    
+    # Timeframe mapping
+    tf_map = {
+        'day': (KL_TYPE.K_DAY, days),
+        '30m': (KL_TYPE.K_30M, 30),  # Last 30 days for 30m
+        '5m': (KL_TYPE.K_5M, 7),     # Last 7 days for 5m
+        '1m': (KL_TYPE.K_1M, 2),     # Last 2 days for 1m
+    }
+    
+    # Filter valid timeframes
+    valid_timeframes = [tf for tf in timeframes if tf in tf_map]
+    
+    for code in stock_codes:
+        for tf_name in valid_timeframes:
+            k_type, tf_days = tf_map[tf_name]
+            table_name = f"kline_{tf_name}"
+            
+            begin_time = (datetime.now() - timedelta(days=tf_days)).strftime("%Y-%m-%d")
+            end_time = datetime.now().strftime("%Y-%m-%d")
+            
+            kl_data = None
+            source_used = None
+            
+            try:
+                # Use the same logic as day timeframe for all timeframes
+                if code.startswith("US."):
+                    # 美股: 优先使用AKShare（支持分钟级别）
+                    kl_data, source_used = _download_us_stock_data_with_timeframe(code, begin_time, end_time, k_type)
+                elif code.startswith("HK."):
+                    # 港股: 优先使用Futu，失败则使用AKShare（都支持分钟级别）
+                    kl_data, source_used = _download_hk_stock_data_with_timeframe(code, begin_time, end_time, k_type)
+                elif code.startswith("SZ.") or code.startswith("SH."):
+                    # A股: 优先使用BaoStock，失败则使用AKShare（都支持分钟级别）
+                    kl_data, source_used = _download_a_stock_data_with_timeframe(code, begin_time, end_time, k_type)
+                else:
+                    # 默认使用AKShare
+                    kl_data, source_used = _download_with_akshare_with_timeframe(code, begin_time, end_time, k_type)
+                
+                if kl_data:
+                    # Save to database
+                    df = pd.DataFrame(kl_data)
+                    with sqlite3.connect(db.db_path) as conn:
+                        # 先删除该股票的旧数据
+                        conn.execute(f"DELETE FROM {table_name} WHERE code = ?", (code,))
+                        df.to_sql(table_name, conn, if_exists='append', index=False)
+                    if log_callback:
+                        log_callback(f"✅ 成功下载 {code} {tf_name} ({len(kl_data)} 条数据) - 数据源: {source_used}")
+                    else:
+                        print(f"✅ 成功下载 {code} {tf_name} ({len(kl_data)} 条数据) - 数据源: {source_used}")
+                else:
+                    if log_callback:
+                        log_callback(f"⚠️  {code} {tf_name} 无有效数据")
+                    else:
+                        print(f"⚠️  {code} {tf_name} 无有效数据")
+                        
+            except Exception as e:
+                if log_callback:
+                    log_callback(f"❌ 下载 {code} {tf_name} 失败: {e}")
+                else:
+                    print(f"❌ 下载 {code} {tf_name} 失败: {e}")
+                continue
+
 def _download_us_stock_data(code, begin_time, end_time):
     """下载美股数据 - 优先使用AKShare"""
     from DataAPI.AkshareAPI import CAkshare
@@ -207,6 +310,99 @@ def _download_us_stock_data(code, begin_time, end_time):
         return _extract_kl_data(api, code), "AKShare"
     except Exception as e:
         print(f"  ⚠️  AKShare下载美股 {code} 失败: {e}")
+        return None, "None"
+
+def _download_us_stock_data_with_timeframe(code, begin_time, end_time, k_type):
+    """下载美股数据（支持多时间级别） - 优先使用AKShare"""
+    from DataAPI.AkshareAPI import CAkshare
+    from Common.CEnum import AUTYPE
+    
+    try:
+        # 转换为AKShare格式
+        akshare_code = convert_stock_code_for_akshare(code)
+        api = CAkshare(akshare_code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
+        return _extract_kl_data(api, code), "AKShare"
+    except Exception as e:
+        print(f"  ⚠️  AKShare下载美股 {code} {k_type} 失败: {e}")
+        return None, "None"
+
+def _download_hk_stock_data_with_timeframe(code, begin_time, end_time, k_type):
+    """下载港股数据（支持多时间级别） - 优先使用Futu，失败则使用AKShare"""
+    from DataAPI.FutuAPI import CFutuAPI
+    from DataAPI.AkshareAPI import CAkshare
+    from Common.CEnum import AUTYPE
+    
+    # 首先尝试Futu
+    try:
+        api = CFutuAPI(code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
+        kl_data = _extract_kl_data(api, code)
+        if kl_data and len(kl_data) > 0:
+            return kl_data, "Futu"
+        else:
+            print(f"  ℹ️  Futu下载港股 {code} {k_type} 无历史数据")
+    except Exception as e:
+        print(f"  ⚠️  Futu下载港股 {code} {k_type} 失败: {e}")
+    
+    # Futu失败或无数据，尝试AKShare
+    try:
+        akshare_code = convert_stock_code_for_akshare(code)
+        api = CAkshare(akshare_code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
+        kl_data = _extract_kl_data(api, code)
+        if kl_data and len(kl_data) > 0:
+            return kl_data, "AKShare"
+        else:
+            print(f"  ℹ️  AKShare下载港股 {code} {k_type} 无历史数据")
+    except Exception as e:
+        print(f"  ⚠️  AKShare下载港股 {code} {k_type} 失败: {e}")
+    
+    # 所有方法都失败
+    print(f"  ℹ️  港股 {code} {k_type} 无可用历史数据")
+    return None, "None"
+
+def _download_a_stock_data_with_timeframe(code, begin_time, end_time, k_type):
+    """下载A股数据（支持多时间级别） - 优先使用BaoStock，失败则使用AKShare"""
+    from DataAPI.BaoStockAPI import CBaoStock
+    from DataAPI.AkshareAPI import CAkshare
+    from Common.CEnum import AUTYPE
+    
+    # 首先尝试BaoStock
+    try:
+        # BaoStock需要完整的9位代码格式 (sh.600000 或 sz.000001)
+        market, stock_num = code.split(".")
+        if market == "SH":
+            bao_code = f"sh.{stock_num}"
+        elif market == "SZ":
+            bao_code = f"sz.{stock_num}"
+        else:
+            raise ValueError(f"不支持的A股市场: {market}")
+        
+        # 确保BaoStock已初始化
+        CBaoStock.do_init()
+        api = CBaoStock(bao_code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
+        return _extract_kl_data(api, code), "BaoStock"
+    except Exception as e:
+        print(f"  ⚠️  BaoStock下载A股 {code} {k_type} 失败: {e}")
+    
+    # BaoStock失败，尝试AKShare
+    try:
+        akshare_code = convert_stock_code_for_akshare(code)
+        api = CAkshare(akshare_code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
+        return _extract_kl_data(api, code), "AKShare"
+    except Exception as e:
+        print(f"  ⚠️  AKShare下载A股 {code} {k_type} 失败: {e}")
+        return None, "None"
+
+def _download_with_akshare_with_timeframe(code, begin_time, end_time, k_type):
+    """使用AKShare下载数据（支持多时间级别）（通用方法）"""
+    from DataAPI.AkshareAPI import CAkshare
+    from Common.CEnum import AUTYPE
+    
+    try:
+        akshare_code = convert_stock_code_for_akshare(code)
+        api = CAkshare(akshare_code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
+        return _extract_kl_data(api, code), "AKShare"
+    except Exception as e:
+        print(f"  ⚠️  AKShare下载 {code} {k_type} 失败: {e}")
         return None, "None"
 
 def _download_hk_stock_data(code, begin_time, end_time):
@@ -292,9 +488,22 @@ def _extract_kl_data(api, original_code):
     """从API提取K线数据"""
     kl_data = []
     for kl_unit in api.get_kl_data():
+        # 根据时间级别确定日期格式
+        if hasattr(api, 'k_type'):
+            k_type = api.k_type
+            if k_type in [KL_TYPE.K_1M, KL_TYPE.K_5M, KL_TYPE.K_15M, KL_TYPE.K_30M, KL_TYPE.K_60M]:
+                # 分钟级别数据包含小时和分钟
+                date_str = f"{kl_unit.time.year}-{kl_unit.time.month:02d}-{kl_unit.time.day:02d} {kl_unit.time.hour:02d}:{kl_unit.time.minute:02d}:00"
+            else:
+                # 日线及以上级别只包含日期
+                date_str = f"{kl_unit.time.year}-{kl_unit.time.month:02d}-{kl_unit.time.day:02d}"
+        else:
+            # 默认只包含日期
+            date_str = f"{kl_unit.time.year}-{kl_unit.time.month:02d}-{kl_unit.time.day:02d}"
+            
         kl_data.append({
             'code': original_code,  # 使用原始代码存储到数据库
-            'date': f"{kl_unit.time.year}-{kl_unit.time.month:02d}-{kl_unit.time.day:02d}",
+            'date': date_str,
             'open': kl_unit.open,
             'high': kl_unit.high,
             'low': kl_unit.low,
