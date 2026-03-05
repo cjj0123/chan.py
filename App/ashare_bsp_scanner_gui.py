@@ -50,27 +50,70 @@ from Chan import CChan
 from ChanConfig import CChanConfig
 from Common.CEnum import AUTYPE, DATA_SRC, KL_TYPE
 
+# 富途API相关
+try:
+    from futu import RET_OK
+except ImportError:
+    RET_OK = 0  # 如果没有安装futu，使用默认值
+
 # 富途实时监控相关
 from Monitoring.FutuMonitor import FutuMonitor
 
 
-def get_tradable_stocks():
+def get_futu_watchlist_stocks():
     """
-    获取所有可交易的A股股票列表
-
-    过滤条件:
-        1. 剔除ST股票（名称包含ST）
-        2. 剔除科创板（688开头）
-        3. 剔除北交所（8开头、43开头）
-        4. 剔除B股（200开头深圳B股、900开头上海B股）
-        5. 剔除存托凭证CDR（920开头）
-        6. 剔除停牌股票（成交量为0）
-        7. 剔除异常股票（最新价<=0）
-
+    从富途自选股列表获取股票代码
+    
     Returns:
         pd.DataFrame: 包含 ['代码', '名称', '最新价', '涨跌幅'] 列的股票列表
                       获取失败时返回空 DataFrame
     """
+    try:
+        from Monitoring.FutuMonitor import FutuMonitor
+        monitor = FutuMonitor()
+        # 获取第一个自选股分组的股票
+        watchlists = monitor.get_watchlists()
+        if not watchlists:
+            print("没有找到富途自选股分组")
+            return pd.DataFrame(columns=['代码', '名称', '最新价', '涨跌幅'])
+        
+        # 使用第一个分组
+        ret, data = monitor.quote_ctx.get_user_security(group_name=watchlists[0])
+        monitor.quote_ctx.close()
+        
+        if ret != RET_OK:
+            print(f"获取自选股失败: {data}")
+            return pd.DataFrame(columns=['代码', '名称', '最新价', '涨跌幅'])
+        
+        # data is a pandas DataFrame, convert to our format
+        result_df = pd.DataFrame({
+            '代码': data['code'],
+            '名称': data['name'],
+            '最新价': [0.0] * len(data),  # 富途API返回的自选股数据可能不包含最新价
+            '涨跌幅': [0.0] * len(data)   # 需要额外查询
+        })
+        
+        return result_df[['代码', '名称', '最新价', '涨跌幅']]
+    except Exception as e:
+        print(f"从富途获取自选股列表失败: {e}")
+        return pd.DataFrame(columns=['代码', '名称', '最新价', '涨跌幅'])
+
+def get_tradable_stocks():
+    """
+    获取所有可交易的A股股票列表
+    
+    优先尝试从富途自选股列表获取，如果失败则回退到akshare API
+    
+    Returns:
+        pd.DataFrame: 包含 ['代码', '名称', '最新价', '涨跌幅'] 列的股票列表
+                      获取失败时返回空 DataFrame
+    """
+    # 首先尝试从富途自选股获取
+    df = get_futu_watchlist_stocks()
+    if not df.empty:
+        return df
+    
+    # 如果富途获取失败，回退到akshare
     try:
         # 获取A股实时行情
         df = ak.stock_zh_a_spot_em()
@@ -102,7 +145,37 @@ def get_tradable_stocks():
         return df[['代码', '名称', '最新价', '涨跌幅']].reset_index(drop=True)
     except Exception as e:
         print(f"获取股票列表失败: {e}")
-        return pd.DataFrame()
+        # 尝试返回一个空的DataFrame但包含正确的列名
+        return pd.DataFrame(columns=['代码', '名称', '最新价', '涨跌幅'])
+
+def get_local_stock_list():
+    """
+    从本地SQLite数据库获取所有股票代码列表
+    
+    Returns:
+        pd.DataFrame: 包含 ['代码', '名称', '最新价', '涨跌幅'] 列的股票列表
+    """
+    try:
+        from Trade.db_util import CChanDB
+        db = CChanDB()
+        # 查询kline_day表中所有的唯一股票代码
+        query = "SELECT DISTINCT code FROM kline_day ORDER BY code"
+        df_codes = db.execute_query(query)
+        
+        if df_codes.empty:
+            return pd.DataFrame(columns=['代码', '名称', '最新价', '涨跌幅'])
+            
+        # 为简化处理，这里只返回代码列，其他列设为默认值
+        result_df = pd.DataFrame({
+            '代码': df_codes['code'],
+            '名称': [''] * len(df_codes),
+            '最新价': [0.0] * len(df_codes),
+            '涨跌幅': [0.0] * len(df_codes)
+        })
+        return result_df
+    except Exception as e:
+        print(f"从本地数据库获取股票列表失败: {e}")
+        return pd.DataFrame(columns=['代码', '名称', '最新价', '涨跌幅'])
 
 
 class ScanThread(QThread):
@@ -807,9 +880,24 @@ class AkshareGUI(QMainWindow):
         # 获取所有可交易股票
         stock_list = get_tradable_stocks()
         if stock_list.empty:
-            QMessageBox.warning(self, "警告", "获取股票列表失败")
-            self.update_db_btn.setEnabled(True)
-            return
+            # 如果获取股票列表失败，尝试使用一个默认的股票列表
+            # 这里可以添加一些常见的股票代码作为备选
+            default_stocks = ['000001', '600000', '600519', '000858', '601318']
+            reply = QMessageBox.question(
+                self, "警告",
+                "获取股票列表失败，是否使用默认股票列表进行更新？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                stock_list = pd.DataFrame({
+                    '代码': default_stocks,
+                    '名称': ['平安银行', '浦发银行', '贵州茅台', '五粮液', '中国平安'],
+                    '最新价': [0.0] * len(default_stocks),
+                    '涨跌幅': [0.0] * len(default_stocks)
+                })
+            else:
+                self.update_db_btn.setEnabled(True)
+                return
             
         # 启动后台线程下载数据
         from DataAPI.SQLiteAPI import download_and_save_all_stocks

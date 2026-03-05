@@ -45,9 +45,10 @@ class FutuMonitor:
 
     def get_watchlists(self):
         """获取用户的所有自选股分组名称"""
-        ret, data = self.quote_ctx.get_user_security_group_list()
+        ret, data = self.quote_ctx.get_user_security_group()
         if ret == RET_OK:
-            return [group['group_name'] for group in data]
+            # data is a pandas DataFrame
+            return data['group_name'].tolist()
         else:
             print(f"获取自选股分组失败: {data}")
             return []

@@ -91,3 +91,10 @@ database:
   username: ""
   password: ""
   name: "chan_trading"  # MySQL数据库名
+
+futu:
+  # 富途API配置
+  host: "127.0.0.1"
+  port: 11111
+  key: ""  # 如果需要解锁交易功能，请填写富途交易密码
+  security_firm: "FUTU"  # FUTU, FUTUSECURITIES
