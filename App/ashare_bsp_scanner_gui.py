@@ -364,7 +364,7 @@ class OfflineScanThread(QThread):
                     code=code,
                     begin_time=begin_time,
                     end_time=end_time,
-                    data_src=DATA_SRC.CUSTOM,  # 使用自定义数据源（SQLite）
+                    data_src="custom:SQLiteAPI.SQLiteAPI",  # 使用自定义数据源（SQLite）
                     lv_list=[KL_TYPE.K_DAY],
                     config=self.config,
                     autype=AUTYPE.QFQ,
@@ -453,7 +453,7 @@ class OfflineSingleAnalysisThread(QThread):
                 code=self.code,
                 begin_time=begin_time,
                 end_time=end_time,
-                data_src=DATA_SRC.CUSTOM,  # 使用自定义数据源（SQLite）
+                data_src="custom:SQLiteAPI.SQLiteAPI",  # 使用自定义数据源（SQLite）
                 lv_list=[KL_TYPE.K_DAY],
                 config=self.config,
                 autype=AUTYPE.QFQ,

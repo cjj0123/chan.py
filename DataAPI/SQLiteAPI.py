@@ -7,33 +7,101 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pandas as pd
 import sqlite3
+from datetime import datetime
+from Common.CEnum import AUTYPE, DATA_FIELD, KL_TYPE
+from Common.CTime import CTime
+from Common.func_util import str2float
+from KLine.KLine_Unit import CKLine_Unit
 from DataAPI.CommonStockAPI import CCommonStockApi
 from Trade.db_util import CChanDB
+
+
+def create_item_dict_from_db(row, autype):
+    """从数据库行创建 item dict"""
+    item = {}
+    
+    # 处理时间
+    date_val = row['date']
+    if isinstance(date_val, str):
+        dt = datetime.strptime(date_val, "%Y-%m-%d")
+    else:
+        dt = date_val
+    
+    item[DATA_FIELD.FIELD_TIME] = CTime(dt.year, dt.month, dt.day, 0, 0)
+    
+    # 提取价格
+    o = str2float(row['open'])
+    h = str2float(row['high'])
+    l = str2float(row['low'])
+    c = str2float(row['close'])
+    
+    # --- 核心修正逻辑：处理 0.0 价格 ---
+    valid_price = max(o, h, l, c)
+    if valid_price <= 0:
+        # 如果整根K线都是0，建议跳过或设为一个极小值（由Chan引擎过滤）
+        o = h = l = c = 0.001 
+    else:
+        # 如果只有部分字段为0（比如开盘价），用收盘价或有效价格填充它
+        if o <= 0: o = c if c > 0 else valid_price
+        if h <= 0: h = valid_price
+        if l <= 0: l = min(p for p in [o, h, c] if p > 0)
+        if c <= 0: c = o
+    # --------------------------------
+
+    item[DATA_FIELD.FIELD_OPEN] = o
+    item[DATA_FIELD.FIELD_HIGH] = h
+    item[DATA_FIELD.FIELD_LOW] = l
+    item[DATA_FIELD.FIELD_CLOSE] = c
+    item[DATA_FIELD.FIELD_VOLUME] = str2float(row['volume'])
+    item[DATA_FIELD.FIELD_TURNOVER] = str2float(row.get('turnover', 0))
+    item[DATA_FIELD.FIELD_TURNRATE] = str2float(row.get('turnrate', 0))
+
+    return item
+
 
 class SQLiteAPI(CCommonStockApi):
     """
     SQLite data API
     """
 
-    def __init__(self):
+    def __init__(self, code, k_type=KL_TYPE.K_DAY, begin_date=None, end_date=None, autype=AUTYPE.QFQ):
         self.db = CChanDB()
+        super(SQLiteAPI, self).__init__(code, k_type, begin_date, end_date, autype)
 
-    def get_kl_data(self, code, start_date=None, end_date=None, k_type='day'):
+    def get_kl_data(self):
         """
         get kline data from sqlite
         """
-        if k_type != 'day':
+        if self.k_type != KL_TYPE.K_DAY:
             raise ValueError("Only day kline is supported for SQLiteAPI")
         
-        sql = f"SELECT * FROM kline_day WHERE code = '{code}'"
-        if start_date:
-            sql += f" AND date >= '{start_date}'"
-        if end_date:
-            sql += f" AND date <= '{end_date}'"
+        sql = f"SELECT * FROM kline_day WHERE code = '{self.code}'"
+        if self.begin_date:
+            sql += f" AND date >= '{self.begin_date}'"
+        if self.end_date:
+            sql += f" AND date <= '{self.end_date}'"
+        sql += " ORDER BY date"
             
         df = self.db.execute_query(sql)
-        df['date'] = pd.to_datetime(df['date'])
-        return df.sort_values('date').reset_index(drop=True)
+        if not df.empty:
+            # 遍历生成 K 线单元
+            for _, row in df.iterrows():
+                yield CKLine_Unit(create_item_dict_from_db(row, self.autype))
+        else:
+            return
+
+    def SetBasciInfo(self):
+        """设置基本信息"""
+        self.name = self.code
+        self.is_stock = True
+
+    @classmethod
+    def do_init(cls):
+        pass
+
+    @classmethod
+    def do_close(cls):
+        pass
 
 
 def download_and_save_all_stocks(stock_codes, days=365):

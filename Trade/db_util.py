@@ -67,6 +67,22 @@ class CChanDB:
                 )
             ''')
             
+            # K线数据表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS kline_day (
+                    code TEXT NOT NULL,
+                    date TEXT NOT NULL,
+                    open REAL NOT NULL,
+                    high REAL NOT NULL,
+                    low REAL NOT NULL,
+                    close REAL NOT NULL,
+                    volume INTEGER NOT NULL,
+                    turnover REAL,
+                    turnrate REAL,
+                    PRIMARY KEY (code, date)
+                )
+            ''')
+            
             conn.commit()
             conn.close()
         
@@ -132,6 +148,22 @@ class CChanDB:
                     quantity INTEGER NOT NULL,
                     avg_cost REAL NOT NULL,
                     last_update DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # 创建K线数据表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS kline_day (
+                    code TEXT NOT NULL,
+                    date TEXT NOT NULL,
+                    open REAL NOT NULL,
+                    high REAL NOT NULL,
+                    low REAL NOT NULL,
+                    close REAL NOT NULL,
+                    volume INTEGER NOT NULL,
+                    turnover REAL,
+                    turnrate REAL,
+                    PRIMARY KEY (code, date)
                 )
             ''')
             
