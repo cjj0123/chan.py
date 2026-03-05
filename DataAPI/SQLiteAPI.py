@@ -123,12 +123,13 @@ class SQLiteAPI(CCommonStockApi):
             raise ValueError(f"KLine type {self.k_type} is not supported for SQLiteAPI")
             
         table_name = table_map[self.k_type]
+        # 使用 GROUP BY date 确保每个日期只返回一条记录，避免重复数据导致时间不严格递增的问题
         sql = f"SELECT * FROM {table_name} WHERE code = '{self.code}'"
         if self.begin_date:
             sql += f" AND date >= '{self.begin_date}'"
         if self.end_date:
             sql += f" AND date <= '{self.end_date}'"
-        sql += " ORDER BY date"
+        sql += " GROUP BY date ORDER BY date"
             
         df = self.db.execute_query(sql)
         if not df.empty:
