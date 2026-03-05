@@ -50,6 +50,9 @@ from Chan import CChan
 from ChanConfig import CChanConfig
 from Common.CEnum import AUTYPE, DATA_SRC, KL_TYPE
 
+# 富途实时监控相关
+from Monitoring.FutuMonitor import FutuMonitor
+
 
 def get_tradable_stocks():
     """
@@ -313,6 +316,7 @@ class AkshareGUI(QMainWindow):
         self.scan_thread = None  # 批量扫描线程
         self.analysis_thread = None  # 单股分析线程
         self.stock_cache = {}  # 缓存已分析的股票 {code: CChan}
+        self.futu_monitor = None  # 富途监控器
         self.init_ui()
 
     def init_ui(self):
@@ -454,6 +458,40 @@ class AkshareGUI(QMainWindow):
         log_layout.addWidget(clear_log_btn)
 
         layout.addWidget(log_group)
+
+        # === 新增：Futu 实时监控面板 ===
+        futu_group = QGroupBox("Futu 实时监控")
+        futu_layout = QVBoxLayout(futu_group)
+
+        # 自选股分组选择
+        futu_layout.addWidget(QLabel("自选股分组:"))
+        self.futu_watchlist_combo = QComboBox()
+        futu_layout.addWidget(self.futu_watchlist_combo)
+
+        # 刷新和控制按钮
+        futu_btn_layout = QHBoxLayout()
+        self.futu_refresh_btn = QPushButton("刷新列表")
+        self.futu_refresh_btn.clicked.connect(self.refresh_futu_watchlists)
+        futu_btn_layout.addWidget(self.futu_refresh_btn)
+
+        self.futu_start_btn = QPushButton("开始监控")
+        self.futu_start_btn.clicked.connect(self.start_futu_monitoring)
+        futu_btn_layout.addWidget(self.futu_start_btn)
+
+        self.futu_stop_btn = QPushButton("停止监控")
+        self.futu_stop_btn.clicked.connect(self.stop_futu_monitoring)
+        self.futu_stop_btn.setEnabled(False)
+        futu_btn_layout.addWidget(self.futu_stop_btn)
+        futu_layout.addLayout(futu_btn_layout)
+
+        # 监控日志
+        self.futu_log_text = QTextEdit()
+        self.futu_log_text.setReadOnly(True)
+        self.futu_log_text.setMaximumHeight(150)
+        futu_layout.addWidget(self.futu_log_text)
+
+        layout.addWidget(futu_group)
+        # === 新增结束 ===
 
         return panel
 
@@ -715,6 +753,59 @@ class AkshareGUI(QMainWindow):
         self.stock_table.setRowCount(0)
         self.stock_cache.clear()
         self.statusBar.showMessage('列表已清空')
+
+    # === 新增：Futu 实时监控相关方法 ===
+    def refresh_futu_watchlists(self):
+        """刷新富途自选股分组列表"""
+        try:
+            if self.futu_monitor is None:
+                self.futu_monitor = FutuMonitor()
+            watchlists = self.futu_monitor.get_watchlists()
+            self.futu_watchlist_combo.clear()
+            self.futu_watchlist_combo.addItems(watchlists)
+            self.futu_log_text.append(f"成功获取 {len(watchlists)} 个自选股分组。")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"获取自选股分组失败: {str(e)}")
+            self.futu_log_text.append(f"错误: {str(e)}")
+
+    def on_futu_signal(self, signal_data):
+        """处理来自 FutuMonitor 的信号"""
+        msg = f"[{signal_data['time']}] {signal_data['code']}: {signal_data['signal']} @ {signal_data['price']}"
+        self.futu_log_text.append(msg)
+        self.statusBar.showMessage(f"新信号: {msg}")
+
+    def start_futu_monitoring(self):
+        """开始富途实时监控"""
+        selected_group = self.futu_watchlist_combo.currentText()
+        if not selected_group:
+            QMessageBox.warning(self, "警告", "请先选择一个自选股分组。")
+            return
+
+        try:
+            self.futu_start_btn.setEnabled(False)
+            self.futu_stop_btn.setEnabled(True)
+            self.futu_refresh_btn.setEnabled(False)
+            if self.futu_monitor is None:
+                self.futu_monitor = FutuMonitor()
+            self.futu_monitor.set_callback(self.on_futu_signal)
+            self.futu_monitor.start(selected_group)
+            self.futu_log_text.append(f"开始监控自选股分组: {selected_group}")
+        except Exception as e:
+            QMessageBox.critical(self, "错误", f"启动监控失败: {str(e)}")
+            self.futu_log_text.append(f"错误: {str(e)}")
+            self.futu_start_btn.setEnabled(True)
+            self.futu_stop_btn.setEnabled(False)
+            self.futu_refresh_btn.setEnabled(True)
+
+    def stop_futu_monitoring(self):
+        """停止富途实时监控"""
+        if self.futu_monitor:
+            self.futu_monitor.stop()
+        self.futu_start_btn.setEnabled(True)
+        self.futu_stop_btn.setEnabled(False)
+        self.futu_refresh_btn.setEnabled(True)
+        self.futu_log_text.append("监控已停止。")
+    # === 新增结束 ===
 
 
 def main():

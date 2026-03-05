@@ -498,6 +498,7 @@ class BacktestStrategyAdapter:
 
 class BacktestDataIterator:
     def __init__(self, loader: BacktestDataLoader, watchlist: List[str], freq: str, start_date: str, end_date: str, lot_size_map: Dict[str, int]):
+        import logging
         self.loader = loader
         self.watchlist = watchlist
         self.freq = freq
@@ -505,13 +506,13 @@ class BacktestDataIterator:
         self.end_date = end_date
         self.lot_size_map = lot_size_map
         self.data_cache: Dict[str, Dict[str, List[BacktestKLineUnit]]] = {}
+        self.logger = logging.getLogger(__name__ + ".Iterator")
         self._load_all_data()
         
         all_times = [klu.timestamp for klu_list in self.data_cache.values() for klu_dict in klu_list.values() if isinstance(klu_dict, list) for klu in klu_dict]
         self.timeline = sorted(list(set(all_times)))
         self.current_index = 0
         self.max_index = len(self.timeline)
-        self.logger = logging.getLogger(__name__ + ".Iterator")
 
     def _load_all_data(self):
         required_freqs = ["30M", "5M", "DAY"] 

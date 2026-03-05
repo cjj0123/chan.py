@@ -11,22 +11,21 @@ from datetime import datetime
 
 class CChanDB:
     """
-<<<<<<< HEAD
     缠论交易数据库操作类
     """
     
     
-        def __init__(self, db_path: str = "chan_trading.db"):
-            """
-            初始化数据库连接
-            
-            Args:
-                db_path (str): 数据库文件路径
-            """
-            self.db_path = db_path
-            self.init_db()
+    def __init__(self, db_path: str = "chan_trading.db"):
+        """
+        初始化数据库连接
         
-        def init_db(self):
+        Args:
+            db_path (str): 数据库文件路径
+        """
+        self.db_path = db_path
+        self.init_db()
+    
+    def init_db(self):
             """初始化数据库表结构"""
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
@@ -71,21 +70,21 @@ class CChanDB:
             conn.commit()
             conn.close()
         
-        def execute_query(self, query: str, params: tuple = ()) -> pd.DataFrame:
-            """
-            执行SQL查询并返回DataFrame
+    def execute_query(self, query: str, params: tuple = ()) -> pd.DataFrame:
+        """
+        执行SQL查询并返回DataFrame
+        
+        Args:
+            query (str): SQL查询语句
+            params (tuple): 查询参数
             
-            Args:
-                query (str): SQL查询语句
-                params (tuple): 查询参数
-                
-            Returns:
-                pd.DataFrame: 查询结果
-            """
-            conn = sqlite3.connect(self.db_path)
-            df = pd.read_sql_query(query, conn, params=params)
-            conn.close()
-            return df
+        Returns:
+            pd.DataFrame: 查询结果
+        """
+        conn = sqlite3.connect(self.db_path)
+        df = pd.read_sql_query(query, conn, params=params)
+        conn.close()
+        return df
     def _ensure_db_directory(self):
         """确保数据库文件所在的目录存在。"""
         db_dir = os.path.dirname(self.db_path)
@@ -167,9 +166,11 @@ class CChanDB:
         """
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
+            from datetime import datetime
+            add_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             cursor.execute(
-                "INSERT INTO signals (code, signal_type, score, chart_path) VALUES (?, ?, ?, ?)",
-                (code, signal_type, score, chart_path)
+                "INSERT INTO trading_signals (add_date, stock_code, stock_name, lv, bstype, is_buy, model_score_before, open_image_url, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')",
+                (add_date, code, 'TEST', '30M', signal_type, 1 if signal_type == 'buy' else 0, score, chart_path)
             )
             conn.commit()
             return cursor.lastrowid
@@ -184,10 +185,10 @@ class CChanDB:
         Returns:
             活跃信号的列表。
         """
-        query = "SELECT * FROM signals WHERE status = 'active'"
+        query = "SELECT * FROM trading_signals WHERE status = 'active'"
         params = ()
         if code:
-            query += " AND code = ?"
+            query += " AND stock_code = ?"
             params = (code,)
         
         df = self.execute_query(query, params)

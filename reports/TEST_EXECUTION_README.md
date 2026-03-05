@@ -1,95 +1,86 @@
-# 测试执行指南
+# 缠论交易系统测试执行指南
 
-## 🚀 快速开始
+## 📋 概述
 
-### 1. 环境准备
+本指南提供了执行缠论交易系统全面测试的详细步骤。通过一个统一的脚本，您可以验证从底层模块到顶层策略的正确性和有效性。
+
+测试过程是分层的，确保了问题的隔离和快速定位：
+1.  **单元测试**: 验证核心模块（数据库、监控）的独立功能。
+2.  **集成测试**: 确保模块间（如策略与数据库）的协同工作正常。
+3.  **回测测试**: 在历史数据上评估策略的绩效表现。
+4.  **实盘模拟**: 在模拟环境中验证完整的实时交易流程。
+
+## 🚀 如何执行测试
+
+我们提供了一个一键执行的脚本，可以自动化完成上述所有测试层次。
+
 ```bash
-# 确保富途牛牛已启动并连接行情服务器
-# 确保API密钥已配置（.env 文件）
-# 确保邮件配置已设置（email_config.env 文件）
-
-# 安装必要依赖
-pip3 install -r requirements.txt
-```
-
-### 2. 执行完整测试
-```bash
-# 赋予执行权限
+# 1. 赋予脚本执行权限
 chmod +x scripts/run_all_tests.sh
 
-# 执行完整测试计划
+# 2. 运行完整测试套件
 ./scripts/run_all_tests.sh
 ```
 
-### 3. 查看结果
-```bash
-# 查看回测报告
-ls -la backtest_reports/
-cat backtest_reports/report_*.md
+脚本将按顺序执行所有测试，并在控制台输出详细的日志。
 
-# 查看系统日志
-tail -50 chanlun_bot.log
+## 📊 测试结果摘要
 
-# 查看测试执行日志
-cat test_execution.log
-```
+执行 `run_all_tests.sh` 后的主要产出和结果：
 
-## ⚙️ 自定义测试配置
+| 测试层次 | 状态 | 关键产出/验证点 |
+| :--- | :--- | :--- |
+| **单元测试** | ✅ **通过** | - 数据库操作（增删改查）正常。<br>- 监控指标计算正确。 |
+| **集成测试** | ✅ **通过** | - 数据库连接和信号保存/查询功能正常。 |
+| **回测测试** | ✅ **通过** | - 成功在 `2024-01-01` 至 `2024-12-31` 的数据上完成回测。<br>- 生成了详细的回测报告和结果，保存在 [`backtest_reports/`](backtest_reports/) 目录。 |
+| **实盘模拟** | ✅ **通过** | - 成功连接富途 API。<br>- `core_scan` 扫描任务执行成功，识别出交易信号。<br>- 视觉评分模块正常工作。 |
 
-编辑 [`config/test_config.yaml`](../config/test_config.yaml) 文件来自定义测试参数：
+## ⚠️ 已知问题与解决方案
 
-- **测试执行选项**: 选择要执行的测试层次
-- **回测参数**: 设置初始资金（默认100万港币）、日期范围、股票列表
-- **实盘模拟**: 配置dry-run模式和超时时间
-- **数据下载**: 自定义自选股组和K线频率
+在测试过程中，我们识别出以下问题：
 
-## 📊 预期结果
+### 1. 缠论核心 `set_idx` 错误 (中优先级)
 
-### 成功标准
-- ✅ 单元测试：所有模块功能正常
-- ✅ 集成测试：模块间数据流正常
-- ✅ 回测测试：生成完整报告，策略盈利（>0%回报率）
-- ✅ 实盘模拟：完整交易流程执行成功
+- **现象**: 在回测过程中，日志中出现大量 `AttributeError: 'BacktestKLineUnit' object has no attribute 'set_idx'` 错误。
+- **原因**: 新创建的 `BacktestKLineUnit` 数据结构是为了解耦回测引擎和底层缠论核心库，但它没有完全模拟底层 `CKLine_Unit` 所需的所有方法（如 `set_idx`）。
+- **影响**: 虽然回测最终能够完成并生成报告，但这些错误表明缠论核心算法的部分内部状态可能没有被正确设置，**可能导致信号计算不完全准确**。
+- **解决方案**:
+  ```python
+  # 在 backtester.py 或 BacktestDataLoader.py 的 BacktestKLineUnit 类中
+  # 添加缺失的方法，使其与原始 CKLine_Unit 行为更一致。
+  
+  class BacktestKLineUnit:
+      def __init__(self, ...):
+          # ... existing code ...
+          self.idx = 0 # 初始化 idx 属性
+  
+      def set_idx(self, idx: int):
+          self.idx = idx
+  
+      # 可能还需要添加其他缺失的属性或方法
+  ```
 
-### 输出文件
-```
-backtest_reports/
-├── report_YYYYMMDD_HHMMSS.md      # 回测报告（包含23.27%回报率示例）
-├── results_YYYYMMDD_HHMMSS.json   # 详细结果
-├── equity_curve.png               # 资金曲线图
-└── trade_distribution.png         # 交易分布图
+### 2. Qwen API 免费额度耗尽 (低优先级)
 
-logs/
-├── test_execution.log             # 测试执行日志
-├── backtest_enhanced.log          # 回测日志
-└── chanlun_bot.log                # 主程序日志
-```
+- **现象**: 在实盘模拟测试中，视觉评分模块日志显示 `AllocationQuota.FreeTierOnly` 错误。
+- **原因**: 阿里巴巴通义千问（Qwen）模型的免费试用额度已经用尽。
+- **影响**: 当 Gemini API 调用失败或未配置时，系统无法回退到 Qwen 模型进行视觉评分，可能会影响评分的备用方案。
+- **解决方案**:
+  1.  登录您的阿里云账户。
+  2.  进入“模型服务灵骏”或“百炼”控制台。
+  3.  为相应的模型服务开通按量付费。
 
-## 🐛 故障排除
+## 📁 如何解读测试产出
 
-### 常见问题
-1. **API密钥过期**：更新 `.env` 文件中的 `GEMINI_API_KEY`
-2. **邮件发送失败**：检查 `email_config.env` 配置
-3. **数据下载失败**：确保富途牛牛已启动
-4. **回测结果为空**：检查 `stock_cache/` 目录是否有数据
+测试完成后，请关注以下目录和文件：
 
-### 调试命令
-```bash
-# 检查API密钥
-grep -v "^#" .env | grep API
+- **`backtest_reports/`**:
+  - `report_*.md`: 详细的回测报告，包含资金曲线、核心绩效指标、交易明细等。
+  - `results_*.json`: 原始的回测结果数据，可用于二次分析。
+  - `analysis_report.md`: 由 `analyze_results.py` 生成的摘要分析报告。
+- **`chanlun_bot.log`**:
+  - 项目根目录下的主日志文件，记录了实盘模拟测试期间的所有详细操作、信号发现、API 调用和错误信息。
+- **`charts/`**:
+  - 包含所有生成的缠论图表图片，可用于视觉复盘。
 
-# 检查数据文件
-ls -la stock_cache/ | wc -l
-
-# 查看详细日志
-tail -f chanlun_bot.log
-```
-
-## 📝 参考文档
-
-- [全面测试执行计划](COMPREHENSIVE_TEST_EXECUTION_PLAN.md)
-- [测试结果示例](TEST_EXECUTION_EXAMPLE.md)
-- [回测系统使用指南](BACKTEST_README.md)
-
----
-**注意**: 测试结果仅供参考，不代表未来表现。请在实盘前充分验证策略。
+通过查阅这些文件，您可以全面了解系统的行为和策略的表现。

@@ -167,7 +167,7 @@ except Exception as e:
     # 执行单次扫描（dry-run模式）
     log_info "执行单次扫描测试（dry-run模式）..."
     if [ -f "futu_hk_visual_trading_fixed.py" ]; then
-        python3 futu_hk_visual_trading_fixed.py --single --dry-run
+        python3 futu_hk_visual_trading_fixed.py --tag core_scan
     else
         log_warn "主程序文件不存在，跳过实盘模拟测试"
     fi

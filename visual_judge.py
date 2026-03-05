@@ -34,16 +34,29 @@ except ImportError:
 
 # API 密钥配置 - 从 .env 文件强制加载，忽略系统环境变量
 env_path = os.path.join(os.path.dirname(__file__), '.env')
+GOOGLE_API_KEY = None
+DASHSCOPE_API_KEY = None
+
 if os.path.exists(env_path):
     with open(env_path, 'r') as f:
         for line in f:
             if line.strip() and not line.startswith('#'):
                 key, value = line.strip().split('=', 1)
+                # 移除可能存在的引号和前后空白
+                value = value.strip().strip('"\'')
+                
                 if key == 'GOOGLE_API_KEY':
-                    GOOGLE_API_KEY = value
+                    if value and value != "YOUR_GOOGLE_API_KEY_HERE":
+                        GOOGLE_API_KEY = value
+                    else:
+                        print("⚠️ 警告: .env 文件中的 GOOGLE_API_KEY 仍为默认占位符，请替换为有效的API密钥。")
                 elif key == 'DASHSCOPE_API_KEY':
-                    DASHSCOPE_API_KEY = value
+                    if value and value != "YOUR_DASHSCOPE_API_KEY_HERE":
+                        DASHSCOPE_API_KEY = value
+                    else:
+                        print("⚠️ 警告: .env 文件中的 DASHSCOPE_API_KEY 仍为默认占位符，请替换为有效的API密钥。")
 else:
+    print(f"⚠️ 警告: 未找到配置文件 {env_path}，请确保已创建并配置API密钥。")
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
     DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 
