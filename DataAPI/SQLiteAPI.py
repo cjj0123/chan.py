@@ -219,7 +219,7 @@ def download_and_save_all_stocks(stock_codes, days=365, log_callback=None):
                 print(f"❌ 下载 {code} 失败: {e}")
             continue
 
-def download_and_save_all_stocks_multi_timeframe(stock_codes, days=365, timeframes=['day', '30m', '5m', '1m'], log_callback=None):
+def download_and_save_all_stocks_multi_timeframe(stock_codes, days=365, timeframes=['day', '30m', '5m', '1m'], log_callback=None, start_date=None, end_date=None, stop_check=None):
     """
     Download and save all stock data to SQLite database for multiple timeframes
     
@@ -228,6 +228,9 @@ def download_and_save_all_stocks_multi_timeframe(stock_codes, days=365, timefram
         days: number of days to download for day timeframe, default 365
         timeframes: list of timeframes to download ['day', '30m', '5m', '1m']
         log_callback: optional callback function for logging messages
+        start_date: optional start date in 'YYYY-MM-DD' format, overrides 'days' parameter
+        end_date: optional end date in 'YYYY-MM-DD' format, defaults to today if not specified
+        stop_check: optional callback function that returns True if operation should be stopped
     """
     from datetime import datetime, timedelta
     from Trade.db_util import CChanDB
@@ -237,24 +240,85 @@ def download_and_save_all_stocks_multi_timeframe(stock_codes, days=365, timefram
     
     db = CChanDB()
     
-    # Timeframe mapping
+    # Timeframe mapping - use reasonable default days for different timeframes
+    # Note: For minute-level data, the actual data availability depends on the data source
+    # We use the user-specified 'days' for day data, but cap minute data to reasonable limits
+    # Increased limits for 30m data to get more historical data
     tf_map = {
         'day': (KL_TYPE.K_DAY, days),
-        '30m': (KL_TYPE.K_30M, 30),  # Last 30 days for 30m
-        '5m': (KL_TYPE.K_5M, 7),     # Last 7 days for 5m
-        '1m': (KL_TYPE.K_1M, 2),     # Last 2 days for 1m
+        '30m': (KL_TYPE.K_30M, min(days, 365)),  # Cap 30m to 365 days max (1 year)
+        '5m': (KL_TYPE.K_5M, min(days, 90)),     # Cap 5m to 90 days max (3 months)
+        '1m': (KL_TYPE.K_1M, min(days, 30)),     # Cap 1m to 30 days max (1 month)
     }
     
     # Filter valid timeframes
     valid_timeframes = [tf for tf in timeframes if tf in tf_map]
     
     for code in stock_codes:
+        # Check if we should stop before processing each stock
+        if stop_check and stop_check():
+            print("⚠️  数据下载被用户取消")
+            if log_callback:
+                log_callback("⚠️  数据下载被用户取消")
+            return
+            
         for tf_name in valid_timeframes:
             k_type, tf_days = tf_map[tf_name]
             table_name = f"kline_{tf_name}"
             
-            begin_time = (datetime.now() - timedelta(days=tf_days)).strftime("%Y-%m-%d")
-            end_time = datetime.now().strftime("%Y-%m-%d")
+            # Handle custom date range
+            if start_date and end_date:
+                # Use custom date range
+                desired_begin_time = start_date
+                desired_end_time = end_date
+            elif start_date:
+                # Use custom start date, end today
+                desired_begin_time = start_date
+                desired_end_time = datetime.now().strftime("%Y-%m-%d")
+            elif end_date:
+                # Use custom end date, calculate start from days
+                desired_end_time = end_date
+                desired_begin_time = (datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=tf_days)).strftime("%Y-%m-%d")
+            else:
+                # Use default range based on days parameter
+                desired_end_time = datetime.now().strftime("%Y-%m-%d")
+                desired_begin_time = (datetime.now() - timedelta(days=tf_days)).strftime("%Y-%m-%d")
+            
+            # Check existing data in database
+            with sqlite3.connect(db.db_path) as conn:
+                existing_df = pd.read_sql_query(f"SELECT MIN(date) as min_date, MAX(date) as max_date FROM {table_name} WHERE code = ?", conn, params=(code,))
+            
+            if not existing_df.empty and existing_df.iloc[0]['min_date'] is not None:
+                existing_min = existing_df.iloc[0]['min_date']
+                existing_max = existing_df.iloc[0]['max_date']
+                print(f"ℹ️  {code} {tf_name} 已有数据范围: {existing_min} 到 {existing_max}")
+                
+                # For custom date ranges, we always download the specified range
+                # For default ranges, we do incremental updates
+                if start_date or end_date:
+                    # Custom date range - download the entire specified range
+                    begin_time = desired_begin_time
+                    end_time = desired_end_time
+                    print(f"📅 {code} {tf_name} 使用自定义日期范围: {begin_time} 到 {end_time}")
+                else:
+                    # Default range - do incremental update
+                    if existing_max < desired_end_time:
+                        # Need to download recent data
+                        begin_time = (datetime.strptime(existing_max.split(' ')[0], "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+                        end_time = desired_end_time
+                    else:
+                        # Already have recent data, check if we need historical data
+                        if existing_min > desired_begin_time:
+                            begin_time = desired_begin_time
+                            end_time = (datetime.strptime(existing_min.split(' ')[0], "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+                        else:
+                            # Already have complete data range
+                            print(f"✅ {code} {tf_name} 已有完整数据，跳过下载")
+                            continue
+            else:
+                # No existing data, download full range
+                begin_time = desired_begin_time
+                end_time = desired_end_time
             
             kl_data = None
             source_used = None
@@ -275,12 +339,35 @@ def download_and_save_all_stocks_multi_timeframe(stock_codes, days=365, timefram
                     kl_data, source_used = _download_with_akshare_with_timeframe(code, begin_time, end_time, k_type)
                 
                 if kl_data:
-                    # Save to database
+                    # Save to database - incremental update (no deletion of existing data)
                     df = pd.DataFrame(kl_data)
                     with sqlite3.connect(db.db_path) as conn:
-                        # 先删除该股票的旧数据
-                        conn.execute(f"DELETE FROM {table_name} WHERE code = ?", (code,))
-                        df.to_sql(table_name, conn, if_exists='append', index=False)
+                        # Check existing data range
+                        existing_df = pd.read_sql_query(f"SELECT MIN(date) as min_date, MAX(date) as max_date FROM {table_name} WHERE code = ?", conn, params=(code,))
+                        if not existing_df.empty and existing_df.iloc[0]['min_date'] is not None:
+                            existing_min = existing_df.iloc[0]['min_date']
+                            existing_max = existing_df.iloc[0]['max_date']
+                            if log_callback:
+                                log_callback(f"ℹ️  {code} {tf_name} 已有数据范围: {existing_min} 到 {existing_max}")
+                            else:
+                                print(f"ℹ️  {code} {tf_name} 已有数据范围: {existing_min} 到 {existing_max}")
+                        
+                        # Remove duplicates before inserting
+                        df = df.drop_duplicates(subset=['date'], keep='last')
+                        
+                        # Handle unique constraint by using INSERT OR REPLACE
+                        # Convert DataFrame to list of tuples for bulk insert
+                        records = df.to_records(index=False)
+                        columns = df.columns.tolist()
+                        
+                        # Create INSERT OR REPLACE statement
+                        placeholders = ', '.join(['?' for _ in columns])
+                        columns_str = ', '.join(columns)
+                        sql = f"INSERT OR REPLACE INTO {table_name} ({columns_str}) VALUES ({placeholders})"
+                        
+                        # Execute bulk insert
+                        conn.executemany(sql, records)
+                        conn.commit()
                     if log_callback:
                         log_callback(f"✅ 成功下载 {code} {tf_name} ({len(kl_data)} 条数据) - 数据源: {source_used}")
                     else:

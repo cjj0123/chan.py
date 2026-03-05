@@ -34,9 +34,9 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QComboBox, QCheckBox, QGroupBox,
     QMessageBox, QStatusBar, QSplitter, QTableWidget, QTableWidgetItem,
-    QProgressBar, QHeaderView, QTextEdit, QSpinBox
+    QProgressBar, QHeaderView, QTextEdit, QSpinBox, QDateTimeEdit
 )
-from PyQt6.QtCore import QDate, Qt, QThread, pyqtSignal
+from PyQt6.QtCore import QDate, Qt, QThread, pyqtSignal, QDateTime
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
@@ -462,6 +462,121 @@ class OfflineScanThread(QThread):
         self.finished.emit(success_count, fail_count)
 
 
+class UpdateDatabaseThread(QThread):
+    """
+    更新本地数据库的后台线程
+    
+    在独立线程中下载股票数据并保存到SQLite数据库。
+    
+    Signals:
+        progress: (int, int, str) 当前进度、总数、当前股票信息
+        log_signal: (str) 日志消息
+        finished: (bool, str) 完成信号，包含成功状态和消息
+    """
+    progress = pyqtSignal(int, int, str)
+    log_signal = pyqtSignal(str)
+    finished = pyqtSignal(bool, str)
+    
+    def __init__(self, stock_codes, days, timeframes, start_date=None, end_date=None):
+        """
+        初始化数据库更新线程
+        
+        Args:
+            stock_codes: list, 股票代码列表
+            days: int, 获取多少天的历史数据
+            timeframes: list, 时间级别列表
+            start_date: str, 开始日期 (可选)
+            end_date: str, 结束日期 (可选)
+        """
+        super().__init__()
+        self.stock_codes = stock_codes
+        self.days = days
+        self.timeframes = timeframes
+        self.start_date = start_date
+        self.end_date = end_date
+        self.is_running = True
+        
+    def stop(self):
+        """停止数据库更新"""
+        self.is_running = False
+        self.log_signal.emit("正在停止数据库更新...")
+        
+    def run(self):
+        """执行数据库更新任务"""
+        try:
+            if not self.stock_codes:
+                self.finished.emit(False, "股票列表为空")
+                return
+                
+            total = len(self.stock_codes)
+            success_count = 0
+            
+            # 导入必要的模块
+            from DataAPI.SQLiteAPI import download_and_save_all_stocks_multi_timeframe
+            from Trade.db_util import CChanDB
+            
+            def log_callback(msg):
+                if self.is_running:
+                    self.log_signal.emit(msg)
+                    
+            # 执行下载任务
+            if self.is_running:
+                def stop_check():
+                    return not self.is_running
+                
+                download_and_save_all_stocks_multi_timeframe(
+                    self.stock_codes,
+                    days=self.days,
+                    timeframes=self.timeframes,
+                    log_callback=log_callback,
+                    start_date=self.start_date,
+                    end_date=self.end_date,
+                    stop_check=stop_check
+                )
+                
+                # 统计结果
+                if self.is_running:
+                    db = CChanDB()
+                    downloaded_codes = db.execute_query("SELECT DISTINCT code FROM kline_day")['code'].tolist()
+                    success_count = len(downloaded_codes)
+                    
+                    # 统计各市场数据量
+                    market_stats = {}
+                    total_klines = 0
+                    for code in downloaded_codes:
+                        count = db.execute_query(f"SELECT COUNT(*) as cnt FROM kline_day WHERE code = '{code}'")['cnt'].iloc[0]
+                        total_klines += count
+                        market = code.split('.')[0]
+                        market_stats[market] = market_stats.get(market, 0) + 1
+                    
+                    result_msg = f"本地数据库更新完成！成功下载 {success_count}/{total} 只股票。"
+                    self.log_signal.emit(f"✅ 本地数据库更新完成！")
+                    self.log_signal.emit(f"   • 成功下载: {success_count} 只股票")
+                    self.log_signal.emit(f"   • 总K线数: {total_klines} 条")
+                    self.log_signal.emit(f"   • 市场分布: {', '.join([f'{k}:{v}' for k, v in market_stats.items()])}")
+                    
+                    # 显示失败的股票（如果有的话）
+                    failed_codes = [code for code in self.stock_codes if code not in downloaded_codes]
+                    if failed_codes:
+                        self.log_signal.emit(f"⚠️ 下载失败的股票 ({len(failed_codes)} 只):")
+                        for i, code in enumerate(failed_codes[:10]):
+                            self.log_signal.emit(f"   • {code}")
+                        if len(failed_codes) > 10:
+                            self.log_signal.emit(f"   ... 还有 {len(failed_codes) - 10} 只股票下载失败")
+                    
+                    self.finished.emit(True, result_msg)
+                else:
+                    self.finished.emit(False, "数据库更新被用户取消")
+            else:
+                self.finished.emit(False, "数据库更新被用户取消")
+                
+        except Exception as e:
+            import traceback
+            self.log_signal.emit(f"❌ 更新失败: {str(e)}")
+            self.log_signal.emit(f"   错误详情: {traceback.format_exc()}")
+            self.finished.emit(False, f"更新失败: {str(e)}")
+
+
 class OfflineSingleAnalysisThread(QThread):
     """
     离线单只股票分析的后台线程
@@ -607,6 +722,7 @@ class AkshareGUI(QMainWindow):
         self.chan = None  # 当前分析的 CChan 对象
         self.scan_thread = None  # 批量扫描线程
         self.analysis_thread = None  # 单股分析线程
+        self.update_db_thread = None  # 数据库更新线程
         self.stock_cache = {}  # 缓存已分析的股票 {code: CChan}
         self.futu_monitor = None  # 富途监控器
         self.log_signal.connect(self.on_log_message)
@@ -669,7 +785,7 @@ class AkshareGUI(QMainWindow):
         time_layout = QHBoxLayout()
         time_layout.addWidget(QLabel("数据时间范围:"))
         self.days_input = QSpinBox()
-        self.days_input.setRange(30, 1095)  # 30天到3年
+        self.days_input.setRange(30, 2190)  # 30天到6年
         self.days_input.setValue(365)  # 默认1年
         self.days_input.setSuffix(" 天")
         time_layout.addWidget(self.days_input)
@@ -684,10 +800,50 @@ class AkshareGUI(QMainWindow):
         timeframe_layout.addWidget(self.timeframe_combo)
         scan_layout.addLayout(timeframe_layout)
         
+        # 自定义日期范围（可选）
+        date_range_layout = QHBoxLayout()
+        date_range_layout.addWidget(QLabel("自定义日期范围:"))
+        
+        # 开始日期时间选择器
+        self.start_date_input = QDateTimeEdit()
+        self.start_date_input.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+        self.start_date_input.setCalendarPopup(True)
+        self.start_date_input.setDateTime(QDateTime.currentDateTime().addDays(-365))  # 默认为一年前
+        
+        # 结束日期时间选择器
+        self.end_date_input = QDateTimeEdit()
+        self.end_date_input.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+        self.end_date_input.setCalendarPopup(True)
+        self.end_date_input.setDateTime(QDateTime.currentDateTime())  # 默认为当前时间
+        
+        date_range_layout.addWidget(QLabel("开始:"))
+        date_range_layout.addWidget(self.start_date_input)
+        date_range_layout.addWidget(QLabel("结束:"))
+        date_range_layout.addWidget(self.end_date_input)
+        scan_layout.addLayout(date_range_layout)
+        
         # 更新本地数据库按钮
+        db_btn_layout = QHBoxLayout()
         self.update_db_btn = QPushButton("更新本地数据库")
         self.update_db_btn.clicked.connect(self.update_local_database)
-        scan_layout.addWidget(self.update_db_btn)
+        db_btn_layout.addWidget(self.update_db_btn)
+        
+        self.stop_update_db_btn = QPushButton("停止更新")
+        self.stop_update_db_btn.clicked.connect(self.stop_update_database)
+        self.stop_update_db_btn.setEnabled(False)
+        self.stop_update_db_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #f44336;
+                color: white;
+                font-size: 12px;
+                padding: 5px;
+                border-radius: 3px;
+            }
+            QPushButton:hover { background-color: #da190b; }
+            QPushButton:disabled { background-color: #cccccc; }
+        """)
+        db_btn_layout.addWidget(self.stop_update_db_btn)
+        scan_layout.addLayout(db_btn_layout)
 
         # 扫描按钮
         btn_layout = QHBoxLayout()
@@ -968,6 +1124,7 @@ class AkshareGUI(QMainWindow):
     def update_local_database(self):
         """更新本地数据库"""
         self.update_db_btn.setEnabled(False)
+        self.stop_update_db_btn.setEnabled(True)
         days = self.days_input.value()
         self.statusBar.showMessage(f'开始下载并更新本地数据库... (数据时间范围: {days} 天)')
         self.log_text.append(f"🔄 开始更新本地数据库，下载最近 {days} 天的数据...")
@@ -978,10 +1135,13 @@ class AkshareGUI(QMainWindow):
             # 如果富途获取失败，回退到其他方法
             stock_list = get_tradable_stocks()
         
-        # 启动后台线程下载数据
-        from DataAPI.SQLiteAPI import download_and_save_all_stocks_multi_timeframe
-        from threading import Thread
-        
+        if stock_list.empty:
+            self.statusBar.showMessage('股票列表为空，无法更新数据库')
+            self.log_text.append("❌ 股票列表为空，无法更新数据库")
+            self.update_db_btn.setEnabled(True)
+            self.stop_update_db_btn.setEnabled(False)
+            return
+            
         # 获取选择的时间级别
         selected_timeframe = self.timeframe_combo.currentText()
         timeframe_map = {
@@ -992,73 +1152,42 @@ class AkshareGUI(QMainWindow):
         }
         timeframes_to_download = timeframe_map.get(selected_timeframe, ['day'])
         
-        def download_task():
-            try:
-                if stock_list.empty:
-                    self.statusBar.showMessage('股票列表为空，无法更新数据库')
-                    self.log_text.append("❌ 股票列表为空，无法更新数据库")
-                else:
-                    stock_codes = stock_list['代码'].tolist()
-                    self.log_text.append(f"📊 准备下载 {len(stock_codes)} 只股票的 {selected_timeframe} 数据...")
-                    
-                    # 修改 download_and_save_all_stocks_multi_timeframe 以支持日志回调
-                    def log_callback(msg):
-                        self.log_signal.emit(msg)
-                    
-                    download_and_save_all_stocks_multi_timeframe(
-                        stock_codes,
-                        days=days,
-                        timeframes=timeframes_to_download,
-                        log_callback=log_callback
-                    )
-                    
-                    # 统计实际下载成功的股票
-                    from Trade.db_util import CChanDB
-                    db = CChanDB()
-                    downloaded_codes = db.execute_query("SELECT DISTINCT code FROM kline_day")['code'].tolist()
-                    success_count = len(downloaded_codes)
-                    
-                    # 统计各市场数据量
-                    market_stats = {}
-                    total_klines = 0
-                    for code in downloaded_codes:
-                        count = db.execute_query(f"SELECT COUNT(*) as cnt FROM kline_day WHERE code = '{code}'")['cnt'].iloc[0]
-                        total_klines += count
-                        market = code.split('.')[0]
-                        market_stats[market] = market_stats.get(market, 0) + 1
-                    
-                    self.statusBar.showMessage(f'本地数据库更新完成！成功下载 {success_count}/{len(stock_codes)} 只股票。')
-                    self.log_text.append(f"✅ 本地数据库更新完成！")
-                    self.log_text.append(f"   • 成功下载: {success_count} 只股票")
-                    self.log_text.append(f"   • 总K线数: {total_klines} 条")
-                    self.log_text.append(f"   • 市场分布: {', '.join([f'{k}:{v}' for k, v in market_stats.items()])}")
-                    
-                    # 显示失败的股票（如果有的话）
-                    failed_codes = [code for code in stock_codes if code not in downloaded_codes]
-                    if failed_codes:
-                        self.log_text.append(f"⚠️ 下载失败的股票 ({len(failed_codes)} 只):")
-                        for i, code in enumerate(failed_codes[:10]):
-                            self.log_text.append(f"   • {code}")
-                        if len(failed_codes) > 10:
-                            self.log_text.append(f"   ... 还有 {len(failed_codes) - 10} 只股票下载失败")
-                            
-            except Exception as e:
-                self.statusBar.showMessage(f'更新失败: {str(e)}')
-                self.log_text.append(f"❌ 更新失败: {str(e)}")
-                import traceback
-                self.log_text.append(f"   错误详情: {traceback.format_exc()}")
-            finally:
-                self.update_db_btn.setEnabled(True)
-                
-        thread = Thread(target=download_task)
-        thread.daemon = True
-        thread.start()
+        # 获取自定义日期范围
+        start_date = self.start_date_input.dateTime().toString("yyyy-MM-dd") if not self.start_date_input.dateTime().isNull() else None
+        end_date = self.end_date_input.dateTime().toString("yyyy-MM-dd") if not self.end_date_input.dateTime().isNull() else None
+        
+        stock_codes = stock_list['代码'].tolist()
+        self.log_text.append(f"📊 准备下载 {len(stock_codes)} 只股票的 {selected_timeframe} 数据...")
+        
+        # 启动QThread下载数据
+        self.update_db_thread = UpdateDatabaseThread(
+            stock_codes,
+            days,
+            timeframes_to_download,
+            start_date,
+            end_date
+        )
+        self.update_db_thread.log_signal.connect(self.on_log_message)
+        self.update_db_thread.finished.connect(self.on_update_database_finished)
+        self.update_db_thread.start()
 
     def stop_scan(self):
         """停止扫描"""
         if self.scan_thread:
             self.scan_thread.stop()
         self.statusBar.showMessage('正在停止扫描...')
+    
+    def stop_update_database(self):
+        """停止更新数据库"""
+        if self.update_db_thread:
+            self.update_db_thread.stop()
+        self.statusBar.showMessage('正在停止数据库更新...')
+    
+    def on_update_database_finished(self, success, message):
+        """数据库更新完成回调"""
+        self.update_db_btn.setEnabled(True)
+        self.stop_update_db_btn.setEnabled(False)
+        self.statusBar.showMessage(message)
 
     def on_scan_progress(self, current, total, stock_info):
         """扫描进度更新"""
