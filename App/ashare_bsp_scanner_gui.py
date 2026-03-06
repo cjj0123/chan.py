@@ -62,6 +62,9 @@ except ImportError:
 # 富途实时监控相关
 from Monitoring.FutuMonitor import FutuMonitor
 
+# 港股自动化交易控制器
+from App.HKTradingController import HKTradingController
+
 
 def get_futu_watchlist_stocks():
     """
@@ -870,6 +873,7 @@ class AkshareGUI(QMainWindow):
         self.repair_thread = None  # 单股数据修复线程
         self.stock_cache = {}  # 缓存已分析的股票 {code: CChan}
         self.futu_monitor = None  # 富途监控器
+        self.hk_trading_controller = None  # 港股自动化交易控制器
         self.log_signal.connect(self.on_log_message)
         self.init_ui()
 
@@ -1121,6 +1125,31 @@ class AkshareGUI(QMainWindow):
         futu_layout.addWidget(self.futu_log_text)
 
         layout.addWidget(futu_group)
+        # === 新增结束 ===
+
+        # === 新增：自动化交易面板 ===
+        auto_trade_group = QGroupBox("自动化交易 (港股)")
+        auto_trade_layout = QVBoxLayout(auto_trade_group)
+
+        # 控制按钮
+        auto_trade_btn_layout = QHBoxLayout()
+        self.auto_trade_start_btn = QPushButton("启动自动交易")
+        self.auto_trade_start_btn.clicked.connect(self.start_auto_trading)
+        auto_trade_btn_layout.addWidget(self.auto_trade_start_btn)
+
+        self.auto_trade_stop_btn = QPushButton("停止自动交易")
+        self.auto_trade_stop_btn.clicked.connect(self.stop_auto_trading)
+        self.auto_trade_stop_btn.setEnabled(False)
+        auto_trade_btn_layout.addWidget(self.auto_trade_stop_btn)
+        auto_trade_layout.addLayout(auto_trade_btn_layout)
+
+        # 交易日志
+        self.auto_trade_log_text = QTextEdit()
+        self.auto_trade_log_text.setReadOnly(True)
+        self.auto_trade_log_text.setMaximumHeight(150)
+        auto_trade_layout.addWidget(self.auto_trade_log_text)
+
+        layout.addWidget(auto_trade_group)
         # === 新增结束 ===
 
         return panel
@@ -1572,6 +1601,60 @@ class AkshareGUI(QMainWindow):
         self.futu_stop_btn.setEnabled(False)
         self.futu_refresh_btn.setEnabled(True)
         self.futu_log_text.append("监控已停止。")
+    # === 新增结束 ===
+
+    # === 新增：自动化交易相关方法 ===
+    def on_auto_trade_log(self, message: str):
+        """处理来自交易控制器的日志消息"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.auto_trade_log_text.append(f"[{timestamp}] {message}")
+
+    def on_auto_trade_finished(self, executed_sell: int, executed_buy: int, failed_sell: int, failed_buy: int):
+        """处理交易完成信号"""
+        self.auto_trade_start_btn.setEnabled(True)
+        self.auto_trade_stop_btn.setEnabled(False)
+        self.statusBar.showMessage(f"自动交易完成: 成功卖出 {executed_sell} 笔, 买入 {executed_buy} 笔")
+
+    def start_auto_trading(self):
+        """启动自动化交易"""
+        if self.hk_trading_controller is not None and self.hk_trading_controller._is_running:
+            QMessageBox.warning(self, "警告", "自动交易已在运行中！")
+            return
+
+        try:
+            self.auto_trade_start_btn.setEnabled(False)
+            self.auto_trade_stop_btn.setEnabled(True)
+            self.auto_trade_log_text.clear()
+            self.on_auto_trade_log("正在初始化港股交易控制器...")
+
+            # 创建新的交易控制器实例（不设置父对象，以便可以移动到其他线程）
+            self.hk_trading_controller = HKTradingController()
+            # 连接信号
+            self.hk_trading_controller.log_message.connect(self.on_auto_trade_log)
+            self.hk_trading_controller.scan_finished.connect(self.on_auto_trade_finished)
+
+            # 在新线程中启动交易流程
+            from PyQt6.QtCore import QThread
+            self.auto_trade_thread = QThread()
+            self.hk_trading_controller.moveToThread(self.auto_trade_thread)
+            self.auto_trade_thread.started.connect(self.hk_trading_controller.run_scan_and_trade)
+            self.auto_trade_thread.start()
+
+            self.on_auto_trade_log("自动化交易流程已启动。")
+        except Exception as e:
+            error_msg = f"启动自动交易失败: {str(e)}"
+            self.on_auto_trade_log(f"❌ {error_msg}")
+            QMessageBox.critical(self, "错误", error_msg)
+            self.auto_trade_start_btn.setEnabled(True)
+            self.auto_trade_stop_btn.setEnabled(False)
+
+    def stop_auto_trading(self):
+        """停止自动化交易"""
+        if self.hk_trading_controller:
+            self.hk_trading_controller.stop()
+            self.on_auto_trade_log("已发送停止信号，等待当前操作完成...")
+        self.auto_trade_start_btn.setEnabled(True)
+        self.auto_trade_stop_btn.setEnabled(False)
     # === 新增结束 ===
 
 
