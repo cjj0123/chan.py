@@ -46,6 +46,7 @@ import matplotlib.pyplot as plt
 import akshare as ak
 import pandas as pd
 import os
+import re
 import yaml
 
 from Chan import CChan
@@ -208,6 +209,59 @@ def get_local_stock_list():
     except Exception as e:
         print(f"从本地数据库获取股票列表失败: {e}")
         return pd.DataFrame(columns=['代码', '名称', '最新价', '涨跌幅'])
+
+
+def normalize_stock_code(code_input):
+    """
+    标准化股票代码输入
+    
+    支持的输入格式：
+    - 完整格式: SH.600000, SZ.000001, HK.00700, US.AAPL
+    - 纯数字: 600000, 000001, 00700
+    - 带市场前缀的数字: 600000.SH, 000001.SZ
+    
+    Returns:
+        str: 标准化后的股票代码 (SH.600000, SZ.000001, HK.00700, US.AAPL)
+    """
+    code = code_input.strip().upper()
+    
+    # 如果已经是完整格式，直接返回
+    if re.match(r'^(SH|SZ|HK|US)\.\w+$', code):
+        return code
+    
+    # 如果是带市场后缀的格式 (600000.SH)
+    if re.match(r'^\d+\.(SH|SZ|HK|US)$', code):
+        parts = code.split('.')
+        return f"{parts[1]}.{parts[0]}"
+    
+    # 如果是纯数字，尝试推断市场
+    if re.match(r'^\d+$', code):
+        # 检查长度和前缀来推断市场
+        if len(code) == 6:
+            if code.startswith('6'):
+                return f"SH.{code}"
+            elif code.startswith('0') or code.startswith('3'):
+                return f"SZ.{code}"
+            else:
+                # 可能是其他市场，先假设是SH
+                return f"SH.{code}"
+        elif len(code) == 5:
+            # 港股通常是5位数字
+            return f"HK.{code}"
+        elif len(code) <= 4:
+            # 美股通常是1-4个字母，但这里输入的是数字，可能是错误
+            # 先假设是A股
+            if code.startswith('6'):
+                return f"SH.{code.zfill(6)}"
+            else:
+                return f"SZ.{code.zfill(6)}"
+    
+    # 如果是纯字母（可能是美股），添加US前缀
+    if re.match(r'^[A-Z]+$', code):
+        return f"US.{code}"
+    
+    # 如果无法识别，返回原输入（让后续处理报错）
+    return code_input
 
 
 class ScanThread(QThread):
@@ -1252,7 +1306,10 @@ class AkshareGUI(QMainWindow):
         if not code:
             QMessageBox.warning(self, "警告", "请输入股票代码")
             return
-        self.analyze_stock(code)
+        
+        # 标准化股票代码格式
+        normalized_code = normalize_stock_code(code)
+        self.analyze_stock(normalized_code)
 
     def analyze_stock(self, code):
         """分析指定股票"""
