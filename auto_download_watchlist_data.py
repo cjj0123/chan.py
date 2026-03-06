@@ -77,7 +77,7 @@ def download_historical_data(start_date="2024-01-01", end_date=None):
     print(f"\n🚀 开始下载数据...")
     download_and_save_all_stocks_multi_timeframe(
         stock_codes=stock_codes,
-        days=730,  # 2年数据，确保覆盖2024-01-01至今
+        days=1095,  # 3年数据，确保有足够历史数据用于缠论分析
         timeframes=timeframes,
         log_callback=log_callback,
         start_date=start_date,

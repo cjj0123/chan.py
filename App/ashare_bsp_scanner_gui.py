@@ -635,6 +635,88 @@ class UpdateDatabaseThread(QThread):
             self.finished.emit(False, f"更新失败: {str(e)}")
 
 
+class RepairSingleStockThread(QThread):
+    """
+    单只股票数据修复的后台线程
+    
+    在独立线程中为指定的单个股票下载并补充历史数据。
+    
+    Signals:
+        log_signal: (str) 日志消息
+        finished: (bool, str) 完成信号，包含成功状态和消息
+    """
+    log_signal = pyqtSignal(str)
+    finished = pyqtSignal(bool, str)
+    
+    def __init__(self, stock_code):
+        """
+        初始化单只股票修复线程
+        
+        Args:
+            stock_code: str, 股票代码
+        """
+        super().__init__()
+        self.stock_code = stock_code
+        self.is_running = True
+        
+    def stop(self):
+        """停止数据修复"""
+        self.is_running = False
+        self.log_signal.emit("正在停止数据修复...")
+        
+    def run(self):
+        """执行单只股票数据修复任务"""
+        try:
+            if not self.stock_code:
+                self.finished.emit(False, "股票代码为空")
+                return
+                
+            from datetime import datetime
+            from repair_data import diagnose_and_repair_stock
+            
+            # 定义要修复的时间级别
+            timeframes = ['day', '30m', '5m', '1m']
+            start_date = "2024-01-01"
+            end_date = datetime.now().strftime("%Y-%m-%d")
+            
+            repaired_count = 0
+            
+            def log_callback(msg):
+                if self.is_running:
+                    self.log_signal.emit(msg)
+                    
+            # 对每个时间级别进行诊断和修复
+            for timeframe in timeframes:
+                if not self.is_running:
+                    break
+                    
+                try:
+                    if diagnose_and_repair_stock(self.stock_code, timeframe, start_date, end_date, log_callback):
+                        repaired_count += 1
+                except Exception as e:
+                    error_msg = f"修复 {self.stock_code} {timeframe} 数据时出错: {str(e)}"
+                    self.log_signal.emit(f"❌ {error_msg}")
+                    continue
+            
+            if self.is_running:
+                if repaired_count > 0:
+                    result_msg = f"股票 {self.stock_code} 的数据补全完成！成功修复了 {repaired_count} 个时间级别的数据。"
+                    self.log_signal.emit(f"✅ {result_msg}")
+                    self.finished.emit(True, result_msg)
+                else:
+                    result_msg = f"股票 {self.stock_code} 的数据已是完整的，无需修复。"
+                    self.log_signal.emit(f"ℹ️ {result_msg}")
+                    self.finished.emit(True, result_msg)
+            else:
+                self.finished.emit(False, "数据修复被用户取消")
+                
+        except Exception as e:
+            import traceback
+            self.log_signal.emit(f"❌ 数据修复失败: {str(e)}")
+            self.log_signal.emit(f"   错误详情: {traceback.format_exc()}")
+            self.finished.emit(False, f"数据修复失败: {str(e)}")
+
+
 class OfflineSingleAnalysisThread(QThread):
     """
     离线单只股票分析的后台线程
@@ -785,6 +867,7 @@ class AkshareGUI(QMainWindow):
         self.scan_thread = None  # 批量扫描线程
         self.analysis_thread = None  # 单股分析线程
         self.update_db_thread = None  # 数据库更新线程
+        self.repair_thread = None  # 单股数据修复线程
         self.stock_cache = {}  # 缓存已分析的股票 {code: CChan}
         self.futu_monitor = None  # 富途监控器
         self.log_signal.connect(self.on_log_message)
@@ -964,6 +1047,10 @@ class AkshareGUI(QMainWindow):
         self.analyze_btn = QPushButton("分析")
         self.analyze_btn.clicked.connect(self.analyze_single)
         code_row.addWidget(self.analyze_btn)
+        
+        self.repair_btn = QPushButton("补全数据")
+        self.repair_btn.clicked.connect(self.repair_single_stock)
+        code_row.addWidget(self.repair_btn)
         single_layout.addLayout(code_row)
 
         layout.addWidget(single_group)
@@ -1310,6 +1397,40 @@ class AkshareGUI(QMainWindow):
         # 标准化股票代码格式
         normalized_code = normalize_stock_code(code)
         self.analyze_stock(normalized_code)
+
+    def repair_single_stock(self):
+        """补全单只股票的历史数据"""
+        code = self.code_input.text().strip()
+        if not code:
+            QMessageBox.warning(self, "警告", "请输入股票代码")
+            return
+        
+        # 标准化股票代码格式
+        normalized_code = normalize_stock_code(code)
+        
+        # 禁用相关按钮，防止重复点击
+        self.analyze_btn.setEnabled(False)
+        self.repair_btn.setEnabled(False)
+        self.statusBar.showMessage(f'正在补全 {normalized_code} 的历史数据...')
+        
+        # 启动后台修复线程
+        self.repair_thread = RepairSingleStockThread(normalized_code)
+        self.repair_thread.log_signal.connect(self.on_log_message)
+        self.repair_thread.finished.connect(self.on_repair_finished)
+        self.repair_thread.start()
+
+    def on_repair_finished(self, success, message):
+        """单只股票数据修复完成"""
+        # 恢复按钮状态
+        self.analyze_btn.setEnabled(True)
+        self.repair_btn.setEnabled(True)
+        
+        if success:
+            self.statusBar.showMessage('数据补全完成')
+            QMessageBox.information(self, "完成", message)
+        else:
+            self.statusBar.showMessage('数据补全失败')
+            QMessageBox.critical(self, "错误", message)
 
     def analyze_stock(self, code):
         """分析指定股票"""

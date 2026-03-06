@@ -285,11 +285,12 @@ def download_and_save_all_stocks_multi_timeframe(stock_codes, days=365, timefram
     # Note: For minute-level data, the actual data availability depends on the data source
     # We use the user-specified 'days' for day data, but cap minute data to reasonable limits
     # Increased limits for 30m data to get more historical data
+    # For缠论 analysis, we need sufficient historical data, so increased the limits
     tf_map = {
         'day': (KL_TYPE.K_DAY, days),
-        '30m': (KL_TYPE.K_30M, min(days, 365)),  # Cap 30m to 365 days max (1 year)
-        '5m': (KL_TYPE.K_5M, min(days, 90)),     # Cap 5m to 90 days max (3 months)
-        '1m': (KL_TYPE.K_1M, min(days, 30)),     # Cap 1m to 30 days max (1 month)
+        '30m': (KL_TYPE.K_30M, min(days, 730)),  # Cap 30m to 730 days max (2 years) for better analysis
+        '5m': (KL_TYPE.K_5M, min(days, 180)),    # Cap 5m to 180 days max (6 months) for better analysis
+        '1m': (KL_TYPE.K_1M, min(days, 90)),     # Cap 1m to 90 days max (3 months) for better analysis
     }
     
     # Filter valid timeframes
