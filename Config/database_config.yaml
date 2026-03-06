@@ -1,0 +1,63 @@
+# 数据库配置文件
+database:
+  # SQLite数据库路径
+  path: "chan_trading.db"
+  
+  # K线数据保留天数
+  retention_days:
+    day: 730    # 日线数据保留2年
+    30m: 365    # 30分钟线保留1年  
+    5m: 180     # 5分钟线保留6个月
+    1m: 90      # 1分钟线保留3个月
+
+# 默认股票列表
+default_stocks:
+  hk:
+    - "HK.00966"
+    - "HK.00916" 
+    - "HK.00100"
+    - "HK.00700"
+    - "HK.01299"
+  a_shares:
+    - "SH.600000"
+    - "SH.600519"
+    - "SZ.000001"
+    - "SZ.000858"
+    - "SZ.300750"
+  us:
+    - "US.AAPL"
+    - "US.MSFT"
+    - "US.GOOG"
+    - "US.AMZN"
+    - "US.TSLA"
+
+# 数据更新配置
+data_update:
+  # 默认下载天数
+  default_days: 365
+  
+  # 更新频率（小时）
+  update_frequency_hours: 24
+  
+  # 并发下载线程数
+  max_concurrent_downloads: 5
+  
+  # API重试次数
+  api_retry_count: 3
+  
+  # 数据源优先级（从高到低）
+  data_source_priority:
+    hk: ["futu", "akshare"]
+    a_shares: ["futu", "baostock", "akshare"]
+    us: ["akshare"]
+
+# 缓存配置
+cache:
+  # 内存缓存大小限制（MB）
+  memory_limit_mb: 100
+  
+  # 磁盘缓存过期时间（小时）
+  disk_cache_expire_hours: 24
+  
+  # 是否启用缓存
+  enabled: true

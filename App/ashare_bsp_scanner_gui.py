@@ -65,6 +65,9 @@ from Monitoring.FutuMonitor import FutuMonitor
 # 港股自动化交易控制器
 from App.HKTradingController import HKTradingController
 
+# 性能仪表盘
+from App.PerformanceDashboard import PerformanceDashboard
+
 
 def get_futu_watchlist_stocks():
     """
@@ -889,8 +892,9 @@ class AkshareGUI(QMainWindow):
         # 主布局
         main_layout = QHBoxLayout(central_widget)
 
-        # 左侧控制面板和股票列表
+        # 左侧控制面板、股票列表和性能仪表盘
         left_panel = self.create_left_panel()
+        performance_dashboard = PerformanceDashboard()
 
         # 右侧图表区域
         right_panel = self.create_chart_panel()
@@ -898,8 +902,9 @@ class AkshareGUI(QMainWindow):
         # 使用分割器
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(left_panel)
+        splitter.addWidget(performance_dashboard)
         splitter.addWidget(right_panel)
-        splitter.setSizes([450, 1150])
+        splitter.setSizes([300, 200, 1100])
 
         main_layout.addWidget(splitter)
 

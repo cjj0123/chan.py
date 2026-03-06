@@ -81,24 +81,60 @@ class CMetricsCalculator:
         if len(filled_orders) < 2:  # 至少需要一买一卖才能构成一次完整交易
             return 0.0
 
-        # 这里简化处理：假设所有卖出订单都是盈利的（实际应用中需要更复杂的配对逻辑）
-        # 为了演示，我们随机生成一个胜率
-        return 0.65  # 模拟65%的胜率
+        # 按股票代码和时间排序，进行买卖配对
+        win_count = 0
+        total_trades = 0
+        
+        for code in filled_orders['stock_code'].unique():
+            code_orders = filled_orders[filled_orders['stock_code'] == code].sort_values('add_time')
+            buy_queue = []
+            
+            for _, order in code_orders.iterrows():
+                if order['side'] == 'BUY':
+                    buy_queue.append(order)
+                elif order['side'] == 'SELL' and buy_queue:
+                    # 配对最近的买入订单
+                    buy_order = buy_queue.pop(0)
+                    total_trades += 1
+                    if order['price'] > buy_order['price']:
+                        win_count += 1
+        
+        return win_count / total_trades if total_trades > 0 else 0.0
 
-    def _calculate_sharpe_ratio(self, daily_returns: list) -> float:
+    def _calculate_sharpe_ratio(self, orders_df: pd.DataFrame) -> float:
         """
         计算夏普比率。
 
         Args:
-            daily_returns (list): 日收益率列表。
+            orders_df (pd.DataFrame): 订单数据框。
 
         Returns:
             float: 夏普比率。
         """
-        if not daily_returns or len(daily_returns) < 2:
+        if orders_df.empty:
             return 0.0
 
-        returns = np.array(daily_returns)
+        # 计算每日盈亏
+        orders_df = orders_df[orders_df['status'] == 'FILLED'].copy()
+        if orders_df.empty:
+            return 0.0
+            
+        orders_df['date'] = pd.to_datetime(orders_df['add_time']).dt.date
+        orders_df['pnl'] = np.where(
+            orders_df['side'] == 'BUY',
+            -orders_df['price'] * orders_df['quantity'],
+            orders_df['price'] * orders_df['quantity']
+        )
+        
+        daily_pnl = orders_df.groupby('date')['pnl'].sum()
+        if len(daily_pnl) < 2:
+            return 0.0
+            
+        # 计算日收益率（假设初始资金为100万）
+        initial_capital = 1000000.0
+        daily_returns = daily_pnl / initial_capital
+        
+        returns = daily_returns.values
         mean_return = np.mean(returns)
         std_return = np.std(returns)
 
@@ -153,9 +189,7 @@ class CMetricsCalculator:
         # 4. 计算各项指标
         total_pnl = self._calculate_pnl_from_orders(orders_df)
         win_rate = self._calculate_win_rate(orders_df)
-        # 模拟日收益率数据
-        daily_returns = [0.01, -0.02, 0.015, 0.005, -0.01, 0.02, 0.005]
-        sharpe_ratio = self._calculate_sharpe_ratio(daily_returns)
+        sharpe_ratio = self._calculate_sharpe_ratio(orders_df)
 
         # 5. 构建结果字典
         metrics = {
@@ -163,7 +197,7 @@ class CMetricsCalculator:
             'total_pnl': round(total_pnl, 2),
             'win_rate': round(win_rate, 4),
             'sharpe_ratio': round(sharpe_ratio, 4),
-            'max_drawdown': -0.05,  # 模拟最大回撤
+            'max_drawdown': self._calculate_max_drawdown(orders_df),
             'total_signals': len(signals_df),
             'total_orders': len(orders_df[orders_df['status'] == 'FILLED']),
             'active_positions': len(positions_df),
@@ -204,6 +238,43 @@ class CMetricsCalculator:
         ORDER BY add_time DESC
         """
         return self.db.execute_query(query, (start_date.strftime('%Y-%m-%d %H:%M:%S'),))
+    
+    def _calculate_max_drawdown(self, orders_df: pd.DataFrame) -> float:
+        """
+        计算最大回撤。
+
+        Args:
+            orders_df (pd.DataFrame): 订单数据框。
+
+        Returns:
+            float: 最大回撤（负值，例如 -0.15 表示15%的回撤）。
+        """
+        if orders_df.empty:
+            return 0.0
+
+        filled_orders = orders_df[orders_df['status'] == 'FILLED'].copy()
+        if filled_orders.empty:
+            return 0.0
+
+        # 按时间排序并计算累计盈亏
+        filled_orders = filled_orders.sort_values('add_time')
+        filled_orders['pnl'] = np.where(
+            filled_orders['side'] == 'BUY',
+            -filled_orders['price'] * filled_orders['quantity'],
+            filled_orders['price'] * filled_orders['quantity']
+        )
+        filled_orders['cumulative_pnl'] = filled_orders['pnl'].cumsum()
+        
+        # 计算净值（假设初始资金为100万）
+        initial_capital = 1000000.0
+        filled_orders['net_value'] = initial_capital + filled_orders['cumulative_pnl']
+        
+        # 计算最大回撤
+        running_max = filled_orders['net_value'].cummax()
+        drawdown = (filled_orders['net_value'] - running_max) / running_max
+        max_dd = drawdown.min()
+        
+        return float(max_dd)
 
     def _load_trades_from_db(self) -> pd.DataFrame:
         """

@@ -57,103 +57,231 @@ class CReporter:
             <meta charset="UTF-8">
             <title>缠论港股交易系统 - 每日报告</title>
             <style>
-                body { font-family: Arial, sans-serif; margin: 20px; }
-                .header { background-color: #f4f4f4; padding: 10px; border-radius: 5px; }
-                .metric { display: inline-block; margin: 10px; padding: 10px; background-color: #e9e9e9; border-radius: 5px; }
-                table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-                th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-                th { background-color: #f2f2f2; }
-                .positive { color: green; }
-                .negative { color: red; }
+                body {
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                    margin: 20px;
+                    background-color: #f8f9fa;
+                }
+                .container {
+                    max-width: 1200px;
+                    margin: 0 auto;
+                    background-color: white;
+                    padding: 20px;
+                    border-radius: 10px;
+                    box-shadow: 0 0 10px rgba(0,0,0,0.1);
+                }
+                .header {
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                    padding: 20px;
+                    border-radius: 8px;
+                    margin-bottom: 30px;
+                    text-align: center;
+                }
+                .header h1 { margin: 0; font-size: 28px; }
+                .header p { margin: 5px 0 0 0; opacity: 0.9; }
+                
+                .metrics-grid {
+                    display: grid;
+                    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                    gap: 15px;
+                    margin-bottom: 30px;
+                }
+                .metric-card {
+                    background: white;
+                    padding: 20px;
+                    border-radius: 8px;
+                    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+                    text-align: center;
+                    border-left: 4px solid #667eea;
+                }
+                .metric-value {
+                    font-size: 24px;
+                    font-weight: bold;
+                    margin: 10px 0;
+                }
+                .metric-label {
+                    color: #666;
+                    font-size: 14px;
+                }
+                .positive { color: #28a745; }
+                .negative { color: #dc3545; }
+                .warning { color: #ffc107; }
+                
+                .section {
+                    margin: 30px 0;
+                    padding: 20px;
+                    background: white;
+                    border-radius: 8px;
+                    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+                }
+                .section h2 {
+                    color: #333;
+                    margin-top: 0;
+                    padding-bottom: 10px;
+                    border-bottom: 2px solid #667eea;
+                }
+                
+                table {
+                    width: 100%;
+                    border-collapse: collapse;
+                    margin: 20px 0;
+                    font-size: 14px;
+                }
+                th, td {
+                    border: 1px solid #dee2e6;
+                    padding: 12px;
+                    text-align: left;
+                }
+                th {
+                    background-color: #f8f9fa;
+                    font-weight: 600;
+                    color: #495057;
+                }
+                tr:nth-child(even) { background-color: #f8f9fa; }
+                tr:hover { background-color: #e9ecef; }
+                
+                .footer {
+                    text-align: center;
+                    margin-top: 30px;
+                    color: #6c757d;
+                    font-size: 12px;
+                    padding-top: 20px;
+                    border-top: 1px solid #dee2e6;
+                }
+                
+                @media (max-width: 768px) {
+                    .metrics-grid { grid-template-columns: 1fr; }
+                    .container { margin: 10px; padding: 15px; }
+                }
             </style>
         </head>
         <body>
-            <div class="header">
-                <h1>缠论港股交易系统 - 每日报告</h1>
-                <p>报告生成时间: {{ metrics.generated_at }}</p>
-                <p>统计周期: {{ metrics.period }}</p>
-            </div>
+            <div class="container">
+                <div class="header">
+                    <h1>缠论港股交易系统 - 每日报告</h1>
+                    <p>报告生成时间: {{ metrics.generated_at }}</p>
+                    <p>统计周期: {{ metrics.period }}</p>
+                </div>
 
-            <h2>核心性能指标</h2>
-            <div class="metric">
-                <strong>总盈亏 (P&L):</strong>
-                <span class="{% if metrics.total_pnl >= 0 %}positive{% else %}negative{% endif %}">
-                    {{ "%.2f"|format(metrics.total_pnl) }}
-                </span>
-            </div>
-            <div class="metric">
-                <strong>胜率:</strong> {{ "%.2f%%"|format(metrics.win_rate * 100) }}
-            </div>
-            <div class="metric">
-                <strong>夏普比率:</strong> {{ "%.2f"|format(metrics.sharpe_ratio) }}
-            </div>
-            <div class="metric">
-                <strong>最大回撤:</strong> 
-                <span class="negative">{{ "%.2f%%"|format(metrics.max_drawdown * 100) }}</span>
-            </div>
-            <div class="metric">
-                <strong>信号总数:</strong> {{ metrics.total_signals }}
-            </div>
-            <div class="metric">
-                <strong>已执行订单:</strong> {{ metrics.total_orders }}
-            </div>
-            <div class="metric">
-                <strong>当前持仓:</strong> {{ metrics.active_positions }}
-            </div>
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-label">总盈亏 (P&L)</div>
+                        <div class="metric-value {% if metrics.total_pnl >= 0 %}positive{% else %}negative{% endif %}">
+                            ¥{{ "%.2f"|format(metrics.total_pnl) }}
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">胜率</div>
+                        <div class="metric-value {% if metrics.win_rate >= 0.5 %}positive{% else %}negative{% endif %}">
+                            {{ "%.2f%%"|format(metrics.win_rate * 100) }}
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">夏普比率</div>
+                        <div class="metric-value {% if metrics.sharpe_ratio >= 1.0 %}positive{% elif metrics.sharpe_ratio >= 0.5 %}warning{% else %}negative{% endif %}">
+                            {{ "%.2f"|format(metrics.sharpe_ratio) }}
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">最大回撤</div>
+                        <div class="metric-value negative">
+                            {{ "%.2f%%"|format(metrics.max_drawdown * 100) }}
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">信号总数</div>
+                        <div class="metric-value">
+                            {{ metrics.total_signals }}
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">已执行订单</div>
+                        <div class="metric-value">
+                            {{ metrics.total_orders }}
+                        </div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-label">当前持仓</div>
+                        <div class="metric-value">
+                            {{ metrics.active_positions }}
+                        </div>
+                    </div>
+                </div>
 
-            <h2>当前持仓详情</h2>
-            {% if positions_df.empty %}
-                <p>暂无持仓。</p>
-            {% else %}
-                <table>
-                    <thead>
-                        <tr>
-                            <th>股票代码</th>
-                            <th>数量</th>
-                            <th>平均成本</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for _, row in positions_df.iterrows() %}
-                        <tr>
-                            <td>{{ row['stock_code'] }}</td>
-                            <td>{{ row['quantity'] }}</td>
-                            <td>{{ "%.2f"|format(row['avg_cost']) }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            {% endif %}
+                <div class="section">
+                    <h2>📊 当前持仓详情</h2>
+                    {% if positions_df.empty %}
+                        <p style="text-align: center; color: #6c757d;">暂无持仓。</p>
+                    {% else %}
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>股票代码</th>
+                                    <th>数量</th>
+                                    <th>平均成本 (¥)</th>
+                                    <th>当前市值 (¥)</th>
+                                    <th>盈亏 (%)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for _, row in positions_df.iterrows() %}
+                                <tr>
+                                    <td><strong>{{ row['stock_code'] }}</strong></td>
+                                    <td>{{ row['quantity'] }}</td>
+                                    <td>{{ "%.2f"|format(row['avg_cost']) }}</td>
+                                    <td>{{ "%.2f"|format(row.get('current_value', row['avg_cost'] * row['quantity'])) }}</td>
+                                    <td class="{% if row.get('pnl_pct', 0) >= 0 %}positive{% else %}negative{% endif %}">
+                                        {{ "%.2f%%"|format(row.get('pnl_pct', 0) * 100) }}
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    {% endif %}
+                </div>
 
-            <h2>近期交易订单</h2>
-            {% if orders_df.empty %}
-                <p>近期无交易。</p>
-            {% else %}
-                <table>
-                    <thead>
-                        <tr>
-                            <th>股票代码</th>
-                            <th>方向</th>
-                            <th>价格</th>
-                            <th>数量</th>
-                            <th>状态</th>
-                            <th>时间</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for _, row in orders_df.iterrows() %}
-                        <tr>
-                            <td>{{ row['stock_code'] }}</td>
-                            <td>{{ row['side'] }}</td>
-                            <td>{{ "%.2f"|format(row['price']) }}</td>
-                            <td>{{ row['quantity'] }}</td>
-                            <td>{{ row['status'] }}</td>
-                            <td>{{ row['add_time'] }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            {% endif %}
+                <div class="section">
+                    <h2>📈 近期交易订单</h2>
+                    {% if orders_df.empty %}
+                        <p style="text-align: center; color: #6c757d;">近期无交易。</p>
+                    {% else %}
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>股票代码</th>
+                                    <th>方向</th>
+                                    <th>价格 (¥)</th>
+                                    <th>数量</th>
+                                    <th>金额 (¥)</th>
+                                    <th>状态</th>
+                                    <th>时间</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for _, row in orders_df.iterrows() %}
+                                <tr>
+                                    <td><strong>{{ row['stock_code'] }}</strong></td>
+                                    <td class="{% if row['side'] == 'BUY' %}positive{% else %}negative{% endif %}">
+                                        {{ '买入' if row['side'] == 'BUY' else '卖出' }}
+                                    </td>
+                                    <td>{{ "%.2f"|format(row['price']) }}</td>
+                                    <td>{{ row['quantity'] }}</td>
+                                    <td>{{ "%.2f"|format(row['price'] * row['quantity']) }}</td>
+                                    <td>{{ row['status'] }}</td>
+                                    <td>{{ row['add_time'] }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    {% endif %}
+                </div>
+
+                <div class="footer">
+                    <p>缠论港股交易系统 - 基于技术分析的自动化交易解决方案</p>
+                    <p>本报告基于系统实际交易数据生成，仅供参考。</p>
+                </div>
+            </div>
         </body>
         </html>
         """

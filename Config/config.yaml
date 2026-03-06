@@ -4,6 +4,7 @@ trading:
   hk_watchlist_group: "港股"
   min_visual_score: 70
   max_position_ratio: 0.2
+  max_total_positions: 10
   dry_run: true
   
   # 交易时间配置
@@ -14,6 +15,38 @@ trading:
   
   # 信号时间过滤
   max_signal_age_hours: 4
+  
+  # 风险管理配置
+  circuit_breaker_enabled: true
+  max_daily_loss_ratio: 0.05
+  max_consecutive_losses: 3
+  circuit_breaker_duration: 3600
+  max_trades_per_hour: 10
+  min_trade_interval: 300
+  
+  # 本地评分配置
+  local_scoring:
+    # BS点类型基础分值
+    bsp_type_scores:
+      '1': 90      # 一买/一卖
+      '2': 80      # 二买/二卖
+      '3a': 75     # 三买A类
+      '3b': 70     # 三买B类
+      '1p': 85     # 类一买
+      '2s': 75     # 类二卖
+    
+    # 各特征权重
+    seg_strength_weight: 0.2
+    macd_weight: 0.15
+    zs_weight: 0.1
+    
+    # 特征阈值
+    min_seg_strength: 0.1
+    min_macd_divergence: 0.05
+    min_zs_thickness: 0.02
+    
+    # 本地评分阈值（低于此值不进行视觉AI评分）
+    local_score_threshold: 60
 
 chan:
   # 缠论配置

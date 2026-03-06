@@ -38,6 +38,15 @@ from futu import *
 from visual_judge import VisualJudge
 import aiohttp
 
+# 导入风险管理
+from Trade.RiskManager import get_risk_manager
+
+# 导入本地评分
+from Trade.LocalScorer import get_local_scorer
+
+# 导入性能监控
+from Monitoring.PerformanceMonitor import get_performance_monitor
+
 # 配置日志
 logger = logging.getLogger(__name__)
 
@@ -100,6 +109,15 @@ class HKTradingController(QObject):
         self.executed_signals = self._load_executed_signals()
         self.discovered_signals_file = "discovered_signals.json"
         self.discovered_signals = self._load_discovered_signals()
+
+        # 风险管理器
+        self.risk_manager = get_risk_manager()
+        
+        # 本地评分器
+        self.local_scorer = get_local_scorer()
+        
+        # 性能监控器
+        self.performance_monitor = get_performance_monitor()
 
         # 用于停止扫描的标志
         self._is_running = False
@@ -500,6 +518,9 @@ class HKTradingController(QObject):
         """
         self._is_running = True
         self.log_message.emit("🚀 开始港股自动化扫描与交易流程...")
+        
+        # 记录开始时间用于性能监控
+        start_time = time.time()
 
         try:
             # 1. 获取自选股列表
@@ -619,6 +640,9 @@ class HKTradingController(QObject):
             # 4. 批量评分
             if signals_with_charts:
                 scored_signals = self._batch_score_signals(signals_with_charts)
+                # 记录信号评分
+                for signal in scored_signals:
+                    self.performance_monitor.record_signal(signal['score'])
             else:
                 scored_signals = []
 
@@ -633,10 +657,20 @@ class HKTradingController(QObject):
 
             # 6. 发送完成信号
             self.scan_finished.emit(executed_sell, executed_buy, 0, 0)
+            
+            # 记录扫描性能数据
+            end_time = time.time()
+            duration = end_time - start_time
+            if duration > 0:
+                self.performance_monitor.record_scan_performance(len(watchlist_codes), duration)
+                self.log_message.emit(f"📊 性能监控: 扫描速度 {len(watchlist_codes)/duration:.2f} 只/秒")
 
         except Exception as e:
             self.log_message.emit(f"❌ 扫描交易流程发生严重错误: {e}")
             self.scan_finished.emit(0, 0, 0, 0)
+            
+            # 记录失败的扫描
+            self.performance_monitor.record_execution(False)
 
         finally:
             self._is_running = False
@@ -651,6 +685,11 @@ class HKTradingController(QObject):
         """
         执行交易 - 第四步
         """
+        # 检查熔断机制
+        if self.risk_manager.check_circuit_breaker():
+            self.log_message.emit("⚠️ 熔断机制激活，暂停所有交易操作")
+            return [], [], 0, 0, available_funds_at_start
+        
         # 分离并排序信号
         sell_signals = [s for s in all_signals if not s['is_buy']]
         buy_signals = [s for s in all_signals if s['is_buy']]
@@ -677,6 +716,11 @@ class HKTradingController(QObject):
                 
                 self.log_message.emit(f"\n[{i}/{len(sell_signals)}] 卖出 {code} - {bsp_type} - 评分: {score}")
                 
+                # 检查是否可以执行交易
+                if not self.risk_manager.can_execute_trade(code, score):
+                    self.log_message.emit(f"⚠️ 风险管理限制，跳过卖出 {code}")
+                    continue
+                
                 # 只有视觉评分 >= 阈值才执行交易
                 if score >= self.min_visual_score:
                     if self.execute_trade(code, 'SELL', qty, price):
@@ -684,6 +728,9 @@ class HKTradingController(QObject):
                         released_funds = price * qty
                         available_funds += released_funds
                         executed_sell += 1
+                        
+                        # 记录交易到风险管理器
+                        self.risk_manager.record_trade(code, 'SELL', qty, price, score, pnl=released_funds)
                         
                         # 记录已执行信号，防止重复处理同一信号
                         bsp_time_str = signal.get('chan_result', {}).get('bsp_datetime_str', '')
@@ -697,12 +744,10 @@ class HKTradingController(QObject):
                 else:
                     self.log_message.emit(f"⏭️ 卖出信号 {code} 评分({score})低于阈值({self.min_visual_score})，仅通知不执行")
         
-        # 执行买点 - 将账户现金额度分成5份，每份买入单只股票的最大可买手数，当可用金额小于5万元则停止买入
+        # 执行买点 - 使用风险管理器进行动态仓位控制
         if buy_signals:
             self.log_message.emit(f"\n>>> 开始执行买入操作（共{len(buy_signals)}个）")
             
-            # 计算每份资金（总资金的20%，即分成5份）
-            portion_size = available_funds_at_start * 0.2
             max_stocks_to_buy = 5  # 最多买入5只股票
             stocks_bought = 0  # 已买入股票数量
             
@@ -718,6 +763,11 @@ class HKTradingController(QObject):
                 bsp_type = signal['bsp_type']
                 lot_size = signal.get('lot_size', 100)  # 获取股票的最小手数
                 
+                # 检查熔断和交易频率限制
+                if not self.risk_manager.can_execute_trade(code, score):
+                    self.log_message.emit(f"⚠️ 风险管理限制，跳过买入 {code}")
+                    continue
+                
                 # 检查可用资金是否小于5万元，如果是则停止买入
                 if available_funds < 50000:
                     self.log_message.emit(f"💰 可用资金({available_funds:.2f})少于5万元，停止买入操作")
@@ -725,16 +775,19 @@ class HKTradingController(QObject):
                 
                 # 只有视觉评分 >= 阈值才执行交易
                 if score >= self.min_visual_score:
-                    # 使用每份资金（总资金的20%）来计算可买手数
-                    investment_amount = portion_size  # 每只股票分配的资金份额
+                    # 使用风险管理器计算动态仓位
+                    buy_quantity = self.risk_manager.calculate_position_size(
+                        code=code,
+                        available_funds=available_funds,
+                        current_price=price,
+                        signal_score=score,
+                        risk_factor=1.0  # 可以根据波动率等计算风险因子
+                    )
                     
-                    # 按照该股票最小可买手数计算出可买手数
-                    lots_can_buy = int(investment_amount / (price * lot_size))
-                    if lots_can_buy < 1:
-                        self.log_message.emit(f"[{i}/{len(buy_signals)}] {code} 资金不足，无法购买一手 (需要: {price * lot_size:.2f}, 可用份额: {investment_amount:.2f})")
+                    if buy_quantity <= 0:
+                        self.log_message.emit(f"[{i}/{len(buy_signals)}] {code} 风险管理器建议不买入或资金不足")
                         continue
                     
-                    buy_quantity = lots_can_buy * lot_size
                     required_funds = price * buy_quantity
                     
                     # 检查可用资金是否足够
@@ -742,14 +795,18 @@ class HKTradingController(QObject):
                         self.log_message.emit(f"[{i}/{len(buy_signals)}] {code} 资金不足，需要{required_funds:.2f}，可用{available_funds:.2f}，跳过")
                         continue
                     
+                    lots_can_buy = buy_quantity // lot_size
                     self.log_message.emit(f"\n[{i}/{len(buy_signals)}] 买入 {code} - {bsp_type} - 评分: {score}")
-                    self.log_message.emit(f"   计划买入: {buy_quantity}股 ({lots_can_buy}手), 预计花费: {required_funds:.2f} (分配份额: {investment_amount:.2f})")
+                    self.log_message.emit(f"   计划买入: {buy_quantity}股 ({lots_can_buy}手), 预计花费: {required_funds:.2f}")
                     
                     if self.execute_trade(code, 'BUY', buy_quantity, price):
                         # 买入成功，扣除资金，更新信号历史记录
                         available_funds -= required_funds
                         executed_buy += 1
                         stocks_bought += 1  # 增加已买入股票计数
+                        
+                        # 记录交易到风险管理器
+                        self.risk_manager.record_trade(code, 'BUY', buy_quantity, price, score)
                         
                         # 记录已执行信号，防止重复处理同一信号
                         bsp_time_str = signal.get('chan_result', {}).get('bsp_datetime_str', '')
@@ -1058,7 +1115,24 @@ class HKTradingController(QObject):
             self.log_message.emit(f"✅ {code} 候选信号已收集")
         
         self.log_message.emit(f"共收集到 {len(candidate_signals)} 个候选信号")
-        return candidate_signals
+        
+        # 对候选信号进行本地评分筛选
+        filtered_signals = []
+        for signal in candidate_signals:
+            chan_analysis = signal.get('chan_result', {}).get('chan_analysis', {})
+            local_score = self.local_scorer.calculate_local_score(chan_analysis)
+            
+            self.log_message.emit(f"{signal['code']} 本地评分: {local_score}")
+            
+            if self.local_scorer.should_proceed_to_visual_ai(local_score):
+                signal['local_score'] = local_score
+                filtered_signals.append(signal)
+                self.log_message.emit(f"✅ {signal['code']} 通过本地评分筛选，将进行视觉AI评分")
+            else:
+                self.log_message.emit(f"⏭️ {signal['code']} 本地评分({local_score})低于阈值，跳过视觉AI评分")
+        
+        self.log_message.emit(f"本地评分筛选后剩余 {len(filtered_signals)} 个信号")
+        return filtered_signals
 
     def _generate_single_chart(self, signal_data: Dict) -> Optional[Dict]:
         """

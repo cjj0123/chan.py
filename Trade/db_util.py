@@ -46,24 +46,38 @@ class CChanDB:
         
         # 交易订单表
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS trading_orders (
+            CREATE TABLE IF NOT EXISTS orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                stock_code TEXT NOT NULL,
-                side TEXT NOT NULL,
-                price REAL NOT NULL,
+                code TEXT NOT NULL,
+                action TEXT NOT NULL,
                 quantity INTEGER NOT NULL,
-                status TEXT NOT NULL,
-                add_time TEXT NOT NULL
+                price REAL NOT NULL,
+                signal_id INTEGER,
+                order_status TEXT DEFAULT 'pending',
+                created_at TEXT DEFAULT (datetime('now', 'localtime'))
             )
         ''')
         
         # 交易持仓表
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS trading_positions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                stock_code TEXT NOT NULL UNIQUE,
+            CREATE TABLE IF NOT EXISTS positions (
+                code TEXT PRIMARY KEY,
                 quantity INTEGER NOT NULL,
                 avg_cost REAL NOT NULL
+            )
+        ''')
+        
+        # 风险管理日志表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS risk_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL,
+                action TEXT NOT NULL,
+                quantity INTEGER NOT NULL,
+                price REAL NOT NULL,
+                signal_score INTEGER NOT NULL,
+                pnl REAL DEFAULT 0.0,
+                created_at TEXT DEFAULT (datetime('now', 'localtime'))
             )
         ''')
         
