@@ -185,12 +185,8 @@ class CChan:
             from DataAPI.AkshareAPI import CAkshare
             _dict[DATA_SRC.AKSHARE] = CAkshare
         elif self.data_src == DATA_SRC.FUTU:
-            # 优先使用带缓存的FutuAPI
-            try:
-                from DataAPI.FutuAPICached import CFutuAPICached
-                return CFutuAPICached
-            except ImportError:
-                return CFutuAPI
+            # 直接使用FutuAPI，不使用缓存版本
+            return CFutuAPI
         if self.data_src in _dict:
             return _dict[self.data_src]
         assert isinstance(self.data_src, str)

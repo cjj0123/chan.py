@@ -81,7 +81,7 @@ def get_futu_stock_name(code):
         str: 股票名称，获取失败时返回原代码
     """
     try:
-        from futu import OpenQuoteContext, RET_OK
+        from futu import OpenQuoteContext, RET_OK, Market
         import os
         
         # 从环境变量或配置文件获取富途API地址
@@ -1382,10 +1382,16 @@ class AkshareGUI(QMainWindow):
                     })
                 else:
                     QMessageBox.warning(self, "警告", f"无法从分组 '{selected_watchlist}' 获取股票，使用默认列表。")
-                    stock_list = get_tradable_stocks()
+                    if self.mode_combo.currentText() == "离线 (SQLite)":
+                        stock_list = get_local_stock_list()
+                    else:
+                        stock_list = get_tradable_stocks()
             except Exception as e:
                 QMessageBox.warning(self, "警告", f"获取自选股分组 '{selected_watchlist}' 失败: {e}，使用默认列表。")
-                stock_list = get_tradable_stocks()
+                if self.mode_combo.currentText() == "离线 (SQLite)":
+                    stock_list = get_local_stock_list()
+                else:
+                    stock_list = get_tradable_stocks()
         else:
             # 根据模式选择获取股票列表的方式
             if self.mode_combo.currentText() == "离线 (SQLite)":
@@ -1445,15 +1451,35 @@ class AkshareGUI(QMainWindow):
                     })
                 else:
                     self.log_text.append(f"⚠️ 无法从分组 '{selected_watchlist}' 获取股票，使用默认列表。")
-                    stock_list = get_tradable_stocks()
+                    # 根据模式选择默认列表
+                    if self.mode_combo.currentText() == "离线 (SQLite)":
+                        stock_list = get_local_stock_list()
+                        if stock_list.empty:
+                            self.log_text.append("⚠️ 本地数据库中没有股票，尝试从在线源获取股票列表...")
+                            stock_list = get_tradable_stocks()
+                    else:
+                        stock_list = get_tradable_stocks()
             except Exception as e:
                 self.log_text.append(f"⚠️ 获取自选股分组 '{selected_watchlist}' 失败: {e}，使用默认列表。")
-                stock_list = get_tradable_stocks()
+                # 根据模式选择默认列表
+                if self.mode_combo.currentText() == "离线 (SQLite)":
+                    stock_list = get_local_stock_list()
+                    if stock_list.empty:
+                        self.log_text.append("⚠️ 本地数据库中没有股票，尝试从在线源获取股票列表...")
+                        stock_list = get_tradable_stocks()
+                else:
+                    stock_list = get_tradable_stocks()
         else:
-            # 如果没有选择分组，则使用默认逻辑
-            stock_list = get_futu_watchlist_stocks()
-            if stock_list.empty:
-                stock_list = get_tradable_stocks()
+            # 如果没有选择分组，则根据模式选择默认逻辑
+            if self.mode_combo.currentText() == "离线 (SQLite)":
+                stock_list = get_local_stock_list()
+                if stock_list.empty:
+                    self.log_text.append("⚠️ 本地数据库中没有股票，尝试从在线源获取股票列表...")
+                    stock_list = get_tradable_stocks()
+            else:
+                stock_list = get_futu_watchlist_stocks()
+                if stock_list.empty:
+                    stock_list = get_tradable_stocks()
         
         if stock_list.empty:
             self.statusBar.showMessage('股票列表为空，无法更新数据库')
@@ -1659,8 +1685,8 @@ class AkshareGUI(QMainWindow):
             x_range_map = {
                 KL_TYPE.K_DAY: 250,    # 日线显示250根K线
                 KL_TYPE.K_30M: 150,    # 30分钟显示150根K线
-                KL_TYPE.K_5M: 80,      # 5分钟显示80根K线
-                KL_TYPE.K_1M: 40,      # 1分钟显示40根K线
+                KL_TYPE.K_5M: 240,     # 5分钟显示240根K线（约1周交易日）
+                KL_TYPE.K_1M: 240,     # 1分钟显示240根K线（约1个完整交易日）
             }
             x_range = x_range_map.get(current_kl_type, 0)
             

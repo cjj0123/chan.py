@@ -1511,8 +1511,8 @@ class TraderGUI(QMainWindow):
             x_range_map = {
                 KL_TYPE.K_DAY: 250,    # 日线显示250根K线
                 KL_TYPE.K_30M: 150,    # 30分钟显示150根K线
-                KL_TYPE.K_5M: 80,      # 5分钟显示80根K线
-                KL_TYPE.K_1M: 40,      # 1分钟显示40根K线
+                KL_TYPE.K_5M: 330,     # 5分钟显示330根K线（港股1周）
+                KL_TYPE.K_1M: 330,     # 1分钟显示330根K线（港股1天）
             }
             x_range = x_range_map.get(current_kl_type, 0)
             

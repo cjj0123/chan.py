@@ -51,24 +51,55 @@ class CFutuAPI(CCommonStockApi):
             # 1. 订阅检查
             quote_ctx.subscribe([stock_code], [f_ktype], subscribe_push=False)
 
-            # 2. 指数退避重试 (使用 request_history_kline)
+            # 2. 指数退避重试 + 分页处理 (使用 request_history_kline)
             retries = 3
-            data = None
-            for i in range(retries):
-                # 注意：request_history_kline 是分页接口，此处简单模拟单次请求，如果需要全量则需递归
-                ret, data, page_token = quote_ctx.request_history_kline(
-                    stock_code, 
-                    start=self.begin_date, 
-                    end=self.end_date, 
-                    ktype=f_ktype, 
-                    autype=f_autype
-                )
+            all_data = []
+            page_token = None
+            current_retry = 0
+            
+            while current_retry < retries:
+                # 首次请求不需要 page_token，后续请求需要
+                if page_token is None:
+                    ret, data, new_page_token = quote_ctx.request_history_kline(
+                        stock_code,
+                        start=self.begin_date,
+                        end=self.end_date,
+                        ktype=f_ktype,
+                        autype=f_autype
+                    )
+                else:
+                    ret, data, new_page_token = quote_ctx.request_history_kline(
+                        stock_code,
+                        start=self.begin_date,
+                        end=self.end_date,
+                        ktype=f_ktype,
+                        autype=f_autype,
+                        page_token=page_token
+                    )
+                
                 if ret == RET_OK:
-                    break
-                print(f"⚠️ [FutuAPI] Request failed ({data}), retrying {i+1}/{retries}...")
-                time.sleep(random.uniform(0.5, 1.0) * (2 ** i))
+                    if data is not None and not data.empty:
+                        all_data.append(data)
+                    
+                    # 检查是否还有更多数据
+                    if new_page_token is None or new_page_token == "":
+                        break
+                    else:
+                        page_token = new_page_token
+                        time.sleep(random.uniform(0.1, 0.3))  # 短暂延迟避免API限制
+                        continue  # 继续下一页，不增加重试计数
+                else:
+                    print(f"⚠️ [FutuAPI] Request failed ({data}), retrying {current_retry+1}/{retries}...")
+                    time.sleep(random.uniform(0.5, 1.0) * (2 ** current_retry))
+                    current_retry += 1
+            
+            # 合并所有页面的数据
+            if all_data:
+                data = pd.concat(all_data, ignore_index=True)
+            else:
+                data = None
 
-            if ret == RET_OK and not data.empty:
+            if ret == RET_OK and data is not None and not data.empty:
                 # 3. 异常值过滤
                 data['price_change'] = data['close'].diff().abs()
                 median_change = data['price_change'].median()
