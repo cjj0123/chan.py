@@ -34,7 +34,8 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QComboBox, QCheckBox, QGroupBox,
     QMessageBox, QStatusBar, QSplitter, QTableWidget, QTableWidgetItem,
-    QProgressBar, QHeaderView, QTextEdit, QSpinBox, QDateTimeEdit
+    QProgressBar, QHeaderView, QTextEdit, QSpinBox, QDateTimeEdit,
+    QSizePolicy
 )
 from PyQt6.QtCore import QDate, Qt, QThread, pyqtSignal, QDateTime
 
@@ -1030,6 +1031,14 @@ class AkshareGUI(QMainWindow):
         mode_layout.addWidget(self.mode_combo)
         scan_layout.addLayout(mode_layout)
 
+        # === 新增：Futu 自选股分组选择 ===
+        futu_watchlist_layout = QHBoxLayout()
+        futu_watchlist_layout.addWidget(QLabel("Futu 自选股分组:"))
+        self.futu_watchlist_combo = QComboBox()
+        futu_watchlist_layout.addWidget(self.futu_watchlist_combo)
+        scan_layout.addLayout(futu_watchlist_layout)
+        # === 新增结束 ===
+
         # 数据下载时间设置
         time_layout = QHBoxLayout()
         time_layout.addWidget(QLabel("数据时间范围:"))
@@ -1048,28 +1057,6 @@ class AkshareGUI(QMainWindow):
         self.timeframe_combo.setCurrentText("日线")
         timeframe_layout.addWidget(self.timeframe_combo)
         scan_layout.addLayout(timeframe_layout)
-        
-        # 自定义日期范围（可选）
-        date_range_layout = QHBoxLayout()
-        date_range_layout.addWidget(QLabel("自定义日期范围:"))
-        
-        # 开始日期时间选择器
-        self.start_date_input = QDateTimeEdit()
-        self.start_date_input.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
-        self.start_date_input.setCalendarPopup(True)
-        self.start_date_input.setDateTime(QDateTime.currentDateTime().addDays(-365))  # 默认为一年前
-        
-        # 结束日期时间选择器
-        self.end_date_input = QDateTimeEdit()
-        self.end_date_input.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
-        self.end_date_input.setCalendarPopup(True)
-        self.end_date_input.setDateTime(QDateTime.currentDateTime())  # 默认为当前时间
-        
-        date_range_layout.addWidget(QLabel("开始:"))
-        date_range_layout.addWidget(self.start_date_input)
-        date_range_layout.addWidget(QLabel("结束:"))
-        date_range_layout.addWidget(self.end_date_input)
-        scan_layout.addLayout(date_range_layout)
         
         # 更新本地数据库按钮
         db_btn_layout = QHBoxLayout()
@@ -1197,11 +1184,6 @@ class AkshareGUI(QMainWindow):
         futu_group = QGroupBox("Futu 实时监控")
         futu_layout = QVBoxLayout(futu_group)
 
-        # 自选股分组选择
-        futu_layout.addWidget(QLabel("自选股分组:"))
-        self.futu_watchlist_combo = QComboBox()
-        futu_layout.addWidget(self.futu_watchlist_combo)
-
         # 刷新和控制按钮
         futu_btn_layout = QHBoxLayout()
         self.futu_refresh_btn = QPushButton("刷新列表")
@@ -1218,7 +1200,7 @@ class AkshareGUI(QMainWindow):
         futu_btn_layout.addWidget(self.futu_stop_btn)
         futu_layout.addLayout(futu_btn_layout)
 
-        # 监控日志
+        # 监控日 log
         self.futu_log_text = QTextEdit()
         self.futu_log_text.setReadOnly(True)
         self.futu_log_text.setMaximumHeight(150)
@@ -1302,6 +1284,18 @@ class AkshareGUI(QMainWindow):
         layout.addWidget(self.toolbar)
         layout.addWidget(self.canvas)
 
+        # 确保画布能随窗口大小变化
+        self.canvas.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding
+        )
+        # 设置最小高度，确保有足够的空间
+        self.canvas.setMinimumHeight(400)
+
+        # 保存布局引用
+        self.chart_layout = layout
+        self.right_panel = panel
+
         return panel
 
     def get_chan_config(self):
@@ -1370,11 +1364,34 @@ class AkshareGUI(QMainWindow):
         self.statusBar.showMessage('正在获取股票列表...')
         QApplication.processEvents()
 
-        # 根据模式选择获取股票列表的方式
-        if self.mode_combo.currentText() == "离线 (SQLite)":
-            stock_list = get_local_stock_list()
+        # 获取所选的Futu自选股分组
+        selected_watchlist = self.futu_watchlist_combo.currentText()
+        if selected_watchlist:
+            try:
+                from Monitoring.FutuMonitor import FutuMonitor
+                monitor = FutuMonitor()
+                ret, data = monitor.quote_ctx.get_user_security(group_name=selected_watchlist)
+                monitor.quote_ctx.close()
+                
+                if ret == RET_OK and not data.empty:
+                    stock_list = pd.DataFrame({
+                        '代码': data['code'],
+                        '名称': data['name'],
+                        '最新价': [0.0] * len(data),
+                        '涨跌幅': [0.0] * len(data)
+                    })
+                else:
+                    QMessageBox.warning(self, "警告", f"无法从分组 '{selected_watchlist}' 获取股票，使用默认列表。")
+                    stock_list = get_tradable_stocks()
+            except Exception as e:
+                QMessageBox.warning(self, "警告", f"获取自选股分组 '{selected_watchlist}' 失败: {e}，使用默认列表。")
+                stock_list = get_tradable_stocks()
         else:
-            stock_list = get_tradable_stocks()
+            # 根据模式选择获取股票列表的方式
+            if self.mode_combo.currentText() == "离线 (SQLite)":
+                stock_list = get_local_stock_list()
+            else:
+                stock_list = get_tradable_stocks()
         if stock_list.empty:
             QMessageBox.warning(self, "警告", "获取股票列表失败")
             self.scan_btn.setEnabled(True)
@@ -1385,13 +1402,16 @@ class AkshareGUI(QMainWindow):
         self.statusBar.showMessage(f'获取到 {len(stock_list)} 只可交易股票，开始扫描...')
         self.progress_bar.setMaximum(len(stock_list))
 
+        # 获取天数设置
+        days = self.days_input.value()
+
         # 根据模式选择启动不同的扫描线程
         config = self.get_chan_config()
         kl_type = self.get_timeframe_kl_type()
         if self.mode_combo.currentText() == "离线 (SQLite)":
-            self.scan_thread = OfflineScanThread(stock_list, config, days=365, kl_type=kl_type)
+            self.scan_thread = OfflineScanThread(stock_list, config, days=days, kl_type=kl_type)
         else:
-            self.scan_thread = ScanThread(stock_list, config, days=365, kl_type=kl_type)
+            self.scan_thread = ScanThread(stock_list, config, days=days, kl_type=kl_type)
             
         self.scan_thread.progress.connect(self.on_scan_progress)
         self.scan_thread.found_signal.connect(self.on_buy_point_found)
@@ -1407,11 +1427,33 @@ class AkshareGUI(QMainWindow):
         self.statusBar.showMessage(f'开始下载并更新本地数据库... (数据时间范围: {days} 天)')
         self.log_text.append(f"🔄 开始更新本地数据库，下载最近 {days} 天的数据...")
         
-        # 优先使用富途自选股进行数据库更新
-        stock_list = get_futu_watchlist_stocks()
-        if stock_list.empty:
-            # 如果富途获取失败，回退到其他方法
-            stock_list = get_tradable_stocks()
+        # 获取所选的Futu自选股分组
+        selected_watchlist = self.futu_watchlist_combo.currentText()
+        if selected_watchlist:
+            try:
+                from Monitoring.FutuMonitor import FutuMonitor
+                monitor = FutuMonitor()
+                ret, data = monitor.quote_ctx.get_user_security(group_name=selected_watchlist)
+                monitor.quote_ctx.close()
+                
+                if ret == RET_OK and not data.empty:
+                    stock_list = pd.DataFrame({
+                        '代码': data['code'],
+                        '名称': data['name'],
+                        '最新价': [0.0] * len(data),
+                        '涨跌幅': [0.0] * len(data)
+                    })
+                else:
+                    self.log_text.append(f"⚠️ 无法从分组 '{selected_watchlist}' 获取股票，使用默认列表。")
+                    stock_list = get_tradable_stocks()
+            except Exception as e:
+                self.log_text.append(f"⚠️ 获取自选股分组 '{selected_watchlist}' 失败: {e}，使用默认列表。")
+                stock_list = get_tradable_stocks()
+        else:
+            # 如果没有选择分组，则使用默认逻辑
+            stock_list = get_futu_watchlist_stocks()
+            if stock_list.empty:
+                stock_list = get_tradable_stocks()
         
         if stock_list.empty:
             self.statusBar.showMessage('股票列表为空，无法更新数据库')
@@ -1430,9 +1472,6 @@ class AkshareGUI(QMainWindow):
         }
         timeframes_to_download = timeframe_map.get(selected_timeframe, ['day'])
         
-        # 获取自定义日期范围
-        start_date = self.start_date_input.dateTime().toString("yyyy-MM-dd") if not self.start_date_input.dateTime().isNull() else None
-        end_date = self.end_date_input.dateTime().toString("yyyy-MM-dd") if not self.end_date_input.dateTime().isNull() else None
         
         stock_codes = stock_list['代码'].tolist()
         self.log_text.append(f"📊 准备下载 {len(stock_codes)} 只股票的 {selected_timeframe} 数据...")
@@ -1442,8 +1481,8 @@ class AkshareGUI(QMainWindow):
             stock_codes,
             days,
             timeframes_to_download,
-            start_date,
-            end_date
+            None,  # start_date
+            None   # end_date
         )
         self.update_db_thread.log_signal.connect(self.on_log_message)
         self.update_db_thread.finished.connect(self.on_update_database_finished)
@@ -1609,16 +1648,11 @@ class AkshareGUI(QMainWindow):
         try:
             from Plot.PlotDriver import CPlotDriver
 
-            # 关闭旧的 figure 释放内存
-            plt.close('all')
-
             plot_config = self.get_plot_config()
 
-            # 获取控件宽度，计算合适的图表尺寸
-            canvas_width = self.canvas.width()
-            dpi = 100
-            fig_width = canvas_width / dpi
-            fig_height = fig_width * 0.5  # 宽高比 2:1
+            # 使用合理的固定尺寸，让布局自动调整
+            fig_width = 12
+            fig_height = 8
 
             # 根据时间级别设置合适的x_range值
             current_kl_type = self.get_timeframe_kl_type()
@@ -1638,14 +1672,59 @@ class AkshareGUI(QMainWindow):
                 }
             }
 
+            # 让CPlotDriver创建新的Figure
             plot_driver = CPlotDriver(self.chan, plot_config=plot_config, plot_para=plot_para)
 
-            self.canvas.fig = plot_driver.figure
-            self.canvas.figure = plot_driver.figure
-            self.canvas.draw()
-            self.toolbar.update()
+            # 完全重新创建canvas和toolbar
+            self.replace_chart_canvas(plot_driver.figure)
+            
         except Exception as e:
             QMessageBox.critical(self, "绑定错误", str(e))
+
+    def replace_chart_canvas(self, figure):
+        """替换图表画布和工具栏"""
+        # 获取图表面板的布局
+        chart_layout = self.chart_layout
+        
+        # 移除旧的toolbar和canvas（它们在布局的位置1和2）
+        if chart_layout.count() >= 3:
+            # 移除toolbar（位置1）
+            old_toolbar_item = chart_layout.itemAt(1)
+            if old_toolbar_item:
+                old_toolbar = old_toolbar_item.widget()
+                if old_toolbar:
+                    old_toolbar.deleteLater()
+            
+            # 移除canvas（位置2）
+            old_canvas_item = chart_layout.itemAt(2)
+            if old_canvas_item:
+                old_canvas = old_canvas_item.widget()
+                if old_canvas:
+                    old_canvas.deleteLater()
+            
+            # 创建新的canvas
+            new_canvas = ChanPlotCanvas(self.right_panel, width=12, height=8)
+            new_canvas.fig = figure
+            new_canvas.figure = figure
+            
+            # 创建新的toolbar
+            from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
+            new_toolbar = NavigationToolbar(new_canvas, self.right_panel)
+            
+            # 添加到布局的正确位置
+            chart_layout.insertWidget(1, new_toolbar)
+            chart_layout.insertWidget(2, new_canvas)
+            
+            # 设置canvas属性
+            new_canvas.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Expanding
+            )
+            new_canvas.setMinimumHeight(400)
+            
+            # 更新引用
+            self.canvas = new_canvas
+            self.toolbar = new_toolbar
 
     def refresh_chart(self):
         """刷新图表"""
@@ -1773,7 +1852,26 @@ def main():
     window = AkshareGUI()
     window.show()
 
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    
+    # 确保所有后台线程都已停止
+    if hasattr(window, 'scan_thread') and window.scan_thread and window.scan_thread.isRunning():
+        window.scan_thread.stop()
+        window.scan_thread.wait(1000)  # 等待1秒
+        
+    if hasattr(window, 'analysis_thread') and window.analysis_thread and window.analysis_thread.isRunning():
+        window.analysis_thread.quit()
+        window.analysis_thread.wait(1000)
+        
+    if hasattr(window, 'update_db_thread') and window.update_db_thread and window.update_db_thread.isRunning():
+        window.update_db_thread.stop()
+        window.update_db_thread.wait(1000)
+        
+    if hasattr(window, 'repair_thread') and window.repair_thread and window.repair_thread.isRunning():
+        window.repair_thread.stop()
+        window.repair_thread.wait(1000)
+
+    sys.exit(exit_code)
 
 
 if __name__ == '__main__':
