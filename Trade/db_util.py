@@ -145,6 +145,33 @@ class CChanDB:
             )
         ''')
         
+        # 创建索引以优化查询性能
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_kline_day_code_date ON kline_day(code, date)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_kline_30m_code_date ON kline_30m(code, date)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_kline_5m_code_date ON kline_5m(code, date)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_kline_1m_code_date ON kline_1m(code, date)')
+        
+        # 为快速查找最新数据添加索引
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_kline_day_date_desc ON kline_day(date DESC)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_kline_30m_date_desc ON kline_30m(date DESC)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_kline_5m_date_desc ON kline_5m(date DESC)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_kline_1m_date_desc ON kline_1m(date DESC)')
+        
+        # 为交易信号表添加索引
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_trading_signals_code_status ON trading_signals(stock_code, status)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_trading_signals_add_date ON trading_signals(add_date)')
+        
+        # 为订单表添加索引
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_orders_code_status ON orders(code, order_status)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at)')
+        
+        # 为持仓表添加索引
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_positions_code ON positions(code)')
+        
+        # 为风险日志表添加索引
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_risk_logs_code_action ON risk_logs(code, action)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_risk_logs_created_at ON risk_logs(created_at)')
+        
         conn.commit()
         conn.close()
     
@@ -159,9 +186,11 @@ class CChanDB:
         Returns:
             pd.DataFrame: 查询结果
         """
-        conn = sqlite3.connect(self.db_path)
-        df = pd.read_sql_query(query, conn, params=params)
-        conn.close()
+        with sqlite3.connect(self.db_path) as conn:
+            # 设置连接参数以优化查询性能
+            conn.execute("PRAGMA cache_size = 10000")  # 增加缓存页数
+            conn.execute("PRAGMA temp_store = memory")  # 使用内存临时存储
+            df = pd.read_sql_query(query, conn, params=params)
         return df
 
     def save_signal(self, code: str, signal_type: str, score: float, chart_path: str) -> int:

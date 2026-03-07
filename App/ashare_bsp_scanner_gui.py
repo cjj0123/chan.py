@@ -69,6 +69,44 @@ from App.HKTradingController import HKTradingController
 from App.PerformanceDashboard import PerformanceDashboard
 
 
+def get_futu_stock_name(code):
+    """
+    从富途API获取单个股票的准确名称
+    
+    Args:
+        code: str, 股票代码 (如 SH.600000)
+    
+    Returns:
+        str: 股票名称，获取失败时返回原代码
+    """
+    try:
+        from futu import OpenQuoteContext, RET_OK
+        import os
+        
+        # 从环境变量或配置文件获取富途API地址
+        FUTU_OPEND_ADDRESS = os.getenv('FUTU_OPEND_ADDRESS', '127.0.0.1')
+        
+        # 创建富途API连接
+        quote_ctx = OpenQuoteContext(host=FUTU_OPEND_ADDRESS, port=11111)
+        
+        # 获取股票基本信息
+        ret, data = quote_ctx.get_stock_basicinfo(Market.HK, [code])
+        if ret != RET_OK:
+            # 尝试获取A股信息
+            market = Market.SH if code.startswith('SH.') else Market.SZ if code.startswith('SZ.') else Market.HK
+            ret, data = quote_ctx.get_stock_basicinfo(market, [code])
+        
+        quote_ctx.close()
+        
+        if ret == RET_OK and not data.empty:
+            return data.iloc[0]['stock_name']
+        else:
+            return code
+    except Exception as e:
+        print(f"从富途获取股票名称失败 {code}: {e}")
+        return code
+
+
 def get_futu_watchlist_stocks():
     """
     从富途自选股列表获取股票代码
@@ -328,11 +366,18 @@ class ScanThread(QThread):
         for idx, row in self.stock_list.iterrows():
             if not self.is_running:
                 break
-
+            
             code = row['代码']
             name = row['名称']
+            
+            # 从Futu获取准确的股票名称
+            accurate_name = get_futu_stock_name(code)
+            if accurate_name != code:  # 如果获取到了准确名称，则使用它
+                name = accurate_name
+            
             self.progress.emit(idx + 1, total, f"{code} {name}")
             self.log_signal.emit(f"🔍 扫描 {code} {name}...")
+
 
             try:
                 chan = CChan(
@@ -360,14 +405,21 @@ class ScanThread(QThread):
 
                 success_count += 1
 
-                # 检查是否有买点（只找最近3天内出现的买点）
+                # 检查是否有买点或卖点（只找最近3天内出现的买卖点）
                 bsp_list = chan.get_latest_bsp(number=0)
                 cutoff_date = datetime.now() - timedelta(days=3)
+                
+                # 分别获取买点和卖点
                 buy_points = [
                     bsp for bsp in bsp_list
                     if bsp.is_buy and datetime(bsp.klu.time.year, bsp.klu.time.month, bsp.klu.time.day) >= cutoff_date
                 ]
+                sell_points = [
+                    bsp for bsp in bsp_list
+                    if not bsp.is_buy and datetime(bsp.klu.time.year, bsp.klu.time.month, bsp.klu.time.day) >= cutoff_date
+                ]
 
+                # 优先处理买点，如果没有买点再处理卖点
                 if buy_points:
                     # 获取最近的买点
                     latest_buy = buy_points[0]
@@ -377,12 +429,27 @@ class ScanThread(QThread):
                         'name': name,
                         'price': row['最新价'],
                         'change': row['涨跌幅'],
-                        'bsp_type': latest_buy.type2str(),
+                        'bsp_type': f"买点{latest_buy.type2str()}",
                         'bsp_time': str(latest_buy.klu.time),
+                        'bsp_direction': 'buy',
+                        'chan': chan,
+                    })
+                elif sell_points:
+                    # 获取最近的卖点
+                    latest_sell = sell_points[0]
+                    self.log_signal.emit(f"🔴 {code} {name}: 发现卖点 {latest_sell.type2str()}")
+                    self.found_signal.emit({
+                        'code': code,
+                        'name': name,
+                        'price': row['最新价'],
+                        'change': row['涨跌幅'],
+                        'bsp_type': f"卖点{latest_sell.type2str()}",
+                        'bsp_time': str(latest_sell.klu.time),
+                        'bsp_direction': 'sell',
                         'chan': chan,
                     })
                 else:
-                    self.log_signal.emit(f"➖ {code} {name}: 无近期买点")
+                    self.log_signal.emit(f"➖ {code} {name}: 无近期买卖点")
             except Exception as e:
                 fail_count += 1
                 error_msg = str(e)
@@ -458,9 +525,15 @@ class OfflineScanThread(QThread):
                 
             code = row['代码']
             name = row['名称']
+            
+            # 从Futu获取准确的股票名称
+            accurate_name = get_futu_stock_name(code)
+            if accurate_name != code:  # 如果获取到了准确名称，则使用它
+                name = accurate_name
+            
             self.progress.emit(idx + 1, total, f"{code} {name}")
             self.log_signal.emit(f"🔍 扫描 {code} {name}...")
-            
+
             try:
                 chan = CChan(
                     code=code,
@@ -487,14 +560,21 @@ class OfflineScanThread(QThread):
                     
                 success_count += 1
                 
-                # 检查是否有买点（只找最近3天内出现的买点）
+                # 检查是否有买点或卖点（只找最近3天内出现的买卖点）
                 bsp_list = chan.get_latest_bsp(number=0)
                 cutoff_date = datetime.now() - timedelta(days=3)
+                
+                # 分别获取买点和卖点
                 buy_points = [
                     bsp for bsp in bsp_list
                     if bsp.is_buy and datetime(bsp.klu.time.year, bsp.klu.time.month, bsp.klu.time.day) >= cutoff_date
                 ]
-                
+                sell_points = [
+                    bsp for bsp in bsp_list
+                    if not bsp.is_buy and datetime(bsp.klu.time.year, bsp.klu.time.month, bsp.klu.time.day) >= cutoff_date
+                ]
+
+                # 优先处理买点，如果没有买点再处理卖点
                 if buy_points:
                     # 获取最近的买点
                     latest_buy = buy_points[0]
@@ -504,12 +584,27 @@ class OfflineScanThread(QThread):
                         'name': name,
                         'price': row['最新价'],
                         'change': row['涨跌幅'],
-                        'bsp_type': latest_buy.type2str(),
+                        'bsp_type': f"买点{latest_buy.type2str()}",
                         'bsp_time': str(latest_buy.klu.time),
+                        'bsp_direction': 'buy',
+                        'chan': chan,
+                    })
+                elif sell_points:
+                    # 获取最近的卖点
+                    latest_sell = sell_points[0]
+                    self.log_signal.emit(f"🔴 {code} {name}: 发现卖点 {latest_sell.type2str()}")
+                    self.found_signal.emit({
+                        'code': code,
+                        'name': name,
+                        'price': row['最新价'],
+                        'change': row['涨跌幅'],
+                        'bsp_type': f"卖点{latest_sell.type2str()}",
+                        'bsp_time': str(latest_sell.klu.time),
+                        'bsp_direction': 'sell',
                         'chan': chan,
                     })
                 else:
-                    self.log_signal.emit(f"➖ {code} {name}: 无近期买点")
+                    self.log_signal.emit(f"➖ {code} {name}: 无近期买卖点")
             except Exception as e:
                 fail_count += 1
                 error_msg = str(e)
@@ -1069,8 +1164,8 @@ class AkshareGUI(QMainWindow):
         list_layout = QVBoxLayout(list_group)
 
         self.stock_table = QTableWidget()
-        self.stock_table.setColumnCount(5)
-        self.stock_table.setHorizontalHeaderLabels(['代码', '名称', '现价', '涨跌%', '买点'])
+        self.stock_table.setColumnCount(7)
+        self.stock_table.setHorizontalHeaderLabels(['代码', '名称', '现价', '涨跌%', '信号类型', '评分', 'API'])
         self.stock_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.stock_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.stock_table.cellClicked.connect(self.on_stock_clicked)
@@ -1383,10 +1478,10 @@ class AkshareGUI(QMainWindow):
 
     def on_buy_point_found(self, data):
         """
-        发现买点的回调函数
+        发现买点或卖点的回调函数
 
         Args:
-            data: dict, 包含股票代码、名称、价格、买点类型、CChan对象等信息
+            data: dict, 包含股票代码、名称、价格、买卖点类型、CChan对象等信息
         """
         row = self.stock_table.rowCount()
         self.stock_table.insertRow(row)
@@ -1395,6 +1490,13 @@ class AkshareGUI(QMainWindow):
         self.stock_table.setItem(row, 2, QTableWidgetItem(f"{data['price']:.2f}"))
         self.stock_table.setItem(row, 3, QTableWidgetItem(f"{data['change']:.2f}%"))
         self.stock_table.setItem(row, 4, QTableWidgetItem(f"{data['bsp_type']} ({data['bsp_time']})"))
+        
+        # 添加评分和API名称 - 这里可以根据实际需求调整评分逻辑
+        # 模拟评分：根据买卖点类型和级别给出不同评分
+        bsp_level = data['bsp_type'][2] if len(data['bsp_type']) > 2 else '1'  # 提取买卖点级别，如"买点1"中的"1"
+        score = 10 - (ord(bsp_level) - ord('0')) * 2  # 简单评分逻辑，级别越低评分越高
+        self.stock_table.setItem(row, 5, QTableWidgetItem(f"{score}/10"))
+        self.stock_table.setItem(row, 6, QTableWidgetItem("缠论API"))  # API名称
 
         # 缓存 chan 对象
         self.stock_cache[data['code']] = data['chan']
