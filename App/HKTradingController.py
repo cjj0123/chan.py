@@ -16,7 +16,7 @@ from typing import List, Dict, Optional, Tuple, Callable
 from pathlib import Path
 import asyncio
 
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 
 # 将项目根目录加入路径
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -1210,3 +1210,140 @@ class HKTradingController(QObject):
         
         self.log_message.emit(f"异步批量评分完成，共 {len(scored_signals)} 个已评分信号")
         return scored_signals
+
+    @pyqtSlot(dict, result=bool)
+    def process_realtime_signal(self, signal_data: Dict) -> bool:
+        """
+        处理单个实时交易信号
+        
+        Args:
+            signal_data: 包含信号信息的字典，格式为:
+                {
+                    'code': str,        # 股票代码
+                    'signal': str,      # 信号类型 ('BUY' or 'SELL')
+                    'price': float,     # 信号价格
+                    'time': str         # 信号时间
+                }
+                
+        Returns:
+            bool: 交易是否成功执行
+        """
+        try:
+            code = signal_data['code']
+            signal_type = signal_data['signal']
+            price = signal_data['price']
+            signal_time = signal_data['time']
+            
+            self.log_message.emit(f"🔄 处理实时信号: {code} {signal_type} @ {price} ({signal_time})")
+            
+            # 获取股票信息
+            stock_info = self.get_stock_info(code)
+            if not stock_info:
+                self.log_message.emit(f"❌ {code} 股票信息获取失败，跳过实时信号处理")
+                return False
+            
+            current_price = stock_info['current_price']
+            if current_price <= 0:
+                current_price = price  # 使用信号价格作为备选
+                self.log_message.emit(f"{code} 使用信号价格: {current_price}")
+            
+            # 获取持仓信息
+            position_qty = self.get_position_quantity(code)
+            
+            # 检查信号方向与持仓是否匹配
+            is_buy = signal_type.upper() == 'BUY'
+            if is_buy and position_qty > 0:
+                self.log_message.emit(f"{code} 已有持仓({position_qty}股)，跳过买入信号")
+                return False
+            
+            if not is_buy and position_qty <= 0:
+                self.log_message.emit(f"{code} 无持仓，跳过卖出信号")
+                return False
+            
+            # 检查待成交订单
+            side_str = 'BUY' if is_buy else 'SELL'
+            if self.check_pending_orders(code, side_str):
+                self.log_message.emit(f"{code} 存在活跃 {side_str} 订单，跳过下单")
+                return False
+            
+            # 执行缠论分析以获取完整的分析结果（用于生成图表）
+            chan_result = self.analyze_with_chan(code)
+            if not chan_result:
+                self.log_message.emit(f"{code} 缠论分析失败，跳过实时信号处理")
+                return False
+            
+            # 生成图表
+            chart_paths = self.generate_charts(code, chan_result['chan_analysis'])
+            if not chart_paths:
+                self.log_message.emit(f"{code} 图表生成失败，但继续处理信号")
+            
+            # 执行视觉评分（如果图表生成成功）
+            score = 0
+            if chart_paths:
+                try:
+                    visual_result = self.visual_judge.evaluate(chart_paths, chan_result['bsp_type'])
+                    score = visual_result.get('score', 0)
+                    self.log_message.emit(f"{code} 视觉评分: {score}/100")
+                except Exception as e:
+                    self.log_message.emit(f"{code} 视觉评分异常: {e}")
+                    score = 0
+            
+            # 检查熔断机制
+            if self.risk_manager.check_circuit_breaker():
+                self.log_message.emit("⚠️ 熔断机制激活，暂停所有交易操作")
+                return False
+            
+            # 检查风险管理
+            if not self.risk_manager.can_execute_trade(code, score):
+                self.log_message.emit(f"⚠️ 风险管理限制，跳过交易 {code}")
+                return False
+            
+            # 只有视觉评分 >= 阈值才执行交易
+            if score >= self.min_visual_score:
+                # 计算交易数量
+                if is_buy:
+                    # 买入：使用风险管理器计算动态仓位
+                    buy_quantity = self.risk_manager.calculate_position_size(
+                        code=code,
+                        available_funds=self.get_available_funds(),
+                        current_price=current_price,
+                        signal_score=score,
+                        risk_factor=1.0
+                    )
+                    if buy_quantity <= 0:
+                        self.log_message.emit(f"{code} 风险管理器建议不买入或资金不足")
+                        return False
+                    
+                    lot_size = stock_info.get('lot_size', 100)
+                    buy_quantity = (buy_quantity // lot_size) * lot_size  # 确保是整手
+                    
+                    if self.execute_trade(code, 'BUY', buy_quantity, current_price):
+                        # 记录交易
+                        self.risk_manager.record_trade(code, 'BUY', buy_quantity, current_price, score)
+                        self.executed_signals[code] = signal_time
+                        self._save_executed_signals()
+                        self.log_message.emit(f"✅ 实时买入成功 {code}, 数量: {buy_quantity}, 价格: {current_price}")
+                        return True
+                    else:
+                        self.log_message.emit(f"❌ 实时买入失败 {code}")
+                        return False
+                else:
+                    # 卖出：卖出全部持仓
+                    if self.execute_trade(code, 'SELL', position_qty, current_price):
+                        # 记录交易
+                        released_funds = current_price * position_qty
+                        self.risk_manager.record_trade(code, 'SELL', position_qty, current_price, score, pnl=released_funds)
+                        self.executed_signals[code] = signal_time
+                        self._save_executed_signals()
+                        self.log_message.emit(f"✅ 实时卖出成功 {code}, 数量: {position_qty}, 价格: {current_price}")
+                        return True
+                    else:
+                        self.log_message.emit(f"❌ 实时卖出失败 {code}")
+                        return False
+            else:
+                self.log_message.emit(f"⏭️ 实时信号 {code} 评分({score})低于阈值({self.min_visual_score})，仅通知不执行")
+                return False
+                
+        except Exception as e:
+            self.log_message.emit(f"❌ 处理实时信号异常 {code}: {e}")
+            return False

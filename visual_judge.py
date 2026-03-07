@@ -6,21 +6,22 @@ import json
 import base64
 from PIL import Image
 import re
+from urllib.parse import quote
 from dotenv import load_dotenv
 
 # 加载环境变量 - 确保从项目根目录加载 .env
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '.env'))
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), 'email_config.env'))
 
-# 尝试导入 google.genai (Gemini)
+# 尝试导入 google.generativeai (Gemini)
 try:
     import google.generativeai as genai
     from google.generativeai.types import GenerationConfig
     GEMINI_AVAILABLE = True
 except ImportError:
     GEMINI_AVAILABLE = False
-    print("⚠️ google-genai 未安装，Gemini 模型不可用。")
-    print("   安装命令: pip install google-genai")
+    print("⚠️ google-generativeai 未安装，Gemini 模型不可用。")
+    print("   安装命令: pip install google-generativeai")
 
 # 尝试导入 dashscope (Qwen)
 try:
@@ -32,32 +33,38 @@ except ImportError:
     print("⚠️ dashscope 未安装，Qwen 模型不可用。")
     print("   安装命令: pip install dashscope")
 
-# API 密钥配置 - 从 .env 文件强制加载，忽略系统环境变量
+# API 密钥配置 - 从 .env 文件强制加载
 env_path = os.path.join(os.path.dirname(__file__), '.env')
 GOOGLE_API_KEY = None
 DASHSCOPE_API_KEY = None
 
 if os.path.exists(env_path):
-    with open(env_path, 'r') as f:
-        for line in f:
-            if line.strip() and not line.startswith('#'):
-                key, value = line.strip().split('=', 1)
-                # 移除可能存在的引号和前后空白
-                value = value.strip().strip('"\'')
-                
-                if key == 'GOOGLE_API_KEY':
-                    if value and value != "YOUR_GOOGLE_API_KEY_HERE":
-                        GOOGLE_API_KEY = value
-                    else:
-                        print("⚠️ 警告: .env 文件中的 GOOGLE_API_KEY 仍为默认占位符，请替换为有效的API密钥。")
-                elif key == 'DASHSCOPE_API_KEY':
-                    if value and value != "YOUR_DASHSCOPE_API_KEY_HERE":
-                        DASHSCOPE_API_KEY = value
-                    else:
-                        print("⚠️ 警告: .env 文件中的 DASHSCOPE_API_KEY 仍为默认占位符，请替换为有效的API密钥。")
-else:
-    print(f"⚠️ 警告: 未找到配置文件 {env_path}，请确保已创建并配置API密钥。")
+    try:
+        with open(env_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                if line.strip() and not line.startswith('#'):
+                    # Remove comments (everything after #)
+                    line_no_comment = line.split('#', 1)[0].strip()
+                    if not line_no_comment or '=' not in line_no_comment:
+                        continue
+                        
+                    key, value = line_no_comment.split('=', 1)
+                    key = key.strip()
+                    value = value.strip().strip('"\'')
+                    
+                    if key == 'GOOGLE_API_KEY':
+                        if value and value != "YOUR_GOOGLE_API_KEY_HERE":
+                            GOOGLE_API_KEY = value
+                    elif key == 'DASHSCOPE_API_KEY':
+                        if value and value != "YOUR_DASHSCOPE_API_KEY_HERE":
+                            DASHSCOPE_API_KEY = value
+    except Exception as e:
+        print(f"⚠️ 读取 .env 文件失败: {e}")
+
+# 如果 .env 中没有，尝试环境变量
+if not GOOGLE_API_KEY:
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+if not DASHSCOPE_API_KEY:
     DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
 
 MASTER_PROMPT = """系统角色定义
@@ -263,21 +270,84 @@ class VisualJudge:
         if result:
             return self._post_process_result(result, "Gemini")
         return None
-
     def call_qwen_api(self, image_paths, signal_type):
         """调用 Qwen API"""
+        import tempfile
+        import shutil
+        
         print("   🤖 调用 Qwen3.5-Plus (备用)...")
         
-        prompt = f"已知信号类型: {signal_type}\n\n{MASTER_PROMPT}" if signal_type else MASTER_PROMPT
-        
-        messages = [{'role': 'user', 'content': []}]
-        messages[0]['content'].append({'text': prompt})
-        for path in image_paths:
-            messages[0]['content'].append({'image': f'file://{os.path.abspath(path)}'})
+        # Use English-only prompt for Qwen to avoid encoding issues
+        ENGLISH_MASTER_PROMPT = """System Role Definition
+You are a quantitative trading expert proficient in "Chanlun (Chan Theory)", with rigorous visual reasoning capabilities. Your task is to objectively evaluate specific Chanlun buy/sell signals (interval nesting and MACD dynamics) identified by algorithms on the provided K-line charts.
 
+# Input Context
+I will provide stock K-line charts at the same time point:
+- [Single Chart Mode]: Only 30-minute level (30M) chart provided (main signal source).
+- [Dual Chart Mode]: Chart 1 is 30-minute level (30M); Chart 2 is 5-minute level (5M), used for interval nesting confirmation.
+
+# Visual Legend and Anchors (Extremely Important - Identify strictly by colors)
+* Focus Area: **Rightmost side of the chart (latest price dynamics)** and **magenta text positions**.
+* Black lines: Bi (Strokes) - Basic trend segments.
+* Purple lines: Seg (Segments) - Higher-level trend segments.
+* Orange rectangles: ZhongShu (Central Pivots) - Consolidation and multi-party battle zones.
+* Magenta text/arrows: BUY signals (b1, b2, b3a, b3b, etc.) or SELL signals (s1, s2, s3a, s3b, etc.). Algorithm has marked these on the chart.
+* Dashed black/purple lines: Latest incomplete, extending Bi/Seg.
+* Sub-chart MACD: Histogram (area/height) and yellow-white lines (DIF/DEA), used to judge momentum exhaustion (divergence).
+
+# Signal Code Dictionary
+[Buy/Bullish Signals - BUY]
+* b1p/b1 (First Buy): Trend divergence point. Visual feature: Price makes new low, but corresponding MACD green histogram area/yellow-white lines do not make new low (bottom divergence).
+* b2/b2s (Second Buy): Trend retracement without making new low. Visual feature: Higher bottom.
+* b3a/b3b (Third Buy): Central pivot breakout and retest. Visual feature: Upward break from orange central pivot, followed by downward Bi/Seg that doesn't fall below central pivot upper boundary.
+
+[Sell/Bearish Signals - SELL]
+* s1p/s1 (First Sell): Trend divergence point. Visual feature: Price makes new high, but corresponding MACD red histogram area/yellow-white lines do not make new high (top divergence).
+* s2/s2s (Second Sell): Trend rebound without making new high. Visual feature: Lower top.
+* s3a/s3b (Third Sell): Central pivot breakdown and retest. Visual feature: Downward break from orange central pivot, followed by upward Bi/Seg that doesn't break above central pivot lower boundary.
+
+# Your Evaluation Task (Step-by-step Reasoning)
+The algorithm has already marked the signal on the chart. You don't need to find the signal again; your task is to **evaluate the confidence/quality of this signal (0-100 points)**.
+1. Localization: Find the magenta-marked signal on the 30M chart.
+2. Structure Quality Check (30M): Determine if the signal's position relative to Bi, Seg, and ZhongShu matches the definitions in the "Signal Dictionary".
+3. Dynamics Quality Check (30M): Observe the MACD sub-chart, compare momentum entering/exiting the central pivot, check for supporting momentum or divergence.
+4. Interval Nesting Quality Check (5M): If 5M chart is provided, look for 5M chart rightmost side forming internal structure supporting the 30M direction (e.g., 30M b1 should show complete downtrend divergence on 5M).
+
+# JSON Output Requirements
+Must output strictly in the following JSON format, no text outside JSON block allowed. **Output analysis process first, then score**:
+{
+  "identified_signal": "Extract the magenta signal from chart, e.g., b2",
+  "direction": "BUY or SELL",
+  "step1_30m_structure_analysis": "Describe signal's visual position on 30M chart: Bi/Seg morphology and relationship with nearest orange central pivot.",
+  "step2_30m_macd_analysis": "Describe 30M sub-chart MACD status: explain price extremes vs MACD histogram/yellow-white lines relationship, presence of divergence or momentum support.",
+  "step3_5m_nested_analysis": "If 5M chart provided, describe if it confirms 30M signal (e.g., finding sub-level divergence or breakout); if single chart only, fill 'N/A_Single_Chart'.",
+  "conclusion": "Summarize signal reliability based on above steps.",
+  "key_risk": "Point out potential risks, e.g.: MACD death cross downward, facing strong resistance, 5M level structure contradiction, etc.",
+  "score": 85
+}
+"""
+        prompt = f"Known signal type: {signal_type}\n\n{ENGLISH_MASTER_PROMPT}" if signal_type else ENGLISH_MASTER_PROMPT
+        
+        # Create temporary files with ASCII names to avoid encoding issues
+        temp_files = []
         try:
+            messages = [{'role': 'user', 'content': []}]
+            messages[0]['content'].append({'text': prompt})
+            
+            for path in image_paths:
+                # Create temporary file with ASCII name
+                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
+                    tmp_path = tmp_file.name
+                temp_files.append(tmp_path)
+                
+                # Copy the image to the temporary file
+                shutil.copy2(path, tmp_path)
+                
+                # Use the temporary file path (ASCII only)
+                messages[0]['content'].append({'image': f'file://{tmp_path}'})
+            
             response = MultiModalConversation.call(
-                model='qwen3.5-plus',
+                model='qwen3.5-plus-2026-02-15',
                 messages=messages,
                 temperature=0.1,
             )
@@ -298,6 +368,7 @@ class VisualJudge:
                 
                 if hasattr(response, 'request_id'):
                     print(f"   请求ID: {response.request_id}")
+                    
         except Exception as e:
             error_str = str(e)
             print(f"⚠️ Qwen API 调用异常: {e}")
@@ -309,6 +380,14 @@ class VisualJudge:
             
             import traceback
             print(f"详细错误信息: {traceback.format_exc()}")
+        finally:
+            # Clean up temporary files
+            for tmp_file in temp_files:
+                try:
+                    os.unlink(tmp_file)
+                except OSError:
+                    pass
+                    
         return None
 
     def evaluate(self, image_paths, signal_type=None):
@@ -329,8 +408,12 @@ class VisualJudge:
             try:
                 result = self.call_gemini_api(images, signal_type)
                 if result:
-                    print(f"-> Gemini 返回结果: {result}")
-                    return result
+                    # 如果 Gemini 返回 0 分，可能是图片问题或无法识别，且 Qwen 可用，则尝试 Qwen
+                    if result.get('score') == 0 and self.qwen_client:
+                        print(f"-> Gemini 返回 0 分 (原因: {result.get('conclusion', '未知')})，且 Qwen 可用，尝试降级至 Qwen...")
+                    else:
+                        print(f"-> Gemini 返回结果: {result}")
+                        return result
                 else:
                     print("-> Gemini 未返回有效结果")
             except Exception as e:

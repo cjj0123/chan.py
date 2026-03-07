@@ -1231,6 +1231,18 @@ class AkshareGUI(QMainWindow):
         self.auto_trade_log_text.setMaximumHeight(150)
         auto_trade_layout.addWidget(self.auto_trade_log_text)
 
+        # 实时交易监控按钮
+        realtime_trade_btn_layout = QHBoxLayout()
+        self.realtime_trade_start_btn = QPushButton("启动实时交易监控")
+        self.realtime_trade_start_btn.clicked.connect(self.start_realtime_trading)
+        realtime_trade_btn_layout.addWidget(self.realtime_trade_start_btn)
+        
+        self.realtime_trade_stop_btn = QPushButton("停止实时交易监控")
+        self.realtime_trade_stop_btn.clicked.connect(self.stop_realtime_trading)
+        self.realtime_trade_stop_btn.setEnabled(False)
+        realtime_trade_btn_layout.addWidget(self.realtime_trade_stop_btn)
+        auto_trade_layout.addLayout(realtime_trade_btn_layout)
+        
         layout.addWidget(auto_trade_group)
         # === 新增结束 ===
 
@@ -1781,6 +1793,19 @@ class AkshareGUI(QMainWindow):
         msg = f"[{signal_data['time']}] {signal_data['code']}: {signal_data['signal']} @ {signal_data['price']}"
         self.futu_log_text.append(msg)
         self.statusBar.showMessage(f"新信号: {msg}")
+        
+        # 如果启用了自动交易，将信号传递给交易控制器
+        if self.hk_trading_controller is not None and self.hk_trading_controller._is_running:
+            # 在主线程中调用交易控制器的实时信号处理方法
+            # 由于FutuMonitor回调可能在非主线程中执行，我们需要确保线程安全
+            from PyQt6.QtCore import QMetaObject, Qt
+            QMetaObject.invokeMethod(
+                self.hk_trading_controller,
+                "process_realtime_signal",
+                Qt.ConnectionType.QueuedConnection,
+                Qt.ReturnArgument(bool),
+                Qt.Q_ARG(dict, signal_data)
+            )
 
     def start_futu_monitoring(self):
         """开始富途实时监控"""
@@ -1867,6 +1892,64 @@ class AkshareGUI(QMainWindow):
             self.on_auto_trade_log("已发送停止信号，等待当前操作完成...")
         self.auto_trade_start_btn.setEnabled(True)
         self.auto_trade_stop_btn.setEnabled(False)
+    # === 新增结束 ===
+    
+    # === 新增：实时交易监控方法 ===
+    def start_realtime_trading(self):
+        """启动实时交易监控模式"""
+        selected_group = self.futu_watchlist_combo.currentText()
+        if not selected_group:
+            QMessageBox.warning(self, "警告", "请先选择一个自选股分组。")
+            return
+            
+        try:
+            # 禁用按钮
+            self.realtime_trade_start_btn.setEnabled(False)
+            self.realtime_trade_stop_btn.setEnabled(True)
+            
+            # 初始化交易控制器（如果还没有）
+            if self.hk_trading_controller is None:
+                self.hk_trading_controller = HKTradingController()
+                self.hk_trading_controller.log_message.connect(self.on_auto_trade_log)
+                self.hk_trading_controller.scan_finished.connect(self.on_auto_trade_finished)
+            
+            # 启动 FutuMonitor 如果还没有启动
+            if self.futu_monitor is None:
+                self.futu_monitor = FutuMonitor()
+                self.futu_monitor.set_callback(self.on_futu_signal)
+                self.futu_monitor.start(selected_group)
+                self.futu_log_text.append(f"自动启动 FutuMonitor 监控分组: {selected_group}")
+            
+            # 标记为正在运行
+            self.hk_trading_controller._is_running = True
+            self.on_auto_trade_log("✅ 实时交易监控模式已启动")
+            self.statusBar.showMessage("实时交易监控模式已启动")
+            
+        except Exception as e:
+            error_msg = f"启动实时交易监控失败: {str(e)}"
+            self.on_auto_trade_log(f"❌ {error_msg}")
+            self.futu_log_text.append(f"❌ 启动实时交易监控失败: {str(e)}")
+            QMessageBox.critical(self, "错误", error_msg)
+            # 恢复按钮状态
+            self.realtime_trade_start_btn.setEnabled(True)
+            self.realtime_trade_stop_btn.setEnabled(False)
+    
+    def stop_realtime_trading(self):
+        """停止实时交易监控模式"""
+        if self.hk_trading_controller:
+            self.hk_trading_controller._is_running = False
+            self.on_auto_trade_log("⏹️ 实时交易监控模式已停止")
+            self.statusBar.showMessage("实时交易监控模式已停止")
+        
+        # 停止 FutuMonitor 如果正在运行
+        if self.futu_monitor:
+            self.futu_monitor.stop()
+            self.futu_monitor = None
+            self.futu_log_text.append("FutuMonitor 已停止")
+        
+        # 恢复按钮状态
+        self.realtime_trade_start_btn.setEnabled(True)
+        self.realtime_trade_stop_btn.setEnabled(False)
     # === 新增结束 ===
 
 
