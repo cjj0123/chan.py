@@ -975,6 +975,9 @@ class AkshareGUI(QMainWindow):
         self.hk_trading_controller = None  # 港股自动化交易控制器
         self.log_signal.connect(self.on_log_message)
         self.init_ui()
+        
+        # 确保窗口关闭时正确清理资源
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
 
     def init_ui(self):
         """初始化用户界面"""
@@ -990,7 +993,7 @@ class AkshareGUI(QMainWindow):
 
         # 左侧控制面板、股票列表和性能仪表盘
         left_panel = self.create_left_panel()
-        performance_dashboard = PerformanceDashboard()
+        self.performance_dashboard = PerformanceDashboard()
 
         # 右侧图表区域
         right_panel = self.create_chart_panel()
@@ -998,7 +1001,7 @@ class AkshareGUI(QMainWindow):
         # 使用分割器
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(left_panel)
-        splitter.addWidget(performance_dashboard)
+        splitter.addWidget(self.performance_dashboard)
         splitter.addWidget(right_panel)
         splitter.setSizes([300, 200, 1100])
 
@@ -1151,8 +1154,8 @@ class AkshareGUI(QMainWindow):
         list_layout = QVBoxLayout(list_group)
 
         self.stock_table = QTableWidget()
-        self.stock_table.setColumnCount(7)
-        self.stock_table.setHorizontalHeaderLabels(['代码', '名称', '现价', '涨跌%', '信号类型', '评分', 'API'])
+        self.stock_table.setColumnCount(4)
+        self.stock_table.setHorizontalHeaderLabels(['代码', '名称', '信号类型', '信号时间'])
         self.stock_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.stock_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.stock_table.cellClicked.connect(self.on_stock_clicked)
@@ -1564,16 +1567,8 @@ class AkshareGUI(QMainWindow):
         self.stock_table.insertRow(row)
         self.stock_table.setItem(row, 0, QTableWidgetItem(data['code']))
         self.stock_table.setItem(row, 1, QTableWidgetItem(data['name']))
-        self.stock_table.setItem(row, 2, QTableWidgetItem(f"{data['price']:.2f}"))
-        self.stock_table.setItem(row, 3, QTableWidgetItem(f"{data['change']:.2f}%"))
-        self.stock_table.setItem(row, 4, QTableWidgetItem(f"{data['bsp_type']} ({data['bsp_time']})"))
-        
-        # 添加评分和API名称 - 这里可以根据实际需求调整评分逻辑
-        # 模拟评分：根据买卖点类型和级别给出不同评分
-        bsp_level = data['bsp_type'][2] if len(data['bsp_type']) > 2 else '1'  # 提取买卖点级别，如"买点1"中的"1"
-        score = 10 - (ord(bsp_level) - ord('0')) * 2  # 简单评分逻辑，级别越低评分越高
-        self.stock_table.setItem(row, 5, QTableWidgetItem(f"{score}/10"))
-        self.stock_table.setItem(row, 6, QTableWidgetItem("缠论API"))  # API名称
+        self.stock_table.setItem(row, 2, QTableWidgetItem(data['bsp_type']))
+        self.stock_table.setItem(row, 3, QTableWidgetItem(data['bsp_time']))
 
         # 缓存 chan 对象
         self.stock_cache[data['code']] = data['chan']
@@ -1953,6 +1948,56 @@ class AkshareGUI(QMainWindow):
     # === 新增结束 ===
 
 
+def closeEvent(self, event):
+    """窗口关闭事件处理，确保所有后台线程和资源被正确清理"""
+    self.log_text.append("正在关闭程序，清理资源...")
+    
+    # 设置标志位，让所有后台线程尽快退出
+    if self.scan_thread:
+        self.scan_thread.stop()
+    if self.update_db_thread:
+        self.update_db_thread.stop()
+    if self.repair_thread:
+        self.repair_thread.stop()
+    if self.hk_trading_controller:
+        self.hk_trading_controller.stop()
+    
+    # 停止性能仪表盘的定时更新
+    if hasattr(self, 'performance_dashboard') and self.performance_dashboard:
+        self.performance_dashboard.stop_updates()
+    
+    # 停止性能监控器的后台线程
+    try:
+        from Monitoring.PerformanceMonitor import get_performance_monitor
+        perf_monitor = get_performance_monitor()
+        if hasattr(perf_monitor, 'stop_monitoring'):
+            perf_monitor.stop_monitoring()
+    except:
+        pass
+    
+    # 停止富途监控
+    if self.futu_monitor:
+        try:
+            self.futu_monitor.stop()
+        except:
+            pass
+        self.futu_monitor = None
+        
+    # 停止港股交易控制器
+    if self.hk_trading_controller:
+        try:
+            self.hk_trading_controller.close_connections()
+        except:
+            pass
+        self.hk_trading_controller = None
+        
+    # 清空缓存
+    self.stock_cache.clear()
+    
+    # 接受关闭事件
+    event.accept()
+    self.log_text.append("程序已安全关闭")
+
 def main():
     """程序入口函数，创建并运行 GUI 应用"""
     app = QApplication(sys.argv)
@@ -1963,22 +2008,13 @@ def main():
 
     exit_code = app.exec()
     
-    # 确保所有后台线程都已停止
-    if hasattr(window, 'scan_thread') and window.scan_thread and window.scan_thread.isRunning():
-        window.scan_thread.stop()
-        window.scan_thread.wait(1000)  # 等待1秒
-        
-    if hasattr(window, 'analysis_thread') and window.analysis_thread and window.analysis_thread.isRunning():
-        window.analysis_thread.quit()
-        window.analysis_thread.wait(1000)
-        
-    if hasattr(window, 'update_db_thread') and window.update_db_thread and window.update_db_thread.isRunning():
-        window.update_db_thread.stop()
-        window.update_db_thread.wait(1000)
-        
-    if hasattr(window, 'repair_thread') and window.repair_thread and window.repair_thread.isRunning():
-        window.repair_thread.stop()
-        window.repair_thread.wait(1000)
+    # 主要的清理工作现在在 closeEvent 中处理，这里保持简洁
+    # 确保窗口被正确关闭（如果用户没有正常关闭窗口）
+    if hasattr(window, 'closeEvent'):
+        try:
+            window.close()
+        except:
+            pass
 
     sys.exit(exit_code)
 
