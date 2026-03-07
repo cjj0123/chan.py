@@ -232,6 +232,48 @@ class CChan:
                 print(f"[ERROR-{self.code}]在计算{kline_unit.time}K线时发生错误!")
             raise
 
+    def append_kl(self, kl_dict: Dict, kl_type: KL_TYPE):
+        """
+        Append a new K-line unit to the specified timeframe list.
+        :param kl_dict: Dictionary containing K-line data (time, open, high, low, close, volume)
+        :param kl_type: The timeframe of the K-line (e.g., KL_TYPE.K_30M)
+        """
+        if kl_type not in self.kl_datas:
+            if self.conf.print_warning:
+                print(f"[WARNING-{self.code}] Received data for {kl_type} but it is not in lv_list.")
+            return
+
+        # Convert kl_dict to CKLine_Unit
+        try:
+            # Ensure time is CTime object. FutuMonitor passes 'time': row.time_key which is string "YYYY-MM-DD HH:MM:SS"
+            # CKLine_Unit expects DATA_FIELD.FIELD_TIME to be a CTime object or something that can be converted.
+            # Let's create a copy and convert the time field.
+            kl_data_for_klu = kl_dict.copy()
+            if isinstance(kl_data_for_klu[DATA_FIELD.FIELD_TIME], str):
+                kl_data_for_klu[DATA_FIELD.FIELD_TIME] = CTime.strptime(kl_data_for_klu[DATA_FIELD.FIELD_TIME], "%Y-%m-%d %H:%M:%S")
+            
+            new_klu = CKLine_Unit(kl_data_for_klu, autofix=self.conf.autofix)
+            new_klu.kl_type = kl_type
+            
+            # Set index
+            lv_idx = self.lv_list.index(kl_type)
+            self.try_set_klu_idx(lv_idx, new_klu)
+            
+            # Add to list
+            self.kl_datas[kl_type].add_single_klu(new_klu)
+            
+            # If this is the highest level, trigger calculation for lower levels if needed
+            if lv_idx == 0 and self.conf.trigger_step:
+                # In incremental mode, we might need to trigger recalculation
+                # However, add_single_klu already handles cal_seg_and_zs if step_calculation is True
+                # So we might not need to do anything extra here for now.
+                pass
+                
+        except Exception as e:
+            if self.conf.print_err_time:
+                print(f"[ERROR-{self.code}] Failed to append K-line for {kl_type} at {kl_dict.get('time', 'unknown')}: {e}")
+            raise e
+
     def try_set_klu_idx(self, lv_idx: int, kline_unit: CKLine_Unit):
         if kline_unit.idx >= 0:
             return
