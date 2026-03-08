@@ -165,34 +165,61 @@ class BacktestDataLoader:
             # 读取Parquet文件
             df = pd.read_parquet(filepath)
             
-            # 转换时间列
+            # 转换时间列，使用 errors='coerce' 处理超范围日期
             if 'time_key' in df.columns:
-                df['timestamp'] = pd.to_datetime(df['time_key'])
+                df['timestamp'] = pd.to_datetime(df['time_key'], errors='coerce')
             elif 'time' in df.columns:
-                df['timestamp'] = pd.to_datetime(df['time'])
+                df['timestamp'] = pd.to_datetime(df['time'], errors='coerce')
             else:
                 logger.error(f"No time column found in {filepath}")
                 return []
             
+            # 过滤掉无法转换的日期 (NaT)
+            initial_count = len(df)
+            df = df.dropna(subset=['timestamp'])
+            if len(df) < initial_count:
+                logger.warning(f"在 {filepath} 中过滤掉了 {initial_count - len(df)} 条无效时间数据。")
+
             # 应用日期过滤
             if start_date:
-                start_dt = pd.to_datetime(start_date)
-                df = df[df['timestamp'] >= start_dt]
+                start_dt = pd.to_datetime(start_date, errors='coerce')
+                if pd.notna(start_dt):
+                    df = df[df['timestamp'] >= start_dt]
             
             if end_date:
-                end_dt = pd.to_datetime(end_date)
-                df = df[df['timestamp'] <= end_dt]
+                end_dt = pd.to_datetime(end_date, errors='coerce')
+                if pd.notna(end_dt):
+                    df = df[df['timestamp'] <= end_dt]
             
             # 创建BacktestKLineUnit对象列表
             kline_units = []
             for _, row in df.iterrows():
+                # 安全转换数值（特别处理从数据库导出的 bytes 类型）
+                def safe_float(val):
+                    if isinstance(val, bytes):
+                        # 尝试将 sqlite storage 转换的 bytes 转为 int 再转 float
+                        try:
+                            # 假设是小端编码的整型
+                            return float(int.from_bytes(val, byteorder='little'))
+                        except:
+                            return 0.0
+                    return float(val) if pd.notna(val) else 0.0
+                
+                def safe_int(val):
+                    if isinstance(val, bytes):
+                        try:
+                            return int.from_bytes(val, byteorder='little')
+                        except:
+                            return 0
+                    return int(float(val)) if pd.notna(val) else 0
+
                 klu = BacktestKLineUnit(
                     timestamp=row['timestamp'],
-                    open_p=float(row['open']),
-                    high_p=float(row['high']),
-                    low_p=float(row['low']),
-                    close_p=float(row['close']),
-                    volume=int(row.get('volume', 0)),
+                    open_p=safe_float(row['open']),
+                    high_p=safe_float(row['high']),
+                    low_p=safe_float(row['low']),
+                    close_p=safe_float(row['close']),
+                    volume=safe_int(row.get('volume', 0)),
                     kl_type=freq
                 )
                 kline_units.append(klu)

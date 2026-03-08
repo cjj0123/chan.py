@@ -269,58 +269,61 @@ class BacktestReporter:
             'total_profit_loss_no_cost': sum(t['price'] * t['qty'] for t in sells) - sum(t['price'] * t['qty'] for t in buys),
             'profit_factor': profit_factor,
             'max_drawdown_pct': max_drawdown,
+            'equity_curve': equity_curve,
+            'trade_log': [
+                {
+                    'time': str(t['time']),
+                    'code': t['code'],
+                    'action': t['action'],
+                    'qty': t['qty'],
+                    'price': t['price'],
+                    'amount': t.get('amount', t['price'] * t['qty']),
+                    'cost': t.get('cost', 0),
+                    'funds_after': t.get('funds_after', 0)
+                }
+                for t in self.broker.trades
+            ],
         })
         
         return perf
 
     def _generate_equity_curve(self) -> List[Dict[str, Any]]:
+        """生成权益曲线：记录每笔交易后的总资产净值"""
+        if not self.broker.trades:
+            return []
+        
         equity_points = []
         
-        # 使用 Trade Log 中的时间点来构建资金曲线
-        # 简化：按时间顺序记录每次交易后的现金余额 + 持仓市值（按成本价）
+        # 初始点
+        first_trade_time = self.broker.trades[0]['time']
+        equity_points.append({
+            'time': str(first_trade_time),
+            'value': float(self.broker.initial_funds)
+        })
         
-        # 1. 记录初始点
-        equity_points.append({'time': datetime.min, 'value': self.broker.initial_funds})
-        
-        # 2. 记录交易点
+        # 跟踪每笔交易后的资金状态
         for trade in self.broker.trades:
-            # 在记录交易点时，Broker.available_funds 已经是交易完成后的现金余额
-            current_equity = self.broker.available_funds + sum(p['qty'] * p['avg_price'] for p in self.broker.positions.values())
-            equity_points.append({'time': trade['time'], 'value': current_equity})
-
-        # 3. 排序、去重、平滑
-        equity_points.sort(key=lambda x: x['time'])
+            equity_points.append({
+                'time': str(trade['time']),
+                'value': float(trade.get('funds_after', self.broker.available_funds))
+            })
         
-        final_curve = []
-        last_value = -float('inf')
-        for point in equity_points:
-            # 确保净值是递增或持平的（模拟市场不动时不应回撤）
-            if point['value'] > last_value:
-                final_curve.append(point)
-                last_value = point['value']
-        
-        # 确保初始点是正确的
-        if not final_curve or final_curve[0]['value'] != self.broker.initial_funds:
-             # 如果初始点被覆盖或丢失，重新添加
-             final_curve.insert(0, {'time': self.broker.trades[0]['time'] if self.broker.trades else datetime.now(), 'value': self.broker.initial_funds})
-
-        return final_curve
+        return equity_points
 
     def _calculate_max_drawdown(self, equity_curve: List[Dict[str, Any]]) -> float:
         if not equity_curve or len(equity_curve) < 2: return 0.0
         
         df = pd.DataFrame(equity_curve)
         df['time'] = pd.to_datetime(df['time'])
-        df = df.sort_values('time').set_index('time')
-        
-        # 确保时间轴是连续的，以正确计算回撤
-        df = df.resample('10min').ffill().bfill()
+        df = df.sort_values('time')
+        df = df.drop_duplicates(subset=['time'], keep='last')
+        df = df.reset_index(drop=True)
         
         df['peak'] = df['value'].cummax()
         df['drawdown'] = (df['value'] - df['peak']) / df['peak']
         
         max_dd = df['drawdown'].min()
-        return max(0.0, max_dd)
+        return abs(min(0.0, max_dd))
 
     def generate_report(self, results: Dict[str, Any], start_time_str: str, end_time_str: str) -> str:
         report_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -388,43 +391,56 @@ class BacktestStrategyAdapter:
         self.live_trader = live_trader_instance
         self.chan_config = chan_config
         self.logger = logging.getLogger(__name__ + ".StrategyAdapter")
-        
+        self.chan_cache: Dict[str, CChan] = {}  # cache_key -> chan_instance
+        self.last_timestamps: Dict[str, pd.Timestamp] = {}  # cache_key -> last processed timestamp
+    
     def _prepare_chan_instance(self, code: str, klines: List[BacktestKLineUnit], freq: str) -> Optional[CChan]:
-        """构建 CChan 实例，并注入历史数据。"""
+        """构建或更新 CChan 实例。"""
         if not CChan or not CChanConfig or not ORIGINAL_KL_TYPE:
-            self.logger.error("CChan/CChanConfig/CEnum 未导入，无法构建实例。")
             return None
 
         freq_map = {"30M": ORIGINAL_KL_TYPE.K_30M, "5M": ORIGINAL_KL_TYPE.K_5M, "DAY": ORIGINAL_KL_TYPE.K_DAY}
         target_kl_type = freq_map.get(freq.upper(), ORIGINAL_KL_TYPE.K_30M)
         
-        # 导入 MockStockAPI 的注册函数
-        from DataAPI.MockStockAPI import register_kline_data
+        # 检查缓存中是否已有该品种的实例
+        cache_key = f"{code}_{freq}"
+        chan_instance = None
         
-        # 注册 K 线数据到全局注册表
-        register_kline_data(code, target_kl_type, klines)
-        
-        chan_instance = CChan(
-            code=code,
-            data_src="custom:MockStockAPI.MockStockAPI",
-            lv_list=[target_kl_type],
-            config=self.chan_config,
-            autype=0,
-            begin_time=None,
-            end_time=None
-        )
-        
-        if not chan_instance.conf.trigger_step:
-            chan_instance.conf.trigger_step = True
-            chan_instance.conf.skip_step = 0
-
-        try:
-            # 使用 trigger_load 而不是 step_load，因为 step_load 每次迭代都会清空数据
-            # 参考：Chan.py:124 - step_load 调用 do_init() 清空 kl_datas
-            chan_instance.trigger_load({target_kl_type: klines})
-        except Exception as e:
-            self.logger.error(f"{code} {freq} 策略分析时构建 CChan 失败：{e}")
-            return None
+        # 这里逻辑简化：BacktestStrategyAdapter 被设计为每次处理一个 snapshot
+        # 我们需要在 adapter 外部或者内部逻辑中确保实例是持久化的
+        if cache_key in self.chan_cache:
+            chan_instance = self.chan_cache[cache_key]
+            # 增量加载最后一根数据，前提是时间戳确实更新了，防止抛出由于不同级别 K 线更新频率不同导致的报错
+            if klines:
+                last_time = self.last_timestamps.get(cache_key, pd.Timestamp.min)
+                if klines[-1].timestamp > last_time:
+                    try:
+                        chan_instance.trigger_load({target_kl_type: [klines[-1]]})
+                    except Exception as e:
+                        self.logger.debug(f"增量加载K线失败(可忽略): {e}")
+                    self.last_timestamps[cache_key] = klines[-1].timestamp
+        else:
+            # 开启步骤模式，允许增量更新
+            self.chan_config.trigger_step = True
+            
+            from DataAPI.MockStockAPI import register_kline_data
+            register_kline_data(code, target_kl_type, klines)
+            
+            chan_instance = CChan(
+                code=code,
+                data_src="custom:MockStockAPI.MockStockAPI",
+                lv_list=[target_kl_type],
+                config=self.chan_config,
+                autype=0
+            )
+            # 初始全量加载
+            try:
+                chan_instance.trigger_load({target_kl_type: klines})
+            except Exception as e:
+                self.logger.error(f"初始加载K线失败: {e}")
+            self.chan_cache[cache_key] = chan_instance
+            if klines:
+                self.last_timestamps[cache_key] = klines[-1].timestamp
             
         return chan_instance
 
@@ -460,9 +476,12 @@ class BacktestStrategyAdapter:
             latest_bsps = chan_main.get_latest_bsp(number=1)
         except Exception as e:
             self.logger.error(f"获取 {code} 最新 BSP 失败: {e}")
+            print(f"DEBUG: {code} get_latest_bsp error: {e}")
             return None
 
-        if not latest_bsps: return None
+        if not latest_bsps: 
+            # print(f"DEBUG: {code} no latest bsps") # avoid spam
+            return None
         
         bsp = latest_bsps[0]
         bsp_type = bsp.type2str()
@@ -470,6 +489,18 @@ class BacktestStrategyAdapter:
         price = bsp.klu.close
         
         current_time_pd = klines_30m[-1].timestamp
+        
+        # Check if the signal is new for this specific time
+        last_signal_time = getattr(self, '_last_signal_time', {}).get(code)
+        
+        if last_signal_time == bsp.klu.time:
+            # print(f"DEBUG: {code} signal at {bsp.klu.time} already processed")
+            return None
+            
+        # Record the signal time
+        if not hasattr(self, '_last_signal_time'):
+            self._last_signal_time = {}
+        self._last_signal_time[code] = bsp.klu.time
         
         result = {
             'code': code,
@@ -506,6 +537,7 @@ class BacktestDataIterator:
         self.end_date = end_date
         self.lot_size_map = lot_size_map
         self.data_cache: Dict[str, Dict[str, List[BacktestKLineUnit]]] = {}
+        self.pointers: Dict[str, Dict[str, int]] = {}  # code -> {freq -> current_idx}
         self.logger = logging.getLogger(__name__ + ".Iterator")
         self._load_all_data()
         
@@ -532,6 +564,7 @@ class BacktestDataIterator:
                  self.data_cache[code]['__AVAILABLE__'] = False
             else:
                  self.data_cache[code]['__AVAILABLE__'] = True
+                 self.pointers[code] = {f: 0 for f in required_freqs}
 
     def __iter__(self) -> Iterator[Tuple[pd.Timestamp, Dict[str, Any]]]:
         current_index = 0
@@ -545,19 +578,24 @@ class BacktestDataIterator:
                 klines_at_time = {}
                 is_data_valid = True
                 
+                # 使用指针高效获取此时的数据
                 for freq in ["30M", "5M", "DAY"]:
                     kline_list = self.data_cache[code].get(freq)
                     if not kline_list:
                         if freq in ["30M", "5M"]: is_data_valid = False; break
                         continue
 
-                    valid_klines = [klu for klu in kline_list if klu.timestamp <= current_time]
+                    idx = self.pointers[code][freq]
+                    # 移动指针到满足 timestamp <= current_time 的最大索引
+                    while idx < len(kline_list) and kline_list[idx].timestamp <= current_time:
+                        idx += 1
+                    self.pointers[code][freq] = idx
                     
-                    if valid_klines:
-                        # 传递所有有效的 K 线，而不是只传递最新的一根
-                        # CChan 需要完整的 K 线历史来计算笔、线段和 BSP
-                        klines_at_time[freq] = valid_klines
-                    elif current_time >= kline_list[0].timestamp:
+                    if idx > 0:
+                        # 只需要传回最新的这一根即可配合增量 trigger_load
+                        # 如果是第一次加载，adapter 会处理全量
+                        klines_at_time[freq] = kline_list[:idx]
+                    else:
                         if freq in ["30M", "5M"]: is_data_valid = False; break
                         
                 if is_data_valid and klines_at_time.get("30M") and klines_at_time.get("5M"):

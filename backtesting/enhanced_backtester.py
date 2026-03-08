@@ -24,8 +24,8 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # 导入基础回测组件
-from backtester import BacktestBroker, BacktestReporter, BacktestStrategyAdapter, BacktestDataLoader
-from BacktestDataLoader import BacktestKLineUnit
+from backtesting.backtester import BacktestBroker, BacktestReporter, BacktestStrategyAdapter
+from BacktestDataLoader import BacktestDataLoader, BacktestKLineUnit
 
 # 配置日志
 logging.basicConfig(
@@ -652,7 +652,7 @@ class EnhancedBacktestEngine:
         reporter = EnhancedBacktestReporter(broker, strategy_adapter, self.chan_config)
         
         # 数据迭代器
-        from backtester import BacktestDataIterator
+        from backtesting.backtester import BacktestDataIterator
         data_iterator = BacktestDataIterator(
             loader=self.loader,
             watchlist=self.watchlist,
@@ -695,17 +695,21 @@ class EnhancedBacktestEngine:
                 qty = signal['position_qty']
                 price = signal['signal_price']
                 
+                self.logger.debug(f"尝试处理 SELL 信号: {code}, qty={qty}, price={price}")
                 if qty > 0:
-                    broker.execute_trade(code, 'SELL', qty, price, current_time)
-                    reporter.record_trade({
-                        'time': current_time,
-                        'code': code,
-                        'action': 'SELL',
-                        'qty': qty,
-                        'price': price,
-                        'cost': price * qty * 0.001,  # 估算
-                        'funds_after': broker.available_funds
-                    })
+                    success = broker.execute_trade(code, 'SELL', qty, price, current_time)
+                    if success:
+                        reporter.record_trade({
+                            'time': current_time,
+                            'code': code,
+                            'action': 'SELL',
+                            'qty': qty,
+                            'price': price,
+                            'cost': price * qty * 0.001,  # 估算
+                            'funds_after': broker.available_funds
+                        })
+                    else:
+                        self.logger.debug(f"SELL 信号被拒: {code}, qty={qty}")
             
             # 处理买入
             buys = sorted([s for s in trade_signals if s['is_buy']], 
@@ -715,21 +719,28 @@ class EnhancedBacktestEngine:
                 price = signal['signal_price']
                 lot_size = signal.get('lot_size', 100)
                 
+                self.logger.debug(f"尝试处理 BUY 信号: {code}, price={price}, lot_size={lot_size}, current_qty={broker.get_position_quantity(code)}")
                 if broker.get_position_quantity(code) == 0:
                     qty = broker.calculate_position_size(code, broker.available_funds, price)
                     final_qty = (qty // lot_size) * lot_size
+                    self.logger.debug(f"计算出来的买入数量: raw_qty={qty}, final_qty={final_qty}, funds={broker.available_funds}")
                     
                     if final_qty > 0:
-                        broker.execute_trade(code, 'BUY', final_qty, price, current_time)
-                        reporter.record_trade({
-                            'time': current_time,
-                            'code': code,
-                            'action': 'BUY',
-                            'qty': final_qty,
-                            'price': price,
-                            'cost': price * final_qty * 0.001,  # 估算
-                            'funds_after': broker.available_funds
-                        })
+                        success = broker.execute_trade(code, 'BUY', final_qty, price, current_time)
+                        if success:
+                            reporter.record_trade({
+                                'time': current_time,
+                                'code': code,
+                                'action': 'BUY',
+                                'qty': final_qty,
+                                'price': price,
+                                'cost': price * final_qty * 0.001,  # 估算
+                                'funds_after': broker.available_funds
+                            })
+                        else:
+                            self.logger.debug(f"BUY 信号执行失败: {code}, qty={final_qty}, funds={broker.available_funds}")
+                    else:
+                        self.logger.debug(f"买入数量被 lot_size({lot_size}) 截断为 0: {code}")
         
         # 生成结果
         final_time = data_iterator.timeline[-1] if data_iterator.timeline else datetime.now()

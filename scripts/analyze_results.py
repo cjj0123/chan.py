@@ -105,6 +105,8 @@ class BacktestAnalyzer:
             df = pd.DataFrame(equity_curve)
             df['time'] = pd.to_datetime(df['time'])
             df = df.sort_values('time')
+            df = df.drop_duplicates(subset=['time'], keep='last')
+            df = df.reset_index(drop=True)
             
             # 创建图表
             fig, axes = plt.subplots(2, 1, figsize=(14, 8), 
