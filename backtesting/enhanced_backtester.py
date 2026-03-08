@@ -65,7 +65,12 @@ class HKStockBroker(BacktestBroker):
     
     def __init__(self, initial_funds: float = 100000.0, 
                  lot_size_map: Dict[str, int] = None,
-                 use_hk_costs: bool = True):
+                 use_hk_costs: bool = True,
+                 hard_stop_pct: float = 0.07,
+                 trailing_stop_pct: float = 0.10,
+                 risk_per_trade_pct: float = 0.02,
+                 atr_multiplier: float = 2.0,
+                 enable_stop_loss: bool = True):
         """
         初始化港股经纪商
         
@@ -73,10 +78,27 @@ class HKStockBroker(BacktestBroker):
             initial_funds: 初始资金
             lot_size_map: 每手股数配置
             use_hk_costs: 是否使用港股精确成本计算
+            hard_stop_pct: 硬止损比例（入场价跌幅触发）
+            trailing_stop_pct: 追踪止损回撤比例（持仓期最高价缩水触发）
+            risk_per_trade_pct: 每笔允许亏损的资金比例（ATR仓位法）
+            atr_multiplier: ATR止损倍数
+            enable_stop_loss: 是否启用止损机制
         """
         super().__init__(initial_funds, lot_size_map)
         self.use_hk_costs = use_hk_costs
         self.cost_details: List[Dict] = []  # 记录每笔交易的成本明细
+
+        # ---- 止损参数 ----
+        self.hard_stop_pct = hard_stop_pct
+        self.trailing_stop_pct = trailing_stop_pct
+        self.risk_per_trade_pct = risk_per_trade_pct
+        self.atr_multiplier = atr_multiplier
+        self.enable_stop_loss = enable_stop_loss
+
+        # ---- 止损状态：每个持仓的止损信息 ----
+        # 格式: {code: {'entry_price': float, 'hard_stop': float, 'trailing_high': float, 'trailing_stop': float}}
+        self.stop_loss_state: Dict[str, Dict[str, float]] = {}
+        self.stop_loss_triggered: int = 0  # 统计止损次数
     
     def calculate_hk_cost(self, amount: float, is_buy: bool) -> Tuple[float, Dict]:
         """
@@ -169,6 +191,17 @@ class HKStockBroker(BacktestBroker):
             self.positions[code]['qty'] = new_qty
             self.positions[code]['avg_price'] = new_avg_price
             
+            # ---- 初始化止损状态 ----
+            if self.enable_stop_loss:
+                hard_stop = price * (1 - self.hard_stop_pct)
+                self.stop_loss_state[code] = {
+                    'entry_price': price,
+                    'hard_stop': hard_stop,
+                    'trailing_high': price,
+                    'trailing_stop': price * (1 - self.trailing_stop_pct),
+                }
+                logger.debug(f"BUY {code}: 硬止损={hard_stop:.3f}, 追踪止损初始={self.stop_loss_state[code]['trailing_stop']:.3f}")
+
             trade_record = {
                 'time': timestamp, 
                 'code': code, 
@@ -199,6 +232,8 @@ class HKStockBroker(BacktestBroker):
             self.positions[code]['qty'] -= quantity
             if self.positions[code]['qty'] == 0:
                 del self.positions[code]
+                # 清除止损状态
+                self.stop_loss_state.pop(code, None)
             
             trade_record = {
                 'time': timestamp, 
@@ -218,6 +253,56 @@ class HKStockBroker(BacktestBroker):
             return True
             
         return False
+
+    def update_trailing_stop(self, code: str, current_price: float) -> None:
+        """更新追踪止损价格（应在每个时间步调用）"""
+        if not self.enable_stop_loss or code not in self.stop_loss_state:
+            return
+        state = self.stop_loss_state[code]
+        if current_price > state['trailing_high']:
+            state['trailing_high'] = current_price
+            state['trailing_stop'] = current_price * (1 - self.trailing_stop_pct)
+
+    def should_stop_loss(self, code: str, current_price: float) -> Optional[str]:
+        """
+        检查是否应触发止损
+        
+        Returns:
+            None = 不止损, 'hard' = 硬止损触发, 'trailing' = 追踪止损触发
+        """
+        if not self.enable_stop_loss or code not in self.stop_loss_state:
+            return None
+        state = self.stop_loss_state[code]
+        if current_price <= state['hard_stop']:
+            return 'hard'
+        if current_price <= state['trailing_stop']:
+            return 'trailing'
+        return None
+
+    def calculate_atr_position_size(self, code: str, current_price: float, 
+                                    atr: float, lot_size: int) -> int:
+        """
+        基于 ATR 动态计算仓位（每笔风险恒定法）
+        
+        公式：
+            可承受亏损额 = 总净值 × risk_per_trade_pct
+            ATR止损距离 = ATR × atr_multiplier
+            可买股数 = 可承受亏损额 / ATR止损距离
+        """
+        if atr <= 0 or current_price <= 0:
+            return 0
+        total_value = self.available_funds + sum(
+            p['qty'] * p['avg_price'] for p in self.positions.values()
+        )
+        risk_amount = total_value * self.risk_per_trade_pct
+        stop_distance = atr * self.atr_multiplier
+        raw_qty = int(risk_amount / stop_distance)
+        # 取整到手数
+        qty_in_lots = (raw_qty // lot_size) * lot_size
+        # 最多不超过可用资金的50%
+        max_qty_by_funds = int(self.available_funds * 0.5 / current_price)
+        max_qty_by_funds = (max_qty_by_funds // lot_size) * lot_size
+        return min(qty_in_lots, max_qty_by_funds)
     
     def get_cost_statistics(self) -> Dict[str, float]:
         """获取交易成本统计"""
@@ -621,7 +706,105 @@ class EnhancedBacktestEngine:
             self.logger.warning("⚠️ CChanConfig 未找到，使用默认配置")
             return None
     
+    def _calculate_atr(self, kline_list: List, period: int = 14) -> float:
+        """
+        计算 ATR（Average True Range）
+        用于衡量当前市场波动幅度，辅助动态仓位计算
+        """
+        if len(kline_list) < period + 1:
+            # 数据不足时返回最后一根 K 线振幅的简单估算
+            if kline_list:
+                last = kline_list[-1]
+                return max(last.high - last.low, abs(last.close - last.open))
+            return 0.0
+        
+        true_ranges = []
+        for i in range(1, len(kline_list)):
+            h = kline_list[i].high
+            l = kline_list[i].low
+            prev_c = kline_list[i - 1].close
+            tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
+            true_ranges.append(tr)
+        
+        # 使用最近 period 根的 TR 均值
+        recent_trs = true_ranges[-period:]
+        return sum(recent_trs) / len(recent_trs) if recent_trs else 0.0
+
+    def _score_buy_signal(self, kline_list: List, signal: Dict) -> int:
+        """
+        对买点质量进行评分（0-100）
+        
+        评分纬度：
+        1. MACD 辅助确认（+40）: 最近一根 K 线 MACD DIF > DEA 或者 MACD bar 由负转正
+        2. 成交量确认（+30）: 信号 K 线成交量 >= 近 20 根均量 × 0.8
+        3. 买点类型加权（+30）: 1类买点 > 2类买点 > 3类买点
+        
+        分数 >= 50 = 有效信号
+        """
+        score = 0
+        
+        if not kline_list or len(kline_list) < 5:
+            return 60  # 数据不足时默认放行
+        
+        try:
+            last_klu = kline_list[-1]
+            
+            # ---- 维度 1: MACD 辅助确认 ----
+            macd_score = 0
+            if hasattr(last_klu, 'macd') and last_klu.macd is not None:
+                macd = last_klu.macd
+                # DIF 在 DEA 之上，或 MACD bar 由负转正
+                dif = getattr(macd, 'DIF', None) or getattr(macd, 'dif', 0)
+                dea = getattr(macd, 'DEA', None) or getattr(macd, 'dea', 0)
+                macd_bar = getattr(macd, 'macd', None)
+                
+                if dif is not None and dea is not None and dif > dea:
+                    macd_score = 40
+                elif macd_bar is not None and macd_bar > 0:
+                    macd_score = 20
+                else:
+                    macd_score = 5  # MACD 未确认，给最低分
+            else:
+                macd_score = 20  # 无 MACD 数据时给中性分
+            score += macd_score
+            
+            # ---- 维度 2: 成交量确认 ----
+            vol_score = 0
+            signal_vol = last_klu.volume
+            recent_vols = [k.volume for k in kline_list[-20:] if hasattr(k, 'volume') and k.volume > 0]
+            if recent_vols:
+                avg_vol = sum(recent_vols) / len(recent_vols)
+                if avg_vol > 0:
+                    vol_ratio = signal_vol / avg_vol
+                    if vol_ratio >= 1.5:
+                        vol_score = 30  # 放量，强确认
+                    elif vol_ratio >= 0.8:
+                        vol_score = 20  # 量能正常
+                    else:
+                        vol_score = 5   # 缩量买入，谨慎
+            else:
+                vol_score = 15  # 无量数据
+            score += vol_score
+            
+            # ---- 维度 3: 买点类型权重 ----
+            bs_type = signal.get('bs_type', '')
+            if '1' in str(bs_type) and '3' not in str(bs_type):
+                score += 30  # 1类买点，最强
+            elif '2' in str(bs_type):
+                score += 20  # 2类买点
+            elif '3' in str(bs_type):
+                score += 10  # 3类买点，最弱
+            else:
+                score += 15  # 未知类型给中性
+
+        except Exception as e:
+            logger.debug(f"买点评分异常: {e}")
+            return 60  # 异常时默认放行
+
+        return min(score, 100)
+
     def run(self, config_override: Dict = None) -> Dict[str, Any]:
+
         """
         运行回测
         
@@ -672,22 +855,70 @@ class EnhancedBacktestEngine:
         for current_time, snapshot in data_iterator:
             trade_signals = []
             
+            # ================================================================
+            # Step 1: 更新追踪止损 + 检查止损 (优先于任何信号处理)
+            # ================================================================
+            for code in list(broker.positions.keys()):
+                kline_list = snapshot.get(code)
+                if not kline_list:
+                    continue
+                current_price = kline_list[-1].close
+                
+                # 更新追踪止损高点
+                broker.update_trailing_stop(code, current_price)
+                
+                # 检查是否触发止损
+                stop_type = broker.should_stop_loss(code, current_price)
+                if stop_type:
+                    qty = broker.get_position_quantity(code)
+                    if qty > 0:
+                        success = broker.execute_trade(code, 'SELL', qty, current_price, current_time)
+                        if success:
+                            broker.stop_loss_triggered += 1
+                            self.logger.info(
+                                f"🛑 止损触发 [{stop_type}] {code}: "
+                                f"Qty={qty}, Price={current_price:.3f}, "
+                                f"Entry={broker.stop_loss_state.get(code, {}).get('entry_price', 0):.3f}"
+                            )
+                            reporter.record_trade({
+                                'time': current_time,
+                                'code': code,
+                                'action': f'STOP_{stop_type.upper()}',
+                                'qty': qty,
+                                'price': current_price,
+                                'cost': current_price * qty * 0.001,
+                                'funds_after': broker.available_funds
+                            })
+
+            # ================================================================
+            # Step 2: 获取买卖信号并评分 (Module 3: 信号质量过滤)
+            # ================================================================
             for code in self.watchlist:
                 if code not in snapshot:
                     continue
+                kline_list = snapshot[code]
                 
-                signal = strategy_adapter.get_signal(code, snapshot[code], self.lot_size_map)
+                signal = strategy_adapter.get_signal(code, kline_list, self.lot_size_map)
                 
                 if signal:
                     signal['position_qty'] = broker.get_position_quantity(code)
-                    signal['score'] = 99
-                    signal['is_valid_for_trade'] = True
-                    trade_signals.append(signal)
-            
+                    # 对买点评分
+                    if signal['is_buy']:
+                        signal['score'] = self._score_buy_signal(kline_list, signal)
+                        signal['is_valid_for_trade'] = signal['score'] >= 50
+                    else:
+                        signal['score'] = 99  # 卖点无需过滤
+                        signal['is_valid_for_trade'] = True
+                    
+                    if signal['is_valid_for_trade']:
+                        trade_signals.append(signal)
+
             if not trade_signals:
                 continue
             
-            # 处理卖出
+            # ================================================================
+            # Step 3: 处理卖出信号
+            # ================================================================
             sells = sorted([s for s in trade_signals if not s['is_buy']], 
                           key=lambda x: x.get('score', 0), reverse=True)
             for signal in sells:
@@ -705,25 +936,35 @@ class EnhancedBacktestEngine:
                             'action': 'SELL',
                             'qty': qty,
                             'price': price,
-                            'cost': price * qty * 0.001,  # 估算
+                            'cost': price * qty * 0.001,
                             'funds_after': broker.available_funds
                         })
                     else:
                         self.logger.debug(f"SELL 信号被拒: {code}, qty={qty}")
             
-            # 处理买入
+            # ================================================================
+            # Step 4: 处理买入信号 (Module 2: ATR 仓位计算)
+            # ================================================================
             buys = sorted([s for s in trade_signals if s['is_buy']], 
                          key=lambda x: x.get('score', 0), reverse=True)
             for signal in buys:
                 code = signal['code']
                 price = signal['signal_price']
                 lot_size = signal.get('lot_size', 100)
+                kline_list = snapshot.get(code, [])
                 
-                self.logger.debug(f"尝试处理 BUY 信号: {code}, price={price}, lot_size={lot_size}, current_qty={broker.get_position_quantity(code)}")
+                self.logger.debug(f"尝试处理 BUY 信号: {code}, score={signal.get('score')}, price={price}")
                 if broker.get_position_quantity(code) == 0:
-                    qty = broker.calculate_position_size(code, broker.available_funds, price)
-                    final_qty = (qty // lot_size) * lot_size
-                    self.logger.debug(f"计算出来的买入数量: raw_qty={qty}, final_qty={final_qty}, funds={broker.available_funds}")
+                    # 计算 ATR 和仓位
+                    atr = self._calculate_atr(kline_list, period=14)
+                    if atr > 0:
+                        final_qty = broker.calculate_atr_position_size(code, price, atr, lot_size)
+                    else:
+                        # 回退到固定比例
+                        qty = broker.calculate_position_size(code, broker.available_funds, price, max_investment_ratio=0.5)
+                        final_qty = (qty // lot_size) * lot_size
+                    
+                    self.logger.debug(f"计算出来的买入数量: final_qty={final_qty}, atr={atr:.4f}, funds={broker.available_funds:.2f}")
                     
                     if final_qty > 0:
                         success = broker.execute_trade(code, 'BUY', final_qty, price, current_time)
@@ -734,22 +975,25 @@ class EnhancedBacktestEngine:
                                 'action': 'BUY',
                                 'qty': final_qty,
                                 'price': price,
-                                'cost': price * final_qty * 0.001,  # 估算
+                                'cost': price * final_qty * 0.001,
                                 'funds_after': broker.available_funds
                             })
                         else:
-                            self.logger.debug(f"BUY 信号执行失败: {code}, qty={final_qty}, funds={broker.available_funds}")
+                            self.logger.debug(f"BUY 信号执行失败: {code}, qty={final_qty}")
                     else:
-                        self.logger.debug(f"买入数量被 lot_size({lot_size}) 截断为 0: {code}")
+                        self.logger.debug(f"买入数量为 0: {code}, atr={atr:.4f}, lot_size={lot_size}")
         
         # 生成结果
         final_time = data_iterator.timeline[-1] if data_iterator.timeline else datetime.now()
         results = reporter.calculate_performance(final_time)
+        results['stop_loss_triggered'] = broker.stop_loss_triggered
         
         self.logger.info("✅ 回测完成")
         self.logger.info(f"📈 总回报率：{results['total_return_pct'] * 100:.2f}%")
+        self.logger.info(f"🛑 止损触发次数：{broker.stop_loss_triggered}")
         
         return results
+
     
     def generate_report(self, results: Dict[str, Any], output_dir: str = "backtest_reports"):
         """生成回测报告"""

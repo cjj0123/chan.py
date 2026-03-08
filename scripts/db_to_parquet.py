@@ -102,7 +102,32 @@ def export_to_parquet(db_path: str, cache_dir: str, start_date: str = None, end_
                 # 将 timestamp 列统一命名为 time_key 以兼容回测系统
                 if 'date' in df.columns:
                     df['time_key'] = pd.to_datetime(df['date'])
+                
+                # 显式转换数据类型，解决 bytes 导致 pyarrow 失败的问题
+                def safe_numeric(series, target_type=float):
+                    def _convert(x):
+                        if x is None:
+                            return 0
+                        if isinstance(x, bytes):
+                            try:
+                                # 尝试从 bytes 转换为整数
+                                return int.from_bytes(x, 'little')
+                            except:
+                                return 0
+                        try:
+                            return float(x)
+                        except (ValueError, TypeError):
+                            return 0
                     
+                    return series.apply(_convert).astype(target_type)
+
+                for col in df.columns:
+                    if col in ['code', 'date', 'time_key']:
+                        continue
+                    
+                    target_type = 'int64' if col == 'volume' else float
+                    df[col] = safe_numeric(df[col], target_type)
+
                 # 写入 parquet 文件
                 filename = f"{code}_K_{freq_str}.parquet"
                 filepath = os.path.join(cache_dir, filename)
