@@ -859,10 +859,13 @@ class EnhancedBacktestEngine:
             # Step 1: 更新追踪止损 + 检查止损 (优先于任何信号处理)
             # ================================================================
             for code in list(broker.positions.keys()):
-                kline_list = snapshot.get(code)
-                if not kline_list:
+                code_data = snapshot.get(code)
+                if not code_data:
                     continue
-                current_price = kline_list[-1].close
+                kline_list_30m = code_data.get('30M') or code_data.get('5M', [])
+                if not kline_list_30m:
+                    continue
+                current_price = kline_list_30m[-1].close
                 
                 # 更新追踪止损高点
                 broker.update_trailing_stop(code, current_price)
@@ -896,15 +899,16 @@ class EnhancedBacktestEngine:
             for code in self.watchlist:
                 if code not in snapshot:
                     continue
-                kline_list = snapshot[code]
+                code_data = snapshot[code]  # dict: {'30M': [...], '5M': [...], 'DAY': [...]}
+                kline_list_30m = code_data.get('30M', [])
                 
-                signal = strategy_adapter.get_signal(code, kline_list, self.lot_size_map)
+                signal = strategy_adapter.get_signal(code, code_data, self.lot_size_map)
                 
                 if signal:
                     signal['position_qty'] = broker.get_position_quantity(code)
                     # 对买点评分
                     if signal['is_buy']:
-                        signal['score'] = self._score_buy_signal(kline_list, signal)
+                        signal['score'] = self._score_buy_signal(kline_list_30m, signal)
                         signal['is_valid_for_trade'] = signal['score'] >= 50
                     else:
                         signal['score'] = 99  # 卖点无需过滤
@@ -951,12 +955,13 @@ class EnhancedBacktestEngine:
                 code = signal['code']
                 price = signal['signal_price']
                 lot_size = signal.get('lot_size', 100)
-                kline_list = snapshot.get(code, [])
+                code_data = snapshot.get(code, {})
+                kline_list_30m = code_data.get('30M', []) if isinstance(code_data, dict) else []
                 
                 self.logger.debug(f"尝试处理 BUY 信号: {code}, score={signal.get('score')}, price={price}")
                 if broker.get_position_quantity(code) == 0:
                     # 计算 ATR 和仓位
-                    atr = self._calculate_atr(kline_list, period=14)
+                    atr = self._calculate_atr(kline_list_30m, period=14)
                     if atr > 0:
                         final_qty = broker.calculate_atr_position_size(code, price, atr, lot_size)
                     else:
