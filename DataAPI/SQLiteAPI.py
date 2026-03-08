@@ -127,13 +127,13 @@ class SQLiteAPI(CCommonStockApi):
             raise ValueError(f"KLine type {self.k_type} is not supported for SQLiteAPI")
             
         table_name = table_map[self.k_type]
-        # 使用 GROUP BY date 确保每个日期只返回一条记录，避免重复数据导致时间不严格递增的问题
+        # 使用 ORDER BY date 保证时间先后顺序 (主键已保证去重)
         sql = f"SELECT * FROM {table_name} WHERE code = '{self.code}'"
         if self.begin_date:
             sql += f" AND date >= '{self.begin_date}'"
         if self.end_date:
             sql += f" AND date <= '{self.end_date}'"
-        sql += " GROUP BY date ORDER BY date"
+        sql += " ORDER BY date"
             
         df = self.db.execute_query(sql)
         if not df.empty:
@@ -335,28 +335,29 @@ def download_and_save_all_stocks_multi_timeframe(stock_codes, days=365, timefram
                 existing_max = existing_df.iloc[0]['max_date']
                 print(f"ℹ️  {code} {tf_name} 已有数据范围: {existing_min} 到 {existing_max}")
                 
-                # For custom date ranges, we always download the specified range
-                # For default ranges, we do incremental updates
-                if start_date or end_date:
-                    # Custom date range - download the entire specified range
-                    begin_time = desired_begin_time
+                # 无论是默认范围还是自定义UI范围，都执行增量更新判断
+                if existing_max < desired_end_time:
+                    # Need to download recent data
+                    begin_time = (datetime.strptime(existing_max.split(' ')[0], "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
                     end_time = desired_end_time
-                    print(f"📅 {code} {tf_name} 使用自定义日期范围: {begin_time} 到 {end_time}")
+                    # 避免周末导致 begin > end
+                    if begin_time > end_time:
+                        print(f"✅ {code} {tf_name} 最新数据已完整，跳过下载")
+                        continue
                 else:
-                    # Default range - do incremental update
-                    if existing_max < desired_end_time:
-                        # Need to download recent data
-                        begin_time = (datetime.strptime(existing_max.split(' ')[0], "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-                        end_time = desired_end_time
-                    else:
-                        # Already have recent data, check if we need historical data
-                        if existing_min > desired_begin_time:
-                            begin_time = desired_begin_time
-                            end_time = (datetime.strptime(existing_min.split(' ')[0], "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
-                        else:
-                            # Already have complete data range
-                            print(f"✅ {code} {tf_name} 已有完整数据，跳过下载")
+                    # Already have recent data, check if we need historical data
+                    if existing_min > desired_begin_time:
+                        begin_time = desired_begin_time
+                        end_time = (datetime.strptime(existing_min.split(' ')[0], "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+                        if begin_time > end_time:
+                            print(f"✅ {code} {tf_name} 历史数据已完整，跳过下载")
                             continue
+                    else:
+                        # Already have complete data range
+                        print(f"✅ {code} {tf_name} 已包含请求的完整数据范围 ({desired_begin_time} 至 {desired_end_time})，跳过下载")
+                        if log_callback:
+                            log_callback(f"✅ {code} {tf_name} 增量数据已最新，跳过下载")
+                        continue
             else:
                 # No existing data, download full range
                 begin_time = desired_begin_time
@@ -442,18 +443,41 @@ def _download_us_stock_data(code, begin_time, end_time):
         return None, "None"
 
 def _download_us_stock_data_with_timeframe(code, begin_time, end_time, k_type):
-    """下载美股数据（支持多时间级别） - 优先使用AKShare"""
+    """下载美股数据（支持多时间级别） - 优先使用Futu，失败则使用AKShare"""
+    from DataAPI.FutuAPI import CFutuAPI
     from DataAPI.AkshareAPI import CAkshare
-    from Common.CEnum import AUTYPE
+    from Common.CEnum import AUTYPE, KL_TYPE
     
+    # 首先尝试Futu
+    try:
+        api = CFutuAPI(code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
+        kl_data = _extract_kl_data(api, code)
+        if kl_data and len(kl_data) > 0:
+            return kl_data, "Futu"
+        else:
+            print(f"  ℹ️  Futu下载美股 {code} {k_type} 无历史数据")
+    except Exception as e:
+        print(f"  ⚠️  Futu下载美股 {code} {k_type} 失败: {e}")
+        
+    # Futu失败或无数据，尝试AKShare
+    # 注意：AKShare的美股接口 stock_us_daily 目前只支持日线级别
+    if k_type != KL_TYPE.K_DAY:
+        print(f"  ℹ️  AKShare的美股接口暂不支持分钟级别数据，跳过 {code} {k_type}")
+        return None, "None"
+        
     try:
         # 转换为AKShare格式
         akshare_code = convert_stock_code_for_akshare(code)
         api = CAkshare(akshare_code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
-        return _extract_kl_data(api, code), "AKShare"
+        kl_data = _extract_kl_data(api, code)
+        if kl_data and len(kl_data) > 0:
+            return kl_data, "AKShare"
+        else:
+            print(f"  ℹ️  AKShare下载美股 {code} {k_type} 无历史数据")
     except Exception as e:
         print(f"  ⚠️  AKShare下载美股 {code} {k_type} 失败: {e}")
-        return None, "None"
+        
+    return None, "None"
 
 def _download_hk_stock_data_with_timeframe(code, begin_time, end_time, k_type):
     """下载港股数据（支持多时间级别） - 优先使用Futu，失败则使用AKShare"""

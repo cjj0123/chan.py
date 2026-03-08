@@ -145,17 +145,7 @@ class CChanDB:
             )
         ''')
         
-        # 创建索引以优化查询性能
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_kline_day_code_date ON kline_day(code, date)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_kline_30m_code_date ON kline_30m(code, date)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_kline_5m_code_date ON kline_5m(code, date)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_kline_1m_code_date ON kline_1m(code, date)')
-        
-        # 为快速查找最新数据添加索引
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_kline_day_date_desc ON kline_day(date DESC)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_kline_30m_date_desc ON kline_30m(date DESC)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_kline_5m_date_desc ON kline_5m(date DESC)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_kline_1m_date_desc ON kline_1m(date DESC)')
+        # 移除了由于 PRIMARY KEY 存在而不需要的重复及冗余日期索引
         
         # 为交易信号表添加索引
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_trading_signals_code_status ON trading_signals(stock_code, status)')

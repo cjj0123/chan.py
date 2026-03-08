@@ -131,3 +131,19 @@ futu:
   port: 11111
   key: ""  # 如果需要解锁交易功能，请填写富途交易密码
   security_firm: "FUTU"  # FUTU, FUTUSECURITIES
+
+scanner:
+  # 扫描器默认配置
+  default_days: 365
+  data_repair_start_date: "2024-01-01"
+  fallback_stocks:
+    - code: "000001"
+      name: "平安银行"
+    - code: "600000"
+      name: "浦发银行"
+    - code: "600519"
+      name: "贵州茅台"
+    - code: "000858"
+      name: "五粮液"
+    - code: "601318"
+      name: "中国平安"

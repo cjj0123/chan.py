@@ -14,13 +14,22 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QTabWidget,
     QGroupBox, QHBoxLayout, QPushButton, QComboBox, QCheckBox,
     QTableWidget, QTableWidgetItem, QTextEdit, QLabel, QLineEdit,
-    QSplitter, QFrame, QMessageBox, QProgressBar, QDateTimeEdit
+    QSplitter, QFrame, QMessageBox, QProgressBar, QDateTimeEdit,
+    QGridLayout, QHeaderView, QProgressDialog, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
+import platform
+
+# 解决 Mac/Windows 中文乱码问题
+if platform.system() == "Darwin":
+    plt.rcParams["font.sans-serif"] = ["Arial Unicode MS"]
+elif platform.system() == "Windows":
+    plt.rcParams["font.sans-serif"] = ["SimHei"]
+plt.rcParams["axes.unicode_minus"] = False
 
 
 class ChanPlotCanvas(FigureCanvas):
@@ -66,750 +75,12 @@ import os
 import re
 import yaml
 
-def get_futu_stock_name(code):
-    """
-    从富途API获取单个股票的准确名称
-    
-    Args:
-        code: str, 股票代码 (如 SH.600000)
-    
-    Returns:
-        str: 股票名称，获取失败时返回原代码
-    """
-    try:
-        from futu import OpenQuoteContext, RET_OK, Market
-        import os
-        
-        # 从环境变量或配置文件获取富途API地址
-        FUTU_OPEND_ADDRESS = os.getenv('FUTU_OPEND_ADDRESS', '127.0.0.1')
-        
-        # 创建富途API连接
-        quote_ctx = OpenQuoteContext(host=FUTU_OPEND_ADDRESS, port=11111)
-        
-        # 获取股票基本信息
-        ret, data = quote_ctx.get_stock_basicinfo(Market.HK, [code])
-        if ret != RET_OK:
-            # 尝试获取A股信息
-            market = Market.SH if code.startswith('SH.') else Market.SZ if code.startswith('SZ.') else Market.HK
-            ret, data = quote_ctx.get_stock_basicinfo(market, [code])
-        
-        quote_ctx.close()
-        
-        if ret == RET_OK and not data.empty:
-            return data.iloc[0]['stock_name']
-        else:
-            return code
-    except Exception as e:
-        print(f"从富途获取股票名称失败 {code}: {e}")
-        return code
-
-
-        return code
-
-def get_futu_watchlist_stocks():
-    """
-    从富途自选股列表获取股票代码
-    
-    Returns:
-        pd.DataFrame: 包含 ['代码', '名称', '最新价', '涨跌幅'] 列的股票列表
-                      获取失败时返回空 DataFrame
-    """
-    try:
-        from Monitoring.FutuMonitor import FutuMonitor
-        monitor = FutuMonitor()
-        # 获取第一个自选股分组的股票
-        watchlists = monitor.get_watchlists()
-        if not watchlists:
-            print("没有找到富途自选股分组")
-            return pd.DataFrame(columns=['代码', '名称', '最新价', '涨跌幅'])
-        
-        # 使用第一个分组
-        ret, data = monitor.quote_ctx.get_user_security(group_name=watchlists[0])
-        monitor.quote_ctx.close()
-        
-        if ret != RET_OK:
-            print(f"获取自选股失败: {data}")
-            return pd.DataFrame(columns=['代码', '名称', '最新价', '涨跌幅'])
-        
-        # data is a pandas DataFrame, convert to our format
-        result_df = pd.DataFrame({
-            '代码': data['code'],
-            '名称': data['name'],
-            '最新价': [0.0] * len(data),  # 富途API返回的自选股数据可能不包含最新价
-            '涨跌幅': [0.0] * len(data)   # 需要额外查询
-        })
-        
-        return result_df[['代码', '名称', '最新价', '涨跌幅']]
-    except Exception as e:
-        print(f"从富途获取自选股列表失败: {e}")
-        return pd.DataFrame(columns=['代码', '名称', '最新价', '涨跌幅'])
-
-def get_tradable_stocks():
-    """
-    获取所有可交易的A股股票列表
-    
-    优先尝试从富途自选股列表获取，如果失败则回退到akshare API，
-    如果都失败则使用测试股票列表
-    
-    Returns:
-        pd.DataFrame: 包含 ['代码', '名称', '最新价', '涨跌幅'] 列的股票列表
-                      获取失败时返回测试股票列表
-    """
-    # 首先尝试从富途自选股获取
-    df = get_futu_watchlist_stocks()
-    if not df.empty:
-        return df
-    
-    # 如果富途获取失败，回退到akshare
-    try:
-        # 获取A股实时行情
-        df = ak.stock_zh_a_spot_em()
-
-        # 过滤条件
-        # 1. 剔除ST股票（名称包含ST）
-        df = df[~df['名称'].str.contains('ST', case=False, na=False)]
-
-        # 2. 剔除科创板（688开头）
-        df = df[~df['代码'].str.startswith('688')]
-
-        # 3. 剔除北交所（8开头，以43、83、87开头的也是北交所）
-        df = df[~df['代码'].str.startswith('8')]
-        df = df[~df['代码'].str.startswith('43')]
-
-        # 4. 剔除B股（200开头深圳B股，900开头上海B股）
-        df = df[~df['代码'].str.startswith('200')]
-        df = df[~df['代码'].str.startswith('900')]
-
-        # 5. 剔除存托凭证CDR（920开头）
-        df = df[~df['代码'].str.startswith('920')]
-
-        # 6. 剔除停牌股票（成交量为0或涨跌幅为空）
-        df = df[df['成交量'] > 0]
-
-        # 7. 剔除新股（上市不足60天的，这里简化处理，只保留有数据的）
-        df = df[df['最新价'] > 0]
-
-        if not df.empty:
-            return df[['代码', '名称', '最新价', '涨跌幅']].reset_index(drop=True)
-            
-    except Exception as e:
-        print(f"获取股票列表失败: {e}")
-    
-    # 如果所有方法都失败，使用测试股票列表
-    try:
-        import yaml
-        test_config_path = "Config/test_stocks.yaml"
-        if os.path.exists(test_config_path):
-            with open(test_config_path, 'r', encoding='utf-8') as f:
-                test_config = yaml.safe_load(f)
-                if test_config and 'test_stocks' in test_config:
-                    test_stocks = test_config['test_stocks']
-                    codes = [stock['code'] for stock in test_stocks]
-                    names = [stock['name'] for stock in test_stocks]
-                    return pd.DataFrame({
-                        '代码': codes,
-                        '名称': names,
-                        '最新价': [0.0] * len(codes),
-                        '涨跌幅': [0.0] * len(codes)
-                    })
-    except Exception as e:
-        print(f"加载测试股票列表失败: {e}")
-    
-    # 最后的备选方案：返回默认的5只股票
-    default_stocks = ['000001', '600000', '600519', '000858', '601318']
-    return pd.DataFrame({
-        '代码': default_stocks,
-        '名称': ['平安银行', '浦发银行', '贵州茅台', '五粮液', '中国平安'],
-        '最新价': [0.0] * len(default_stocks),
-        '涨跌幅': [0.0] * len(default_stocks)
-    })
-
-def normalize_stock_code(code_input):
-    """
-    标准化股票代码输入
-    
-    支持的输入格式：
-    - 完整格式: SH.600000, SZ.000001, HK.00700, US.AAPL
-    - 纯数字: 600000, 000001, 00700
-    - 带市场前缀的数字: 600000.SH, 000001.SZ
-    
-    Returns:
-        str: 标准化后的股票代码 (SH.600000, SZ.000001, HK.00700, US.AAPL)
-    """
-    import re
-    code = code_input.strip().upper()
-    
-    # 如果已经是完整格式，直接返回
-    if re.match(r'^(SH|SZ|HK|US)\.\w+$', code):
-        return code
-    
-    # 如果是带市场后缀的格式 (600000.SH)
-    if re.match(r'^\d+\.(SH|SZ|HK|US)$', code):
-        parts = code.split('.')
-        return f"{parts[1]}.{parts[0]}"
-    
-    # 如果是纯数字，尝试推断市场
-    if re.match(r'^\d+$', code):
-        # 检查长度和前缀来推断市场
-        if len(code) == 6:
-            if code.startswith('6'):
-                return f"SH.{code}"
-            elif code.startswith('0') or code.startswith('3'):
-                return f"SZ.{code}"
-            else:
-                # 可能是其他市场，先假设是SH
-                return f"SH.{code}"
-        elif len(code) == 5:
-            # 港股通常是5位数字
-            return f"HK.{code}"
-        elif len(code) <= 4:
-            # 美股通常是1-4个字母，但这里输入的是数字，可能是错误
-            # 先假设是A股
-            if code.startswith('6'):
-                return f"SH.{code.zfill(6)}"
-            else:
-                return f"SZ.{code.zfill(6)}"
-    
-    # 如果是纯字母（可能是美股），添加US前缀
-    if re.match(r'^[A-Z]+$', code):
-        return f"US.{code}"
-    
-    # 如果无法识别，返回原输入（让后续处理报错）
-    return code_input
-
-
-class UpdateDatabaseThread(QThread):
-
-    """
-    更新本地数据库的后台线程
-    
-    在独立线程中下载股票数据并保存到SQLite数据库。
-    
-    Signals:
-        progress: (int, int, str) 当前进度、总数、当前股票信息
-        log_signal: (str) 日志消息
-        finished: (bool, str) 完成信号，包含成功状态和消息
-    """
-    progress = pyqtSignal(int, int, str)
-    log_signal = pyqtSignal(str)
-    finished = pyqtSignal(bool, str)
-    
-    def __init__(self, stock_codes, days, timeframes, start_date=None, end_date=None):
-        """
-        初始化数据库更新线程
-        
-        Args:
-            stock_codes: list, 股票代码列表
-            days: int, 获取多少天的历史数据
-            timeframes: list, 时间级别列表
-            start_date: str, 开始日期 (可选)
-            end_date: str, 结束日期 (可选)
-        """
-        super().__init__()
-        self.stock_codes = stock_codes
-        self.days = days
-        self.timeframes = timeframes
-        self.start_date = start_date
-        self.end_date = end_date
-        self.is_running = True
-        
-    def stop(self):
-        """停止数据库更新"""
-        self.is_running = False
-        self.log_signal.emit("正在停止数据库更新...")
-        
-    def run(self):
-        """执行数据库更新任务"""
-        try:
-            if not self.stock_codes:
-                self.finished.emit(False, "股票列表为空")
-                return
-                
-            total = len(self.stock_codes)
-            
-            # 导入必要的模块
-            from DataAPI.SQLiteAPI import download_and_save_all_stocks_multi_timeframe
-            from Trade.db_util import CChanDB
-            
-            def log_callback(msg):
-                if self.is_running:
-                    self.log_signal.emit(msg)
-                    
-            # 执行下载任务
-            if self.is_running:
-                def stop_check():
-                    return not self.is_running
-                
-                download_and_save_all_stocks_multi_timeframe(
-                    self.stock_codes,
-                    days=self.days,
-                    timeframes=self.timeframes,
-                    log_callback=log_callback,
-                    start_date=self.start_date,
-                    end_date=self.end_date,
-                    stop_check=stop_check
-                )
-                
-                # 统计结果
-                if self.is_running:
-                    db = CChanDB()
-                    downloaded_codes = db.execute_query("SELECT DISTINCT code FROM kline_day")['code'].tolist()
-                    success_count = len(downloaded_codes)
-                    
-                    # 统计各市场数据量
-                    market_stats = {}
-                    total_klines = 0
-                    for code in downloaded_codes:
-                        count = db.execute_query(f"SELECT COUNT(*) as cnt FROM kline_day WHERE code = '{code}'")['cnt'].iloc[0]
-                        total_klines += count
-                        market = code.split('.')[0]
-                        market_stats[market] = market_stats.get(market, 0) + 1
-                    
-                    result_msg = f"本地数据库更新完成！成功下载 {success_count}/{total} 只股票。"
-                    self.log_signal.emit(f"✅ 本地数据库更新完成！")
-                    self.log_signal.emit(f"   • 成功下载: {success_count} 只股票")
-                    self.log_signal.emit(f"   • 总K线数: {total_klines} 条")
-                    self.log_signal.emit(f"   • 市场分布: {', '.join([f'{k}:{v}' for k, v in market_stats.items()])}")
-                    
-                    # 显示失败的股票（如果有的话）
-                    failed_codes = [code for code in self.stock_codes if code not in downloaded_codes]
-                    if failed_codes:
-                        self.log_signal.emit(f"⚠️ 下载失败的股票 ({len(failed_codes)} 只):")
-                        for i, code in enumerate(failed_codes[:10]):
-                            self.log_signal.emit(f"   • {code}")
-                        if len(failed_codes) > 10:
-                            self.log_signal.emit(f"   ... 还有 {len(failed_codes) - 10} 只股票下载失败")
-                    
-                    self.finished.emit(True, result_msg)
-                else:
-                    self.finished.emit(False, "数据库更新被用户取消")
-            else:
-                self.finished.emit(False, "数据库更新被用户取消")
-                
-        except Exception as e:
-            import traceback
-            self.log_signal.emit(f"❌ 更新失败: {str(e)}")
-            self.log_signal.emit(f"   错误详情: {traceback.format_exc()}")
-            self.finished.emit(False, f"更新失败: {str(e)}")
-
-
-class ScanThread(QThread):
-    """
-    批量扫描股票的后台线程
-
-    在独立线程中遍历股票列表，对每只股票进行缠论分析，
-    检测最近3天内是否出现买点。
-
-    Signals:
-        progress: (int, int, str) 当前进度、总数、当前股票信息
-        found_signal: (dict) 发现买点时发出，包含股票详情和 CChan 对象
-        finished: (int, int) 扫描完成，返回成功数和失败数
-        log_signal: (str) 日志消息
-    """
-    progress = pyqtSignal(int, int, str)
-    found_signal = pyqtSignal(dict)
-    finished = pyqtSignal(int, int)
-    log_signal = pyqtSignal(str)
-
-    def __init__(self, stock_list, config, days=365, kl_type=KL_TYPE.K_DAY):
-        """
-        初始化扫描线程
-
-        Args:
-            stock_list: pd.DataFrame, 待扫描的股票列表
-            config: CChanConfig, 缠论配置
-            days: int, 获取多少天的历史数据，默认365天
-            kl_type: KL_TYPE, 时间级别，默认为日线
-        """
-        super().__init__()
-        self.stock_list = stock_list
-        self.config = config
-        self.days = days
-        self.kl_type = kl_type
-        self.is_running = True
-
-    def stop(self):
-        """停止扫描，设置标志位让 run() 循环退出"""
-        self.is_running = False
-
-    def run(self):
-        """
-        线程主函数，遍历股票列表进行缠论分析
-
-        扫描逻辑:
-            1. 跳过无K线数据的股票
-            2. 跳过停牌超过15天的股票
-            3. 检测最近3天内是否出现买点
-            4. 发现买点时通过 found_signal 发出通知
-        """
-        begin_time = (datetime.now() - timedelta(days=self.days)).strftime("%Y-%m-%d")
-        end_time = datetime.now().strftime("%Y-%m-%d")
-        total = len(self.stock_list)
-        success_count = 0
-        fail_count = 0
-
-        for idx, row in self.stock_list.iterrows():
-            if not self.is_running:
-                break
-
-            code = row['代码']
-            name = row['名称']
-            
-            # 从Futu获取准确的股票名称
-            accurate_name = get_futu_stock_name(code)
-            if accurate_name != code:  # 如果获取到了准确名称，则使用它
-                name = accurate_name
-            
-            self.progress.emit(idx + 1, total, f"{code} {name}")
-            self.log_signal.emit(f"🔍 扫描 {code} {name}...")
-
-            try:
-                chan = CChan(
-                    code=code,
-                    begin_time=begin_time,
-                    end_time=end_time,
-                    data_src=DATA_SRC.FUTU,
-                    lv_list=[self.kl_type],
-                    config=self.config,
-                    autype=AUTYPE.QFQ,
-                )
-
-                # 检查最近15天是否有数据
-                if len(chan[0]) == 0:
-                    fail_count += 1
-                    self.log_signal.emit(f"⏭️ {code} {name}: 无K线数据")
-                    continue
-                last_klu = chan[0][-1][-1]
-                last_time = last_klu.time
-                last_date = datetime(last_time.year, last_time.month, last_time.day)
-                if (datetime.now() - last_date).days > 15:
-                    fail_count += 1
-                    self.log_signal.emit(f"⏸️ {code} {name}: 停牌超过15天")
-                    continue
-
-                success_count += 1
-
-                # 检查是否有买点或卖点（只找最近3天内出现的买卖点）
-                bsp_list = chan.get_latest_bsp(number=0)
-                cutoff_date = datetime.now() - timedelta(days=3)
-                
-                # 分别获取买点和卖点
-                buy_points = [
-                    bsp for bsp in bsp_list
-                    if bsp.is_buy and datetime(bsp.klu.time.year, bsp.klu.time.month, bsp.klu.time.day) >= cutoff_date
-                ]
-                sell_points = [
-                    bsp for bsp in bsp_list
-                    if not bsp.is_buy and datetime(bsp.klu.time.year, bsp.klu.time.month, bsp.klu.time.day) >= cutoff_date
-                ]
-
-                # 优先处理买点，如果没有买点再处理卖点
-                if buy_points:
-                    # 获取最近的买点
-                    latest_buy = buy_points[0]
-                    self.log_signal.emit(f"✅ {code} {name}: 发现买点 {latest_buy.type2str()}")
-                    self.found_signal.emit({
-                        'code': code,
-                        'name': name,
-                        'price': row['最新价'],
-                        'change': row['涨跌幅'],
-                        'bsp_type': f"买点{latest_buy.type2str()}",
-                        'bsp_time': str(latest_buy.klu.time),
-                        'bsp_direction': 'buy',
-                        'chan': chan,
-                    })
-                elif sell_points:
-                    # 获取最近的卖点
-                    latest_sell = sell_points[0]
-                    self.log_signal.emit(f"🔴 {code} {name}: 发现卖点 {latest_sell.type2str()}")
-                    self.found_signal.emit({
-                        'code': code,
-                        'name': name,
-                        'price': row['最新价'],
-                        'change': row['涨跌幅'],
-                        'bsp_type': f"卖点{latest_sell.type2str()}",
-                        'bsp_time': str(latest_sell.klu.time),
-                        'bsp_direction': 'sell',
-                        'chan': chan,
-                    })
-                else:
-                    self.log_signal.emit(f"➖ {code} {name}: 无近期买卖点")
-            except Exception as e:
-                fail_count += 1
-                error_msg = str(e)
-                if "list index out of range" in error_msg:
-                    self.log_signal.emit(f"❌ {code} {name}: 数据不足，无法分析")
-                elif "Broken pipe" in error_msg or "Errno 32" in error_msg:
-                    self.log_signal.emit(f"❌ {code} {name}: 数据处理中断，可能是分钟级别数据格式问题")
-                else:
-                    self.log_signal.emit(f"❌ {code} {name}: {error_msg[:50]}")
-                continue
-
-        self.finished.emit(success_count, fail_count)
-
-
-class OfflineScanThread(QThread):
-    """
-    离线批量扫描股票的后台线程
-    
-    在独立线程中遍历股票列表，从SQLite数据库读取K线数据进行缠论分析，
-    检测最近3天内是否出现买点。
-    
-    Signals:
-        progress: (int, int, str) 当前进度、总数、当前股票信息
-        found_signal: (dict) 发现买点时发出，包含股票详情和 CChan 对象
-        finished: (int, int) 扫描完成，返回成功数和失败数
-        log_signal: (str) 日志消息
-    """
-    progress = pyqtSignal(int, int, str)
-    found_signal = pyqtSignal(dict)
-    finished = pyqtSignal(int, int)
-    log_signal = pyqtSignal(str)
-    
-    def __init__(self, stock_list, config, days=365, kl_type=KL_TYPE.K_DAY):
-        """
-        初始化离线扫描线程
-        
-        Args:
-            stock_list: pd.DataFrame, 待扫描的股票列表
-            config: CChanConfig, 缠论配置
-            days: int, 获取多少天的历史数据，默认365天
-            kl_type: KL_TYPE, 时间级别，默认为日线
-        """
-        super().__init__()
-        self.stock_list = stock_list
-        self.config = config
-        self.days = days
-        self.kl_type = kl_type
-        self.is_running = True
-        
-    def stop(self):
-        """停止扫描，设置标志位让 run() 循环退出"""
-        self.is_running = False
-        
-    def run(self):
-        """
-        线程主函数，遍历股票列表进行缠论分析
-        
-        扫描逻辑:
-            1. 跳过无K线数据的股票
-            2. 跳过停牌超过15天的股票
-            3. 检测最近3天内是否出现买点
-            4. 发现买点时通过 found_signal 发出通知
-        """
-        begin_time = (datetime.now() - timedelta(days=self.days)).strftime("%Y-%m-%d")
-        end_time = datetime.now().strftime("%Y-%m-%d")
-        total = len(self.stock_list)
-        success_count = 0
-        fail_count = 0
-        
-        for idx, row in self.stock_list.iterrows():
-            if not self.is_running:
-                break
-                
-            code = row['代码']
-            name = row['名称']
-            
-            # 从Futu获取准确的股票名称
-            accurate_name = get_futu_stock_name(code)
-            if accurate_name != code:  # 如果获取到了准确名称，则使用它
-                name = accurate_name
-            
-            self.progress.emit(idx + 1, total, f"{code} {name}")
-            self.log_signal.emit(f"🔍 扫描 {code} {name}...")
-
-            try:
-                chan = CChan(
-                    code=code,
-                    begin_time=begin_time,
-                    end_time=end_time,
-                    data_src="custom:SQLiteAPI.SQLiteAPI",  # 使用自定义数据源（SQLite）
-                    lv_list=[self.kl_type],
-                    config=self.config,
-                    autype=AUTYPE.QFQ,
-                )
-                
-                # 检查最近15天是否有数据
-                if len(chan[0]) == 0 or len(chan[0][-1]) == 0:
-                    fail_count += 1
-                    self.log_signal.emit(f"⏭️ {code} {name}: 无K线数据")
-                    continue
-                last_klu = chan[0][-1][-1]
-                last_time = last_klu.time
-                last_date = datetime(last_time.year, last_time.month, last_time.day)
-                if (datetime.now() - last_date).days > 15:
-                    fail_count += 1
-                    self.log_signal.emit(f"⏸️ {code} {name}: 停牌超过15天")
-                    continue
-                    
-                success_count += 1
-                
-                # 检查是否有买点或卖点（只找最近3天内出现的买卖点）
-                bsp_list = chan.get_latest_bsp(number=0)
-                cutoff_date = datetime.now() - timedelta(days=3)
-                
-                # 分别获取买点和卖点
-                buy_points = [
-                    bsp for bsp in bsp_list
-                    if bsp.is_buy and datetime(bsp.klu.time.year, bsp.klu.time.month, bsp.klu.time.day) >= cutoff_date
-                ]
-                sell_points = [
-                    bsp for bsp in bsp_list
-                    if not bsp.is_buy and datetime(bsp.klu.time.year, bsp.klu.time.month, bsp.klu.time.day) >= cutoff_date
-                ]
-
-                # 优先处理买点，如果没有买点再处理卖点
-                if buy_points:
-                    # 获取最近的买点
-                    latest_buy = buy_points[0]
-                    self.log_signal.emit(f"✅ {code} {name}: 发现买点 {latest_buy.type2str()}")
-                    self.found_signal.emit({
-                        'code': code,
-                        'name': name,
-                        'price': row['最新价'],
-                        'change': row['涨跌幅'],
-                        'bsp_type': f"买点{latest_buy.type2str()}",
-                        'bsp_time': str(latest_buy.klu.time),
-                        'bsp_direction': 'buy',
-                        'chan': chan,
-                    })
-                elif sell_points:
-                    # 获取最近的卖点
-                    latest_sell = sell_points[0]
-                    self.log_signal.emit(f"🔴 {code} {name}: 发现卖点 {latest_sell.type2str()}")
-                    self.found_signal.emit({
-                        'code': code,
-                        'name': name,
-                        'price': row['最新价'],
-                        'change': row['涨跌幅'],
-                        'bsp_type': f"卖点{latest_sell.type2str()}",
-                        'bsp_time': str(latest_sell.klu.time),
-                        'bsp_direction': 'sell',
-                        'chan': chan,
-                    })
-                else:
-                    self.log_signal.emit(f"➖ {code} {name}: 无近期买卖点")
-            except Exception as e:
-                fail_count += 1
-                error_msg = str(e)
-                if "list index out of range" in error_msg:
-                    self.log_signal.emit(f"❌ {code} {name}: 数据不足，无法分析")
-                elif "custom" in error_msg.lower():
-                    self.log_signal.emit(f"❌ {code} {name}: 数据源错误，请检查数据库")
-                elif "Broken pipe" in error_msg or "Errno 32" in error_msg:
-                    self.log_signal.emit(f"❌ {code} {name}: 数据处理中断，可能是分钟级别数据格式问题")
-                else:
-                    self.log_signal.emit(f"❌ {code} {name}: {error_msg[:50]}")
-                continue
-                
-        self.finished.emit(success_count, fail_count)
-
-
-class SingleAnalysisThread(QThread):
-    """
-    单只股票分析的后台线程
-    
-    在独立线程中对单只股票进行缠论分析并生成图表。
-    
-    Signals:
-        finished: (CChan) 分析完成，返回CChan对象
-        error: (str) 错误信息
-        log_signal: (str) 日志消息
-    """
-    finished = pyqtSignal(object)
-    error = pyqtSignal(str)
-    log_signal = pyqtSignal(str)
-
-    def __init__(self, code, config, kl_type, days=365, data_sources=None):
-        """
-        初始化单只股票分析线程
-        
-        Args:
-            code: str, 股票代码
-            config: CChanConfig, 缠论配置
-            kl_type: KL_TYPE, 时间级别
-            days: int, 获取多少天的历史数据，默认365天
-            data_sources: list, 数据源优先级列表，默认为[FUTU优先]
-        """
-        super().__init__()
-        self.code = code
-        self.config = config
-        self.kl_type = kl_type
-        self.days = days
-        self.data_sources = data_sources or [DATA_SRC.FUTU, "custom:SQLiteAPI.SQLiteAPI"]
-
-    def run(self):
-       """执行单只股票缠论分析"""
-       try:
-           begin_time = (datetime.now() - timedelta(days=self.days)).strftime("%Y-%m-%d")
-           end_time = datetime.now().strftime("%Y-%m-%d")
-           
-           self.log_signal.emit(f"🔍 开始分析 {self.code}...")
-           
-           # 尝试使用指定的数据源，按优先级顺序
-           chan = None
-           
-           for data_src in self.data_sources:
-               try:
-                   self.log_signal.emit(f"尝试使用数据源: {data_src}")
-                   chan = CChan(
-                       code=self.code,
-                       begin_time=begin_time,
-                       end_time=end_time,
-                       data_src=data_src,
-                       lv_list=[self.kl_type],
-                       config=self.config,
-                       autype=AUTYPE.QFQ,
-                   )
-                   
-                   # 检查是否有足够的数据进行分析
-                   if len(chan.lv_list) > 0:
-                       first_kl_type = chan.lv_list[0]
-                       first_kl_data = chan[first_kl_type]
-                       if len(first_kl_data) > 0:
-                           break  # 找到有数据的数据源，跳出循环
-               except Exception as e:
-                   self.log_signal.emit(f"数据源 {data_src} 失败: {str(e)}")
-                   continue
-           
-           if chan is None or len(chan.lv_list) == 0:
-               raise Exception(f"股票 {self.code} 没有指定的时间级别数据")
-           
-           # 检查第一个时间级别的K线数据是否为空
-           first_kl_type = chan.lv_list[0]
-           first_kl_data = chan[first_kl_type]
-           if len(first_kl_data) == 0:
-               raise Exception(f"股票 {self.code} 没有足够的K线数据进行分析")
-           
-           # 触发缠论各层级的计算
-           for lv in chan.lv_list:
-               _ = list(chan[lv])  # 访问数据以确保加载
-           
-           # 确保笔、线段、中枢等结构被计算
-           # 访问这些属性会触发内部计算
-           try:
-               if hasattr(chan, '__getitem__'):
-                   # 访问第一个时间级别的数据以触发计算
-                   if len(chan.lv_list) > 0:
-                       first_lv = chan.lv_list[0]
-                       _ = chan[first_lv]
-               
-               # 尝试访问笔、线段、中枢列表以触发计算
-               if hasattr(chan, 'bi_list'):
-                   _ = list(chan.bi_list)
-               if hasattr(chan, 'seg_list'):
-                   _ = list(chan.seg_list)
-               if hasattr(chan, 'zs_list'):
-                   _ = list(chan.zs_list)
-           except Exception as calc_error:
-               self.log_signal.emit(f"⚠️ 计算缠论结构时出现: {str(calc_error)}")
-           
-           self.log_signal.emit(f"✅ {self.code} 分析完成，使用数据源: {chan.data_src}")
-           self.finished.emit(chan)
-       except Exception as e:
-           self.error.emit(str(e))
-
-
+from Common.StockUtils import get_futu_stock_name, get_futu_watchlist_stocks, get_tradable_stocks, normalize_stock_code
+from App.ScannerThreads import ScanThread, SingleAnalysisThread, UpdateDatabaseThread, RepairSingleStockThread
+try:
+    from App.HKTradingController import HKTradingController
+except ImportError:
+    HKTradingController = None
 class TraderGUI(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -827,14 +98,17 @@ class TraderGUI(QMainWindow):
 
         # --- Create Tabs ---
         self.create_scanner_tab()
-        self.create_analysis_tab()
         self.create_settings_tab()
 
         # --- Initialize threads ---
         self.update_db_thread = None
         self.scan_thread = None
         self.analysis_thread = None
+        self.repair_thread = None
         
+        # --- Managers ---
+        self.futu_monitor = None
+        self.hk_trading_controller = None
         # 确保按钮在界面显示后是可见的
         self.ensure_buttons_visible()
         
@@ -845,93 +119,94 @@ class TraderGUI(QMainWindow):
         """确保关键按钮是可见的"""
         if hasattr(self, 'update_db_btn'):
             self.update_db_btn.setVisible(True)
+        if hasattr(self, 'stop_db_btn'):
+            self.stop_db_btn.setVisible(True)
         if hasattr(self, 'start_scan_btn'):
             self.start_scan_btn.setVisible(True)
         if hasattr(self, 'load_chart_btn'):
             self.load_chart_btn.setVisible(True)
 
     def create_scanner_tab(self):
-        """创建扫描器选项卡"""
+        """创建扫描与分析选项卡"""
         self.scanner_tab = QWidget()
-        self.tabs.addTab(self.scanner_tab, "📈 扫描器")
-        layout = QVBoxLayout(self.scanner_tab)
+        self.tabs.addTab(self.scanner_tab, "📈 扫描与图表分析")
+        layout = QHBoxLayout(self.scanner_tab)
 
+        main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        
+        # === 左侧：扫描器区 ===
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        
         # --- 1. 数据操作区 ---
         data_group = QGroupBox("1. 数据操作")
-        data_layout = QVBoxLayout()  # 改为垂直布局以确保内容正确显示
-        
-        # 第一行：更新数据库按钮和日期选择
+        data_layout = QVBoxLayout()
         top_row_layout = QHBoxLayout()
         self.update_db_btn = QPushButton("更新本地数据库")
         self.update_db_btn.clicked.connect(self.on_update_db_clicked)
-        self.update_db_btn.setVisible(True)  # 确保按钮可见
+        self.update_db_btn.setVisible(True)
         top_row_layout.addWidget(self.update_db_btn)
         
-        # 添加日期范围选择
-        top_row_layout.addWidget(QLabel("开始日期:"))
+        self.stop_db_btn = QPushButton("停止更新")
+        self.stop_db_btn.clicked.connect(self.on_stop_db_clicked)
+        self.stop_db_btn.setVisible(True)
+        self.stop_db_btn.setEnabled(False)
+        top_row_layout.addWidget(self.stop_db_btn)
+        
         self.start_date_input = QDateTimeEdit()
         self.start_date_input.setCalendarPopup(True)
-        self.start_date_input.setDate((datetime.now() - timedelta(days=30)).date())
+        self.start_date_input.setDate((datetime.now() - timedelta(days=365)).date())
+        top_row_layout.addWidget(QLabel("开始:"))
         top_row_layout.addWidget(self.start_date_input)
         
-        top_row_layout.addWidget(QLabel("结束日期:"))
         self.end_date_input = QDateTimeEdit()
         self.end_date_input.setCalendarPopup(True)
         self.end_date_input.setDate(datetime.now().date())
+        top_row_layout.addWidget(QLabel("结束:"))
         top_row_layout.addWidget(self.end_date_input)
         
         self.last_update_label = QLabel("上次更新: 未知")
         top_row_layout.addWidget(self.last_update_label)
         top_row_layout.addStretch()
-        
         data_layout.addLayout(top_row_layout)
         data_group.setLayout(data_layout)
-        layout.addWidget(data_group)
+        left_layout.addWidget(data_group)
 
         # --- 2. 扫描配置区 ---
         scan_group = QGroupBox("2. 扫描配置")
-        scan_layout = QVBoxLayout()  # 改为垂直布局以确保内容正确显示
+        scan_layout = QVBoxLayout()
         
-        # 扫描配置行
         config_row_layout = QHBoxLayout()
         self.scan_mode_combo = QComboBox()
         self.scan_mode_combo.addItems(["日线", "30分钟", "5分钟", "1分钟"])
         config_row_layout.addWidget(QLabel("模式:"))
         config_row_layout.addWidget(self.scan_mode_combo)
         
-        # 添加天数输入
-        config_row_layout.addWidget(QLabel("天数:"))
         self.days_input = QLineEdit()
-        self.days_input.setPlaceholderText("30")
-        self.days_input.setText("30")  # 默认值
-        self.days_input.setMaximumWidth(60)
+        self.days_input.setText("1000")
+        self.days_input.setMaximumWidth(40)
+        config_row_layout.addWidget(QLabel("天数:"))
         config_row_layout.addWidget(self.days_input)
         
-        # 添加自选股分组下拉框
-        config_row_layout.addWidget(QLabel("自选股分组:"))
         self.watchlist_combo = QComboBox()
-        # 初始化时先添加一个加载项
         self.watchlist_combo.addItem("加载中...")
+        config_row_layout.addWidget(QLabel("自选股分组:"))
         config_row_layout.addWidget(self.watchlist_combo)
         
-        # 添加刷新按钮
-        self.refresh_watchlist_btn = QPushButton("刷新分组")
+        self.refresh_watchlist_btn = QPushButton("刷新")
         self.refresh_watchlist_btn.clicked.connect(self.load_futu_watchlists)
+        self.refresh_watchlist_btn.setMaximumWidth(60)
         config_row_layout.addWidget(self.refresh_watchlist_btn)
-        
         config_row_layout.addStretch()
         
-        # 初始化时加载富途自选股分组
         self.load_futu_watchlists()
         
-        # 开始扫描按钮行
         button_row_layout = QHBoxLayout()
         self.start_scan_btn = QPushButton("开始扫描")
         self.start_scan_btn.clicked.connect(self.on_start_scan_clicked)
-        self.start_scan_btn.setVisible(True)  # 确保按钮可见
         button_row_layout.addWidget(self.start_scan_btn)
         
-        # 添加进度条
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
         button_row_layout.addWidget(self.progress_bar)
@@ -940,90 +215,102 @@ class TraderGUI(QMainWindow):
         scan_layout.addLayout(config_row_layout)
         scan_layout.addLayout(button_row_layout)
         scan_group.setLayout(scan_layout)
-        layout.addWidget(scan_group)
+        left_layout.addWidget(scan_group)
 
         # --- 3. 结果列表区 ---
         result_group = QGroupBox("3. 扫描结果")
         result_layout = QVBoxLayout()
         self.result_table = QTableWidget()
-        self.result_table.setColumnCount(6)
-        self.result_table.setHorizontalHeaderLabels(["代码", "名称", "信号类型", "评分", "时间", "API"])
+        self.result_table.setColumnCount(4)
+        self.result_table.setHorizontalHeaderLabels(["代码", "名称", "信号", "时间"])
         self.result_table.horizontalHeader().setStretchLastSection(True)
+        # 绑定点击事件加载图表
+        self.result_table.itemClicked.connect(self.on_result_table_clicked)
         result_layout.addWidget(self.result_table)
         result_group.setLayout(result_layout)
-        layout.addWidget(result_group)
+        left_layout.addWidget(result_group)
 
-        # --- 4. 日志输出区 ---
+        # --- 4. 操作日志区 ---
         log_group = QGroupBox("4. 操作日志")
         log_layout = QVBoxLayout()
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(150)
+        self.log_text.setMaximumHeight(120)
         log_layout.addWidget(self.log_text)
         log_group.setLayout(log_layout)
-        layout.addWidget(log_group)
+        left_layout.addWidget(log_group)
+        
+        main_splitter.addWidget(left_widget)
 
-        layout.addStretch()
-
-    def create_analysis_tab(self):
-        """创建图表分析选项卡"""
-        self.analysis_tab = QWidget()
-        self.tabs.addTab(self.analysis_tab, "📊 图表分析")
-        layout = QVBoxLayout(self.analysis_tab)
-
-        # --- 手动分析区 ---
-        manual_group = QGroupBox("手动分析")
+        # === 右侧：图表分析区 ===
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # 顶部手动分析控制
+        manual_group = QGroupBox("图表控制 (加载四级别图表)")
         manual_layout = QHBoxLayout()
         
-        # 股票代码输入
         self.stock_code_input = QLineEdit()
-        self.stock_code_input.setPlaceholderText("输入股票代码，例如: 600000 或 SH.600000")
+        self.stock_code_input.setPlaceholderText("代码 (如 600000)")
+        self.stock_code_input.setMaximumWidth(120)
         manual_layout.addWidget(self.stock_code_input)
         
-        # 数据源选择下拉框
-        manual_layout.addWidget(QLabel("数据源:"))
         self.data_source_combo = QComboBox()
-        self.data_source_combo.addItems(["Futu优先", "SQLite数据库"])  # 添加数据源选项
+        self.data_source_combo.addItems(["Futu优先", "SQLite数据库"])
+        manual_layout.addWidget(QLabel("数据源:"))
         manual_layout.addWidget(self.data_source_combo)
         
-        # 时间级别选择下拉框
-        manual_layout.addWidget(QLabel("时间级别:"))
-        self.timeframe_combo = QComboBox()
-        self.timeframe_combo.addItems(["日线", "30分钟", "5分钟", "1分钟"])
-        manual_layout.addWidget(self.timeframe_combo)
-        
-        # 加载图表按钮
-        self.load_chart_btn = QPushButton("加载图表")
-        self.load_chart_btn.clicked.connect(self.on_load_chart_clicked)
-        self.load_chart_btn.setVisible(True)  # 确保按钮可见
+        self.load_chart_btn = QPushButton("加载全级别图表")
+        self.load_chart_btn.clicked.connect(self.on_load_multi_chart_clicked)
         manual_layout.addWidget(self.load_chart_btn)
+        
+        self.repair_btn = QPushButton("修复数据")
+        self.repair_btn.clicked.connect(self.on_repair_data_clicked)
+        self.repair_btn.setToolTip("尝试重新下载数据")
+        manual_layout.addWidget(self.repair_btn)
+
         manual_layout.addStretch()
+
+        self.restart_btn = QPushButton("重启程序")
+        self.restart_btn.clicked.connect(self.on_restart_clicked)
+        self.restart_btn.setToolTip("重启图表分析终端")
+        self.restart_btn.setStyleSheet("background-color: #f0f0f0; color: #333;")
+        manual_layout.addWidget(self.restart_btn)
         manual_group.setLayout(manual_layout)
-        layout.addWidget(manual_group)
-
-        # --- 图表和详情区 (使用分割器) ---
-        chart_detail_splitter = QSplitter(Qt.Orientation.Horizontal)
-
-        # -- 图表展示区 --
-        self.chart_frame = QFrame()
-        self.chart_frame.setFrameStyle(QFrame.Shape.StyledPanel)
-        chart_layout = QVBoxLayout(self.chart_frame)
-        self.canvas = ChanPlotCanvas(self.chart_frame, width=10, height=6)
-        self.toolbar = NavigationToolbar(self.canvas, self.chart_frame)
-
-        chart_layout.addWidget(self.toolbar)
-        chart_layout.addWidget(self.canvas)
-
-        # -- 分析详情区 --
+        right_layout.addWidget(manual_group)
+        
+        # 底部图表标签页区
+        self.charts_tabs = QTabWidget()
+        self.tf_frames = {}
+        timeframes = ["日线", "30分钟", "5分钟", "1分钟"]
+        for tf in timeframes:
+            tf_frame = QWidget()
+            tf_layout = QVBoxLayout(tf_frame)
+            tf_layout.setContentsMargins(0, 0, 0, 0)
+            
+            # Initial empty canvas
+            canvas = FigureCanvas(Figure())
+            canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            tf_layout.addWidget(canvas)
+            
+            self.tf_frames[tf] = tf_frame
+            self.charts_tabs.addTab(tf_frame, tf)
+            
+        right_layout.addWidget(self.charts_tabs)
+        
         self.analysis_detail_text = QTextEdit()
         self.analysis_detail_text.setReadOnly(True)
-        self.analysis_detail_text.setPlaceholderText("视觉评分的详细理由将显示在此处...")
-
-        chart_detail_splitter.addWidget(self.chart_frame)
-        chart_detail_splitter.addWidget(self.analysis_detail_text)
-        chart_detail_splitter.setSizes([800, 300])
-
-        layout.addWidget(chart_detail_splitter)
+        self.analysis_detail_text.setMaximumHeight(80)
+        self.analysis_detail_text.setPlaceholderText("分析详情将显示在此处...")
+        right_layout.addWidget(self.analysis_detail_text)
+        
+        main_splitter.addWidget(right_widget)
+        
+        # 调整比例: 左侧偏窄, 右侧图表区偏宽
+        main_splitter.setSizes([400, 1200])
+        
+        layout.addWidget(main_splitter)
 
     def create_settings_tab(self):
         """创建设置与自动化选项卡"""
@@ -1045,14 +332,216 @@ class TraderGUI(QMainWindow):
         # --- 自动化模块 ---
         auto_group = QGroupBox("自动化模块")
         auto_layout = QVBoxLayout()
-        self.hk_auto_trading_label = QLabel("港股自动交易: [待实现]")
-        self.futu_monitor_label = QLabel("Futu 实时监控: [待实现]")
-        auto_layout.addWidget(self.hk_auto_trading_label)
-        auto_layout.addWidget(self.futu_monitor_label)
+        
+        # 富途监控控制
+        futu_layout = QHBoxLayout()
+        self.futu_monitor_status = QLabel("Futu监控: [未启动]")
+        self.futu_monitor_btn = QPushButton("启动监控")
+        self.futu_monitor_btn.clicked.connect(self.toggle_futu_monitor)
+        futu_layout.addWidget(self.futu_monitor_status)
+        futu_layout.addWidget(self.futu_monitor_btn)
+        futu_layout.addStretch()
+        auto_layout.addLayout(futu_layout)
+        
+        # 港股自动交易控制
+        hk_auto_layout = QHBoxLayout()
+        self.hk_auto_status = QLabel("港股自动交易: [未启动]")
+        self.hk_auto_btn = QPushButton("启动自动交易")
+        self.hk_auto_btn.clicked.connect(self.toggle_hk_trading)
+        hk_auto_layout.addWidget(self.hk_auto_status)
+        hk_auto_layout.addWidget(self.hk_auto_btn)
+        
+        # 资金查询按钮
+        self.query_funds_btn = QPushButton("刷新账户资金")
+        self.query_funds_btn.clicked.connect(self.on_query_funds_clicked)
+        hk_auto_layout.addWidget(self.query_funds_btn)
+        
+        hk_auto_layout.addStretch()
+        auto_layout.addLayout(hk_auto_layout)
+        
+        # 自动化专属日志及信息显示
+        self.auto_log_text = QTextEdit()
+        self.auto_log_text.setReadOnly(True)
+        self.auto_log_text.setPlaceholderText("自动化模块运行日志及账户信息将显示在此处...")
+        self.auto_log_text.setMinimumHeight(200)
+        auto_layout.addWidget(self.auto_log_text)
+        
         auto_group.setLayout(auto_layout)
         layout.addWidget(auto_group)
 
         layout.addStretch()
+        
+    def append_auto_log(self, text):
+        """添加日志到自动化专属日志区域"""
+        import datetime
+        now = datetime.datetime.now().strftime("%H:%M:%S")
+        self.auto_log_text.append(f"[{now}] {text}")
+
+    def toggle_futu_monitor(self):
+        """切换富途实时监控状态"""
+        if self.futu_monitor is None:
+            try:
+                group_name = self.watchlist_combo.currentText()
+                if group_name == "加载中..." or group_name == "":
+                    self.append_auto_log("❌ 启动富途监控失败: 未选择自选股分组")
+                    return
+                self.futu_monitor = FutuMonitor()
+                
+                # 如果自动交易控制器存在，将实时信号路由给它处理并下单
+                if self.hk_trading_controller is not None:
+                    self.futu_monitor.set_callback(self.hk_trading_controller.process_realtime_signal)
+                    
+                # 监控可能会阻塞，因此在实际中通常也要放在线程，但这里先修复参数
+                import threading
+                def run_monitor():
+                    self.futu_monitor.start(group_name)
+                threading.Thread(target=run_monitor, daemon=True).start()
+                self.futu_monitor_status.setText("Futu监控: [运行中]")
+                self.futu_monitor_btn.setText("停止监控")
+                self.append_auto_log(f"✅ 富途监控已启动，监听分组: {group_name}")
+            except Exception as e:
+                self.append_auto_log(f"❌ 启动富途监控失败: {e}")
+                self.futu_monitor = None
+        else:
+            self.futu_monitor.stop()
+            self.futu_monitor = None
+            self.futu_monitor_status.setText("Futu监控: [已停止]")
+            self.futu_monitor_btn.setText("启动监控")
+            self.append_auto_log("ℹ️ 富途监控已停止")
+
+    def toggle_hk_trading(self):
+        """切换港股自动交易状态"""
+        if self.hk_trading_controller is None:
+            if HKTradingController is None:
+                self.append_auto_log("❌ 无法导入 HKTradingController，可能缺少依赖")
+                return
+            try:
+                group_name = self.watchlist_combo.currentText()
+                self.hk_trading_controller = HKTradingController(hk_watchlist_group=group_name)
+                self.hk_trading_controller.log_message.connect(self.append_auto_log)
+                
+                # 在新线程中运行策略
+                import threading
+                def run_trade():
+                    self.hk_trading_controller.run_scan_and_trade()
+                    
+                self.hk_trade_thread = threading.Thread(target=run_trade, daemon=True)
+                self.hk_trade_thread.start()
+                
+                self.hk_auto_status.setText("港股自动交易: [运行中]")
+                self.hk_auto_btn.setText("停止自动交易")
+                self.append_auto_log("✅ 港股自动交易已启动。注意：此策略主要进行30M级别的突破和背驰判断，结合风险管理器控制仓位。")
+            except Exception as e:
+                self.append_auto_log(f"❌ 启动港股自动交易失败: {e}")
+                self.hk_trading_controller = None
+        else:
+            self.hk_trading_controller.stop()
+            self.hk_trading_controller = None
+            self.hk_auto_status.setText("港股自动交易: [已停止]")
+            self.hk_auto_btn.setText("启动自动交易")
+            self.append_auto_log("ℹ️ 港股自动交易已停止")
+            
+    def on_query_funds_clicked(self):
+        """刷新并打印账户持仓及资金到自动化日志"""
+        if HKTradingController is None:
+            self.append_auto_log("❌ 无法连接接口获取资金信息。")
+            return
+        
+        self.append_auto_log("🔄 正在查询富途账户资金及持仓...")
+        try:
+            # 临时创建一个控制器来获取资金
+            temp_controller = HKTradingController()
+            temp_controller.log_message.connect(self.append_auto_log)
+            funds = temp_controller.get_available_funds()
+            
+            # 同时查询持仓
+            from futu import OpenHKTradeContext, TrdEnv, RET_OK
+            try:
+                # 获取控制器中的环境或者使用默认模拟环境
+                env = temp_controller.trd_env
+                trd_ctx = OpenHKTradeContext(host='127.0.0.1', port=11111)
+                ret, data = trd_ctx.position_list_query(trd_env=env)
+                if ret == RET_OK:
+                    if data.empty:
+                        self.append_auto_log("📊 当前无持仓。")
+                    else:
+                        self.append_auto_log(f"📊 当前持仓: {len(data)} 个股票")
+                        for _, row in data.iterrows():
+                            self.append_auto_log(f"   - {row.get('code', 'N/A')}: {row.get('qty', 0)}股, 市值 {row.get('market_val', 0):.2f}")
+                else:
+                    self.append_auto_log(f"⚠️ 查询持仓失败: {data}")
+                trd_ctx.close()
+            except Exception as e:
+                self.append_auto_log(f"⚠️ 查询持仓出现异常: {e}")
+            
+            temp_controller.quote_ctx.close()
+            temp_controller.trd_ctx.close()
+            
+            self.append_auto_log(f"💰 账户可用资金完毕。可用资金: {funds:.2f}")
+        except Exception as e:
+            self.append_auto_log(f"❌ 查询失败: {e}")
+
+    def on_repair_data_clicked(self):
+        """处理修复数据按钮点击"""
+        code = self.stock_code_input.text().strip()
+        if not code:
+            QMessageBox.warning(self, "警告", "请输入要修复的股票代码！")
+            return
+            
+        normalized_code = normalize_stock_code(code)
+        
+        # 禁用按钮防止重复点击
+        self.repair_btn.setEnabled(False)
+        self.log_text.append(f"🔧 准备修复 {normalized_code} 的数据...")
+        
+        try:
+            import yaml
+            config_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Config", "config.yaml")
+            start_date = "2024-01-01"
+            if os.path.exists(config_path):
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = yaml.safe_load(f)
+                    if config and 'scanner' in config and 'data_repair_start_date' in config['scanner']:
+                        start_date = config['scanner']['data_repair_start_date']
+                        
+            # 启动修复线程
+            from App.ScannerThreads import RepairSingleStockThread
+            self.repair_thread = RepairSingleStockThread(normalized_code, start_date=start_date)
+            self.repair_thread.log_signal.connect(self.on_log_message)
+            self.repair_thread.finished.connect(self.on_repair_data_finished)
+            self.repair_thread.start()
+            
+        except Exception as e:
+            self.log_text.append(f"❌ 启动修复失败: {str(e)}")
+            self.repair_btn.setEnabled(True)
+
+    def on_repair_data_finished(self, success, message):
+        """处理数据修复完成"""
+        if success:
+            QMessageBox.information(self, "修复完成", message)
+        else:
+            QMessageBox.warning(self, "修复失败", message)
+        self.repair_btn.setEnabled(True)
+
+    def on_restart_clicked(self):
+        """重启整个应用程序"""
+        import sys
+        import os
+        from PyQt6.QtWidgets import QMessageBox
+        
+        reply = QMessageBox.question(self, '重启程序', '确定要重启程序吗？\n(如果有正在更新或扫描网络任务，将被强制中断)',
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                     QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            self.log_text.append("🔄 正在准备重启...")
+            
+            # 安全终止活动线程
+            if hasattr(self, 'update_db_thread') and self.update_db_thread and self.update_db_thread.isRunning():
+                self.update_db_thread.stop()
+                self.update_db_thread.wait(1000)
+            
+            # 使用 os.execl 重生新进程
+            os.execl(sys.executable, sys.executable, *sys.argv)
 
     def get_chan_config(self):
         """获取缠论配置"""
@@ -1203,6 +692,9 @@ class TraderGUI(QMainWindow):
             self.update_db_thread.finished.connect(self.on_update_database_finished)
             self.update_db_thread.start()
             
+            self.update_db_btn.setEnabled(False)
+            self.stop_db_btn.setEnabled(True)
+            
         except Exception as e:
             self.log_text.append(f"❌ 获取股票列表失败: {str(e)}")
             import traceback
@@ -1310,8 +802,6 @@ class TraderGUI(QMainWindow):
                 elif selected_watchlist == "全部":
                     # 查询所有股票，不做额外筛选
                     pass
-                # 对于其他情况，查询所有股票
-            
             try:
                 stock_df = db.execute_query(stock_query)
             except Exception as db_error:
@@ -1327,8 +817,8 @@ class TraderGUI(QMainWindow):
                     return
                 else:
                     self.log_text.append(f"✅ 成功获取 {len(stock_list)} 只可交易股票，使用在线模式进行扫描...")
-                    # 使用在线扫描线程而不是离线扫描线程
-                    scan_thread_class = ScanThread
+                    # 使用在线扫描数据源
+                    data_src = DATA_SRC.FUTU
             else:
                 # 添加模拟的股票名称和价格信息
                 stock_list = pd.DataFrame({
@@ -1337,7 +827,8 @@ class TraderGUI(QMainWindow):
                     '最新价': [10.0] * len(stock_df),
                     '涨跌幅': [0.0] * len(stock_df)
                 })
-                scan_thread_class = OfflineScanThread
+                # 使用离线扫描数据源
+                data_src = "custom:SQLiteAPI.SQLiteAPI"
             
             self.log_text.append(f"📊 准备扫描 {len(stock_list)} 只股票 (来自: {selected_watchlist})...")
             
@@ -1355,7 +846,7 @@ class TraderGUI(QMainWindow):
                 self.log_text.append(f"⚠️ 天数输入格式不正确，使用默认值30天")
             
             # 启动扫描线程
-            self.scan_thread = scan_thread_class(stock_list, config, days=days, kl_type=kl_type)
+            self.scan_thread = ScanThread(stock_list, config, days=days, kl_type=kl_type, data_src=data_src)
             self.scan_thread.progress.connect(self.on_scan_progress)
             self.scan_thread.found_signal.connect(self.on_buy_point_found)
             self.scan_thread.finished.connect(self.on_scan_finished)
@@ -1371,45 +862,42 @@ class TraderGUI(QMainWindow):
             import traceback
             self.log_text.append(f"详细错误: {traceback.format_exc()}")
 
-    def on_load_chart_clicked(self):
-        """处理加载图表按钮点击"""
+    def on_result_table_clicked(self, item):
+        """处理扫描结果表格点击"""
+        row = item.row()
+        code = self.result_table.item(row, 0).text()
+        self.stock_code_input.setText(code)
+        self.on_load_multi_chart_clicked()
+
+    def on_load_multi_chart_clicked(self):
+        """加载四个级别的图表"""
         code = self.stock_code_input.text().strip()
         if not code:
             QMessageBox.warning(self, "警告", "请输入股票代码！")
             return
         
-        # 标准化股票代码格式
         normalized_code = normalize_stock_code(code)
-        self.log_text.append(f"📈 正在加载 {normalized_code} 的图表...")
+        self.log_text.append(f"📈 正在加载 {normalized_code} 的全级别图表...")
         
         try:
-            # 获取配置
             config = self.get_chan_config()
-            # 使用分析标签页中的时间级别选择，而不是扫描配置中的选择
-            kl_type = self.get_analysis_timeframe_kl_type()
             
-            # 获取用户输入的天数
             try:
                 days_text = self.days_input.text().strip()
-                if days_text:
-                    days = int(days_text)
-                    if days <= 0:
-                        days = 30  # 如果输入不合法，默认为30天
-                else:
-                    days = 30  # 如果没有输入，默认为30天
+                days = int(days_text) if days_text else 30
             except ValueError:
-                days = 30  # 如果转换失败，默认为30天
-                self.log_text.append(f"⚠️ 天数输入格式不正确，使用默认值30天")
+                days = 30
             
-            # 根据用户选择的数据源设置数据源优先级
             selected_data_source = self.data_source_combo.currentText()
             if selected_data_source == "Futu优先":
                 data_sources = [DATA_SRC.FUTU, "custom:SQLiteAPI.SQLiteAPI"]
-            else:  # "SQLite数据库"
+            else:
                 data_sources = ["custom:SQLiteAPI.SQLiteAPI", DATA_SRC.FUTU]
             
-            # 启动分析线程
-            self.analysis_thread = SingleAnalysisThread(normalized_code, config, kl_type, days=days, data_sources=data_sources)
+            kl_types = [KL_TYPE.K_DAY, KL_TYPE.K_30M, KL_TYPE.K_5M, KL_TYPE.K_1M]
+            
+            # 使用 SingleAnalysisThread 返回多个 timeframe
+            self.analysis_thread = SingleAnalysisThread(normalized_code, config, kl_types=kl_types, days=days, data_sources=data_sources)
             self.analysis_thread.finished.connect(self.on_analysis_finished)
             self.analysis_thread.error.connect(self.on_analysis_error)
             self.analysis_thread.log_signal.connect(self.on_log_message)
@@ -1417,12 +905,17 @@ class TraderGUI(QMainWindow):
             
         except Exception as e:
             self.log_text.append(f"❌ 图表加载失败: {str(e)}")
-            import traceback
-            self.log_text.append(f"详细错误: {traceback.format_exc()}")
 
     def on_log_message(self, message):
         """处理日志消息"""
         self.log_text.append(message)
+
+    def on_stop_db_clicked(self):
+        """处理停止更新按钮点击"""
+        if hasattr(self, 'update_db_thread') and self.update_db_thread and self.update_db_thread.isRunning():
+            self.update_db_thread.stop()
+            self.stop_db_btn.setEnabled(False)
+            self.log_text.append("🛑 正在发送停止信号给数据下载线程...")
 
     def on_update_database_finished(self, success, message):
         """处理数据库更新完成"""
@@ -1434,6 +927,7 @@ class TraderGUI(QMainWindow):
         
         # 重新启用按钮
         self.update_db_btn.setEnabled(True)
+        self.stop_db_btn.setEnabled(False)
 
     def on_scan_progress(self, current, total, stock_info):
         """处理扫描进度"""
@@ -1449,14 +943,7 @@ class TraderGUI(QMainWindow):
         self.result_table.setItem(row_position, 0, QTableWidgetItem(data['code']))
         self.result_table.setItem(row_position, 1, QTableWidgetItem(data['name']))
         self.result_table.setItem(row_position, 2, QTableWidgetItem(data['bsp_type']))
-        
-        # 添加评分 - 根据买卖点类型和级别给出不同评分
-        bsp_level = data['bsp_type'][2] if len(data['bsp_type']) > 2 else '1'  # 提取买卖点级别，如"买点1"中的"1"
-        score = 10 - (ord(bsp_level) - ord('0')) * 2  # 简单评分逻辑，级别越低评分越高
-        self.result_table.setItem(row_position, 3, QTableWidgetItem(f"{score}/10"))
-        
-        self.result_table.setItem(row_position, 4, QTableWidgetItem(data['bsp_time']))
-        self.result_table.setItem(row_position, 5, QTableWidgetItem("缠论API"))  # API名称
+        self.result_table.setItem(row_position, 3, QTableWidgetItem(data['bsp_time']))
 
     def on_scan_finished(self, success_count, fail_count):
         """处理扫描完成"""
@@ -1464,107 +951,94 @@ class TraderGUI(QMainWindow):
         self.progress_bar.setVisible(False)
         self.statusBar().showMessage('扫描完成')
 
-    def on_analysis_finished(self, chan):
-        """处理分析完成"""
+    def on_analysis_finished(self, chan_results):
+        """处理多级别图表分析完成"""
         try:
-            # 检查chan对象是否有效
-            if chan is None:
-                self.log_text.append("❌ 分析结果无效，无法绘制图表")
+            if not chan_results:
+                self.log_text.append("❌ 分析结果为空")
                 return
-                
-            self.log_text.append(f"📊 开始绘制图表，股票: {chan.code}")
-            self.log_text.append(f"📊 数据源: {chan.data_src}")
-            self.log_text.append(f"📊 时间范围: {chan.begin_time} - {chan.end_time}")
-            
-            # 清除画布
-            self.canvas.clear()
-            
-            # 检查是否有K线数据
-            if len(chan.lv_list) > 0:
-                first_lv = chan.lv_list[0]
-                kl_data = list(chan[first_lv])
-                self.log_text.append(f"📊 K线数据量: {len(kl_data)}")
-            else:
-                self.log_text.append("❌ 没有K线数据")
-                return
-            
-            # 尝试访问缠论结构以触发计算
-            try:
-                if hasattr(chan, 'bi_list'):
-                    bi_list = list(chan.bi_list)
-                    self.log_text.append(f"📊 笔列表长度: {len(bi_list)}")
-                if hasattr(chan, 'seg_list'):
-                    seg_list = list(chan.seg_list)
-                    self.log_text.append(f"📊 线段列表长度: {len(seg_list)}")
-                if hasattr(chan, 'zs_list'):
-                    zs_list = list(chan.zs_list)
-                    self.log_text.append(f"📊 中枢列表长度: {len(zs_list)}")
-            except Exception as e:
-                self.log_text.append(f"⚠️ 访问缠论结构时出错: {str(e)}")
-            
-            # 关闭旧的 figure 释放内存
+
+            self.log_text.append(f"📊 获取到 {len(chan_results)} 个级别的图表，正在渲染...")
             import matplotlib.pyplot as plt
+            
+            details_text = "缠论分析完成！\n\n"
+            first_chan = list(chan_results.values())[0]
+            details_text += f"股票: {first_chan.code}\n"
+            details_text += f"时间范围: {first_chan.begin_time} - {first_chan.end_time}\n"
+            
+            # 各级别 x_range 设置
+            x_range_map = {
+                "日线": 350,
+                "30分钟": 350,
+                "5分钟": 350,
+                "1分钟": 350,
+            }
+            
+            kl_name_map = {
+                "K_DAY": "日线",
+                "K_30M": "30分钟",
+                "K_5M": "5分钟",
+                "K_1M": "1分钟"
+            }
+
             plt.close('all')
 
-            # 根据时间级别设置合适的x_range值
-            current_kl_type = self.get_analysis_timeframe_kl_type()
-            x_range_map = {
-                KL_TYPE.K_DAY: 250,    # 日线显示250根K线
-                KL_TYPE.K_30M: 150,    # 30分钟显示150根K线
-                KL_TYPE.K_5M: 330,     # 5分钟显示330根K线（港股1周）
-                KL_TYPE.K_1M: 330,     # 1分钟显示330根K线（港股1天）
-            }
-            x_range = x_range_map.get(current_kl_type, 0)
-            
-            # 获取控件宽度，计算合适的图表尺寸
-            canvas_width = self.canvas.width()
-            dpi = 100
-            fig_width = canvas_width / dpi
-            fig_height = fig_width * 0.6  # 宽高比约 5:3
-
-            plot_para = {
-                "figure": {
-                    "x_range": x_range,
-                    "w": fig_width,
-                    "h": fig_height,
+            for kl_name, chan in chan_results.items():
+                tf_name = kl_name_map.get(kl_name)
+                if not tf_name or tf_name not in self.tf_frames:
+                    continue
+                
+                tf_frame = self.tf_frames[tf_name]
+                tf_layout = tf_frame.layout()
+                
+                if len(chan.lv_list) == 0:
+                    continue
+                    
+                first_lv = chan.lv_list[0]
+                kl_data = list(chan[first_lv])
+                
+                x_range = x_range_map.get(tf_name, 150)
+                
+                fig_width = max(5, tf_frame.width() / 100)
+                fig_height = max(3, tf_frame.height() / 100)
+                
+                plot_para = {
+                    "figure": {
+                        "x_range": x_range,
+                        "w": fig_width,
+                        "h": fig_height,
+                    }
                 }
-            }
-
-            # 获取图表配置
-            plot_config = {
-                "plot_kline": True,  # 显示K线
-                "plot_kline_combine": True,  # 显示合并K线
-                "plot_bi": True,  # 显示笔
-                "plot_seg": True,  # 显示线段
-                "plot_zs": True,  # 显示中枢
-                "plot_macd": True,  # 显示MACD
-                "plot_bsp": True,  # 显示买卖点
-            }
-            plot_driver = CPlotDriver(chan, plot_config=plot_config, plot_para=plot_para)
+                plot_config = {
+                    "plot_kline": True, "plot_kline_combine": True,
+                    "plot_bi": True, "plot_seg": True, "plot_zs": True,
+                    "plot_macd": True, "plot_bsp": True,
+                }
+                plot_driver = CPlotDriver(chan, plot_config=plot_config, plot_para=plot_para)
+                
+                # 清理旧的canvas
+                while tf_layout.count() > 0:
+                    item = tf_layout.takeAt(0)
+                    if item.widget():
+                        item.widget().deleteLater()
+                
+                # 重新创建图表，避免重影和缩放问题
+                new_canvas = FigureCanvas(plot_driver.figure)
+                new_canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+                
+                tf_layout.addWidget(new_canvas)
+                
+                first_lv_data = chan[first_lv]
+                bi_count = len(list(first_lv_data.bi_list)) if hasattr(first_lv_data, 'bi_list') and first_lv_data.bi_list is not None else 0
+                seg_count = len(list(first_lv_data.seg_list)) if hasattr(first_lv_data, 'seg_list') and first_lv_data.seg_list is not None else 0
+                zs_count = len(list(first_lv_data.zs_list)) if hasattr(first_lv_data, 'zs_list') and first_lv_data.zs_list is not None else 0
+                details_text += f"[{tf_name}] 数据源: {chan.data_src} | K线: {len(kl_data)} | 笔: {bi_count} | 段: {seg_count} | 中枢: {zs_count}\n"
+                
+            self.analysis_detail_text.setPlainText(details_text)
+            self.log_text.append("✅ 图表渲染完成")
             
-            # 将生成的figure赋给canvas
-            self.canvas.fig = plot_driver.figure
-            self.canvas.figure = plot_driver.figure
-            # 刷新画布
-            self.canvas.draw()
-            self.toolbar.update()
-            # 显示分析详情
-            bi_count = len(list(chan.bi_list)) if hasattr(chan, 'bi_list') and chan.bi_list is not None else 0
-            seg_count = len(list(chan.seg_list)) if hasattr(chan, 'seg_list') and chan.seg_list is not None else 0
-            zs_count = len(list(chan.zs_list)) if hasattr(chan, 'zs_list') and chan.zs_list is not None else 0
-            
-            self.analysis_detail_text.setPlainText(f"缠论分析完成！\n\n"
-                                                  f"股票: {chan.code}\n"
-                                                  f"时间范围: {chan.begin_time} - {chan.end_time}\n"
-                                                  f"数据源: {chan.data_src}\n"
-                                                  f"笔数量: {bi_count}\n"
-                                                  f"线段数量: {seg_count}\n"
-                                                  f"中枢数量: {zs_count}")
-            
-            self.log_text.append(f"✅ 图表绘制完成")
-
         except Exception as e:
-            self.log_text.append(f"❌ 图表绘制失败: {str(e)}")
+            self.log_text.append(f"❌ 渲染图表失败: {str(e)}")
             import traceback
             self.log_text.append(f"详细错误: {traceback.format_exc()}")
 
@@ -1625,6 +1099,42 @@ class TraderGUI(QMainWindow):
                 import traceback
                 self.log_text.append(f"详细错误: {traceback.format_exc()}")
             return []
+
+    def closeEvent(self, event):
+        """窗口关闭处理事件，确保安全退出所有线程"""
+        if hasattr(self, 'log_text'):
+            self.log_text.append("🛑 正在关闭程序...")
+        
+        # 停止所有子线程
+        if hasattr(self, 'update_db_thread') and self.update_db_thread and self.update_db_thread.isRunning():
+            self.update_db_thread.stop()
+            self.update_db_thread.wait(2000)
+            
+        if hasattr(self, 'scan_thread') and self.scan_thread and self.scan_thread.isRunning():
+            self.scan_thread.stop()
+            self.scan_thread.wait(2000)
+            
+        if hasattr(self, 'analysis_thread') and self.analysis_thread and self.analysis_thread.isRunning():
+            self.analysis_thread.wait(2000)
+            
+        if hasattr(self, 'repair_thread') and self.repair_thread and self.repair_thread.isRunning():
+            self.repair_thread.stop()
+            self.repair_thread.wait(2000)
+            
+        # 停止监控
+        if hasattr(self, 'futu_monitor') and self.futu_monitor:
+            try:
+                self.futu_monitor.stop()
+            except:
+                pass
+                
+        if hasattr(self, 'hk_trading_controller') and self.hk_trading_controller:
+            try:
+                self.hk_trading_controller.stop()
+            except:
+                pass
+                
+        event.accept()
 
 def main():
     """程序入口函数"""

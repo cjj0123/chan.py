@@ -2,6 +2,15 @@ import inspect
 from typing import Dict, List, Literal, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
+import platform
+
+# 解决 Mac/Windows 中文乱码问题
+if platform.system() == "Darwin":
+    plt.rcParams["font.sans-serif"] = ["Arial Unicode MS"]
+elif platform.system() == "Windows":
+    plt.rcParams["font.sans-serif"] = ["SimHei"]
+plt.rcParams["axes.unicode_minus"] = False
+
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle

@@ -84,34 +84,32 @@ MASTER_PROMPT = """系统角色定义
 * 虚线黑色/紫色：最新未完成、正在延伸的笔/线段。
 * 副图MACD：柱状图（面积/高度）和黄白线（DIF/DEA），用于判断动力衰竭（背驰）。
 
-# 信号代码字典
-[买入看涨信号 - BUY]
-* b1p/b1 (一买)：趋势背驰点。视觉特征：价格创新低，但对应MACD绿柱面积/黄白线未创新低（底背驰）。
-* b2/b2s (二买)：趋势回撤不创新低。视觉特征：底部抬高。
-* b3a/b3b (三买)：中枢突破与回踩。视觉特征：向上脱离橙色中枢，随后向下的Bi/Seg未跌破中枢上沿。
+# 信号分析指引（评分核心逻辑）
+1. 定位信号：在30M图找到最新（最右侧）的洋红色文字（如b1, b2, s1等）。
+2. 结构分析（形态）：
+    - 对于一买（b1）/一卖（s1）：必须发生在明显的下跌/上涨趋势末端，且突破前期低点/高点。
+    - 对于二买（b2）/二卖（s2）：必须是第一波反弹/回调后的二次探底/冲高，且不破前期极值。
+    - 对于三买（b3）/三卖（s3）：必须是突破橙色中枢后的回踩/回抽，且未跌回/突破中枢边缘。
+3. 动力学分析（背驰）：
+    - 关注MACD副图。买点看绿柱/黄白线下跌力度是否减弱（底背驰）；卖点看红柱/黄白线拉升力度是否衰竭（顶背驰）。
+4. 区间套分析（5M图，如果有）：
+    - 查看5M图右侧内部结构是否形成了同向的背驰或突破确认。
 
-[卖出看跌信号 - SELL]
-* s1p/s1 (一卖)：趋势背驰点。视觉特征：价格创新高，但对应MACD红柱面积/黄白线未创新高（顶背驰）。
-* s2/s2s (二卖)：趋势反弹不创新高。视觉特征：顶部降低。
-* s3a/s3b (三卖)：中枢跌破与回抽。视觉特征：向下脱离橙色中枢，随后向上的Bi/Seg未突破中枢下沿。
+# 评分标准 (0-100分)
+- **90-100分 (极高置信度)**: 结构极其标准完美，MACD背驰/动能支持极其清晰，且5M区间套共振强烈。
+- **70-89分 (较高置信度)**: 结构良好，MACD有明显背驰或动能缩减迹象。适合建仓。
+- **50-69分 (中立/勉强)**: 结构略有瑕疵（如假突破），MACD背驰不明显或存在模棱两可。
+- **0-49分 (低置信度/不建议)**: 结构严重不符、MACD动能与信号完全背离（如b1买点但MACD绿柱仍在放大），或者面临重大的阻力/支撑风险。
 
-# 你的评估任务（逐步推理）
-算法已在图上标记了信号。你不需要重新寻找信号，你的任务是**评估该信号的置信度/质量（0-100分）**。
-1. 定位：在30M图上找到洋红色标注的信号。
-2. 结构质检（30M）：判断该信号所处的Bi、Seg与ZhongShu的相对位置是否符合上述“信号字典”的定义。
-3. 动力学质检（30M）：观察MACD副图，对比进出中枢的力度，是否存在支持该信号的动能或背驰。
-4. 区间套质检（5M）：如果提供了5M图表，寻找5M图表最右侧是否形成了支持30M方向的内部结构（如30M的b1，在5M上是否呈现完整的下跌趋势背驰）。
-
-# JSON输出要求
-必须严格按照以下JSON格式输出，严禁包含任何JSON区块之外的文字。请务必**先输出分析过程，最后输出分数**：
+# JSON输出要求 (仅输出此JSON格式)
 {
-  "identified_signal": "提取图中的洋红色信号，如 b2",
+  "identified_signal": "图中洋红色标注的信号类型（如b2）",
   "direction": "BUY 或 SELL",
-  "step1_30m_structure_analysis": "描述信号在30M图上的视觉位置：笔/线段的形态，以及与最近橙色中枢的关系是否标准。",
-  "step2_30m_macd_analysis": "描述30M副图MACD的状态：说明价格极值与MACD柱状图/黄白线的关系，是否存在背驰或动能支持。",
-  "step3_5m_nested_analysis": "如果提供了5M图，描述其是否确认了30M的信号（例如寻找次级别背驰或突破）；如果仅提供单图，请填 'N/A_Single_Chart'。",
-  "conclusion": "综合以上步骤，总结该信号的可靠性。",
-  "key_risk": "指出潜在风险，如：MACD死叉向下、面临强阻力、5M级别结构矛盾等。",
+  "step1_30m_structure_analysis": "简述30M图笔/线段/中枢的形态是否支持此信号",
+  "step2_30m_macd_analysis": "简述MACD是否存在背驰或动能支持",
+  "step3_5m_nested_analysis": "简述5M区间套确认情况（若无图填 N/A_Single_Chart）",
+  "conclusion": "一句话核心研判",
+  "key_risk": "一句话风险提示",
   "score": 85
 }
 """
@@ -295,34 +293,32 @@ I will provide stock K-line charts at the same time point:
 * Dashed black/purple lines: Latest incomplete, extending Bi/Seg.
 * Sub-chart MACD: Histogram (area/height) and yellow-white lines (DIF/DEA), used to judge momentum exhaustion (divergence).
 
-# Signal Code Dictionary
-[Buy/Bullish Signals - BUY]
-* b1p/b1 (First Buy): Trend divergence point. Visual feature: Price makes new low, but corresponding MACD green histogram area/yellow-white lines do not make new low (bottom divergence).
-* b2/b2s (Second Buy): Trend retracement without making new low. Visual feature: Higher bottom.
-* b3a/b3b (Third Buy): Central pivot breakout and retest. Visual feature: Upward break from orange central pivot, followed by downward Bi/Seg that doesn't fall below central pivot upper boundary.
+# Signal Analysis Guide (Scoring Core Logic)
+1. Locate Signal: Find the latest (rightmost) magenta text on the 30M chart (e.g., b1, b2, s1, etc.).
+2. Structure Analysis (Morphology):
+   - For First Buy (b1) / First Sell (s1): Must occur at the end of a clear downtrend/uptrend, breaking previous low/high.
+   - For Second Buy (b2) / Second Sell (s2): Must be a secondary test after the initial rebound/pullback, without breaking the extreme.
+   - For Third Buy (b3) / Third Sell (s3): Must clearly break out of the orange central pivot and the pullback must not re-enter/cross the pivot edge.
+3. Dynamics Analysis (Divergence):
+   - Focus on MACD sub-chart. For buys, check if green histogram/yellow-white lines momentum has weakened (bottom divergence); for sells, check if red histogram/yellow-white lines momentum is exhausted (top divergence).
+4. Interval Nesting (if 5M chart exists):
+   - Check if the 5M chart's rightmost structure confirms the 30M direction via divergence or breakout.
 
-[Sell/Bearish Signals - SELL]
-* s1p/s1 (First Sell): Trend divergence point. Visual feature: Price makes new high, but corresponding MACD red histogram area/yellow-white lines do not make new high (top divergence).
-* s2/s2s (Second Sell): Trend rebound without making new high. Visual feature: Lower top.
-* s3a/s3b (Third Sell): Central pivot breakdown and retest. Visual feature: Downward break from orange central pivot, followed by upward Bi/Seg that doesn't break above central pivot lower boundary.
+# Scoring Criteria (0-100 points)
+- **90-100 pts (Extremely High Confidence)**: Flawless structural setup, obvious MACD divergence/momentum support, strong 5M nested confirmation.
+- **70-89 pts (High Confidence)**: Good structure, clear MACD divergence or momentum reduction. Suitable for taking position.
+- **50-69 pts (Neutral/Marginal)**: Flawed structure (e.g. false breakout), or ambiguous MACD divergence.
+- **0-49 pts (Low Confidence/Reject)**: Structure completely contradicts signal, MACD momentum completely opposite to signal (e.g., b1 buy but green MACD columns are still expanding), or facing major resistance/support risks.
 
-# Your Evaluation Task (Step-by-step Reasoning)
-The algorithm has already marked the signal on the chart. You don't need to find the signal again; your task is to **evaluate the confidence/quality of this signal (0-100 points)**.
-1. Localization: Find the magenta-marked signal on the 30M chart.
-2. Structure Quality Check (30M): Determine if the signal's position relative to Bi, Seg, and ZhongShu matches the definitions in the "Signal Dictionary".
-3. Dynamics Quality Check (30M): Observe the MACD sub-chart, compare momentum entering/exiting the central pivot, check for supporting momentum or divergence.
-4. Interval Nesting Quality Check (5M): If 5M chart is provided, look for 5M chart rightmost side forming internal structure supporting the 30M direction (e.g., 30M b1 should show complete downtrend divergence on 5M).
-
-# JSON Output Requirements
-Must output strictly in the following JSON format, no text outside JSON block allowed. **Output analysis process first, then score**:
+# JSON Output Requirements (ONLY output this JSON format)
 {
-  "identified_signal": "Extract the magenta signal from chart, e.g., b2",
+  "identified_signal": "Extracted magenta signal, e.g., b2",
   "direction": "BUY or SELL",
-  "step1_30m_structure_analysis": "Describe signal's visual position on 30M chart: Bi/Seg morphology and relationship with nearest orange central pivot.",
-  "step2_30m_macd_analysis": "Describe 30M sub-chart MACD status: explain price extremes vs MACD histogram/yellow-white lines relationship, presence of divergence or momentum support.",
-  "step3_5m_nested_analysis": "If 5M chart provided, describe if it confirms 30M signal (e.g., finding sub-level divergence or breakout); if single chart only, fill 'N/A_Single_Chart'.",
-  "conclusion": "Summarize signal reliability based on above steps.",
-  "key_risk": "Point out potential risks, e.g.: MACD death cross downward, facing strong resistance, 5M level structure contradiction, etc.",
+  "step1_30m_structure_analysis": "Briefly describe if 30M structure supports this signal",
+  "step2_30m_macd_analysis": "Briefly describe if MACD divergence or momentum supports it",
+  "step3_5m_nested_analysis": "Briefly describe 5M nested confirmation (if none, fill N/A_Single_Chart)",
+  "conclusion": "One sentence core judgment",
+  "key_risk": "One sentence risk warning",
   "score": 85
 }
 """

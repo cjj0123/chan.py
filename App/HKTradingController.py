@@ -122,6 +122,9 @@ class HKTradingController(QObject):
         # 用于停止扫描的标志
         self._is_running = False
 
+        # 视觉评分缓存 (code_time_type -> score_dict)
+        self.visual_score_cache = {}
+
         self.log_message.emit("✅ 港股交易控制器初始化完成")
 
     def _load_executed_signals(self) -> Dict:
@@ -200,12 +203,12 @@ class HKTradingController(QObject):
             ret, data = self.quote_ctx.get_stock_basicinfo(Market.HK, code_list=[code])
             if ret == RET_OK and not data.empty:
                 info = data.iloc[0].to_dict()
-                # 获取实时报价
-                ret_quote, quote_data = self.quote_ctx.get_stock_quote([code])
-                if ret_quote == RET_OK and not quote_data.empty:
-                    quote = quote_data.iloc[0]
+                # 获取实时报价，使用 get_market_snapshot 替代无需订阅的 get_stock_quote
+                ret_snap, snap_data = self.quote_ctx.get_market_snapshot([code])
+                if ret_snap == RET_OK and not snap_data.empty:
+                    quote = snap_data.iloc[0]
                     info['current_price'] = quote['last_price']
-                    info['lot_size'] = quote['lot_size']
+                    info['lot_size'] = quote.get('lot_size', info.get('lot_size', 100))
                 else:
                     # 尝试从基础信息中获取价格作为备选
                     if 'price' in info and info['price'] > 0:
@@ -514,13 +517,20 @@ class HKTradingController(QObject):
     def run_scan_and_trade(self):
         """
         执行完整的扫描和交易流程。
-        这是供 GUI 调用的主要入口方法。
+        这是供 GUI 调用的主要入口方法。内部包含循环机制。
         """
         self._is_running = True
-        self.log_message.emit("🚀 开始港股自动化扫描与交易流程...")
+        self.log_message.emit("🚀 启动港股自动化扫描与交易守护进程 (5分钟循环)...")
         
-        # 记录开始时间用于性能监控
-        start_time = time.time()
+        while self._is_running:
+            # 检查是否在交易时间内
+            if not self.is_trading_time():
+                self.log_message.emit("非交易时间，等待 60 秒后重试...")
+                time.sleep(60)
+                continue
+                
+            # 记录开始时间用于性能监控
+            start_time = time.time()
 
         try:
             # 1. 获取自选股列表
@@ -671,10 +681,20 @@ class HKTradingController(QObject):
             
             # 记录失败的扫描
             self.performance_monitor.record_execution(False)
+            
+            if self._is_running:
+                self.log_message.emit("💤 发生异常，休息 60 秒后重试...")
+                time.sleep(60)
 
-        finally:
-            self._is_running = False
-            self.log_message.emit("🔚 港股自动化扫描与交易流程结束。")
+        if self._is_running:
+            self.log_message.emit("💤 本轮扫描结束，休眠 5 分钟后进入下一轮。")
+            # 不阻碍线程停止，拆分 sleep
+            for _ in range(300):
+                if not self._is_running:
+                    break
+                time.sleep(1)
+        
+        self.log_message.emit("🔚 港股自动化扫描与交易守护进程已退出。")
 
     def _batch_score_signals(self, signals_with_charts: List[Dict]) -> List[Dict]:
         """批量评分信号"""
@@ -987,10 +1007,22 @@ class HKTradingController(QObject):
         chart_paths = signal['chart_paths']
         bsp_type = signal['bsp_type']  # 使用信号类型作为额外信息
         
+        # 构建缓存键: 股票代码_时间_信号类型
+        bsp_time_str = signal.get('chan_result', {}).get('bsp_datetime_str', '')
+        cache_key = f"{code}_{bsp_time_str}_{bsp_type}"
+        
         try:
-            # 使用线程池执行器来异步调用同步的evaluate方法
-            loop = asyncio.get_event_loop()
-            visual_result = await loop.run_in_executor(None, self.visual_judge.evaluate, chart_paths, bsp_type)
+            # 检查缓存
+            if cache_key in self.visual_score_cache:
+                self.log_message.emit(f"⚡ {code} 命中视觉评分缓存 ({cache_key})")
+                visual_result = self.visual_score_cache[cache_key]
+            else:
+                # 使用线程池执行器来异步调用同步的evaluate方法
+                loop = asyncio.get_event_loop()
+                visual_result = await loop.run_in_executor(None, self.visual_judge.evaluate, chart_paths, bsp_type)
+                if visual_result and visual_result.get('action') != 'ERROR':
+                    # 只缓存成功的评分
+                    self.visual_score_cache[cache_key] = visual_result
             
             score = visual_result.get('score', 0)
             action = visual_result.get('action', 'WAIT')
@@ -1281,7 +1313,16 @@ class HKTradingController(QObject):
             score = 0
             if chart_paths:
                 try:
-                    visual_result = self.visual_judge.evaluate(chart_paths, chan_result['bsp_type'])
+                    # 检查缓存
+                    cache_key = f"{code}_{signal_time}_{chan_result['bsp_type']}"
+                    if cache_key in self.visual_score_cache:
+                        self.log_message.emit(f"⚡ {code} 实时信号命中视觉缓存 ({cache_key})")
+                        visual_result = self.visual_score_cache[cache_key]
+                    else:
+                        visual_result = self.visual_judge.evaluate(chart_paths, chan_result['bsp_type'])
+                        if visual_result and visual_result.get('action') != 'ERROR':
+                            self.visual_score_cache[cache_key] = visual_result
+                            
                     score = visual_result.get('score', 0)
                     self.log_message.emit(f"{code} 视觉评分: {score}/100")
                 except Exception as e:

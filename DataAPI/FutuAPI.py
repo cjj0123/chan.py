@@ -74,7 +74,7 @@ class CFutuAPI(CCommonStockApi):
                         end=self.end_date,
                         ktype=f_ktype,
                         autype=f_autype,
-                        page_token=page_token
+                        page_req_key=page_token
                     )
                 
                 if ret == RET_OK:
@@ -127,7 +127,8 @@ class CFutuAPI(CCommonStockApi):
                     }
                     yield CKLine_Unit(item_dict)
             else:
-                print(f"❌ [FutuAPI] No data retrieved for {stock_code}")
+                error_msg = data if ret != RET_OK else "Empty dataset"
+                raise ValueError(f"FutuAPI returned no data for {stock_code}. Reason: {error_msg}")
                 
         except Exception as e:
             print(f"🔥 [FutuAPI] Online Error: {e}")
