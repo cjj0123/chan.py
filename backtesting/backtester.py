@@ -288,26 +288,50 @@ class BacktestReporter:
         return perf
 
     def _generate_equity_curve(self) -> List[Dict[str, Any]]:
-        """生成权益曲线：记录每笔交易后的总资产净值"""
+        """生成权益曲线：记录每笔交易后的总资产净值（现金 + 持仓市值）"""
         if not self.broker.trades:
             return []
-        
+
         equity_points = []
-        
-        # 初始点
-        first_trade_time = self.broker.trades[0]['time']
+        running_cash = float(self.broker.initial_funds)
+        running_positions = {}  # {code: {qty, avg_price}}
+
         equity_points.append({
-            'time': str(first_trade_time),
-            'value': float(self.broker.initial_funds)
+            'time': str(self.broker.trades[0]['time']),
+            'value': running_cash
         })
-        
-        # 跟踪每笔交易后的资金状态
+
         for trade in self.broker.trades:
+            code = trade['code']
+            action = str(trade.get('action', ''))
+            qty = trade.get('qty', 0)
+            price = trade.get('price', 0.0)
+            cost = trade.get('cost', 0.0)
+
+            if 'BUY' in action:
+                running_cash -= (price * qty + cost)
+                if code not in running_positions:
+                    running_positions[code] = {'qty': 0, 'avg_price': price}
+                old_qty = running_positions[code]['qty']
+                new_qty = old_qty + qty
+                old_val = old_qty * running_positions[code]['avg_price']
+                running_positions[code]['avg_price'] = (old_val + price * qty) / new_qty if new_qty > 0 else price
+                running_positions[code]['qty'] = new_qty
+            elif 'SELL' in action or 'STOP' in action:
+                running_cash += (price * qty - cost)
+                if code in running_positions:
+                    running_positions[code]['qty'] = max(0, running_positions[code]['qty'] - qty)
+                    if running_positions[code]['qty'] == 0:
+                        del running_positions[code]
+
+            # 总净值 = 现金 + 持仓按买入均价计算
+            positions_value = sum(p['qty'] * p['avg_price'] for p in running_positions.values())
+            total_value = max(0.0, running_cash + positions_value)
             equity_points.append({
                 'time': str(trade['time']),
-                'value': float(trade.get('funds_after', self.broker.available_funds))
+                'value': total_value
             })
-        
+
         return equity_points
 
     def _calculate_max_drawdown(self, equity_curve: List[Dict[str, Any]]) -> float:
