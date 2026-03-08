@@ -184,6 +184,12 @@ class BacktestTab(QWidget):
             lbl.setStyleSheet("font-size: 14px; font-weight: bold;")
             metrics_layout.addWidget(lbl)
             
+        # 刷新按钮
+        self.refresh_btn = QPushButton("🔄 刷新最新结果")
+        self.refresh_btn.setFixedWidth(120)
+        self.refresh_btn.clicked.connect(self.load_latest_report)
+        metrics_layout.addWidget(self.refresh_btn)
+            
         metrics_group.setLayout(metrics_layout)
         right_layout.addWidget(metrics_group)
         
@@ -242,12 +248,49 @@ class BacktestTab(QWidget):
     def load_charts(self, equity_path: str, dist_path: str):
         if os.path.exists(equity_path):
             pixmap = QPixmap(equity_path)
-            # 缩放适应宽度
-            self.equity_curve_label.setPixmap(pixmap.scaled(self.equity_curve_label.width(), 800, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            # 缩放适应宽度, 若宽度还没计算出来则用默认值 800
+            target_w = self.equity_curve_label.width()
+            if target_w < 100: target_w = 800
+            self.equity_curve_label.setPixmap(pixmap.scaled(target_w, 800, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
         
         if os.path.exists(dist_path):
             pixmap2 = QPixmap(dist_path)
-            self.trade_dist_label.setPixmap(pixmap2.scaled(self.trade_dist_label.width(), 600, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            target_w = self.trade_dist_label.width()
+            if target_w < 100: target_w = 800
+            self.trade_dist_label.setPixmap(pixmap2.scaled(target_w, 600, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+
+    def load_latest_report(self):
+        """扫描目录并加载最新的回测报告"""
+        output_dir = "backtest_reports"
+        if not os.path.exists(output_dir):
+            self.log("❌ 报告目录不存在")
+            return
+            
+        files = [f for f in os.listdir(output_dir) if f.startswith("results_") and f.endswith(".json")]
+        if not files:
+            self.log("ℹ️ 未发现任何回测报告")
+            return
+            
+        # 按文件名（含时间戳）排序，取最后一个
+        files.sort()
+        latest_file = os.path.join(output_dir, files[-1])
+        
+        try:
+            with open(latest_file, 'r', encoding='utf-8') as f:
+                results = json.load(f)
+            
+            self.log(f"🔄 正在加载最新报告: {files[-1]}")
+            self.update_metrics(results)
+            
+            # 自动推导图表路径 (由于保存时使用了相同时间戳)
+            timestamp = files[-1].replace("results_", "").replace(".json", "")
+            equity_path = os.path.join(output_dir, f"equity_curve_{timestamp}.png")
+            dist_path = os.path.join(output_dir, f"trade_distribution_{timestamp}.png")
+            
+            self.load_charts(equity_path, dist_path)
+            self.log("✅ 刷新成功")
+        except Exception as e:
+            self.log(f"❌ 加载报告失败: {str(e)}")
 
     def run_backtest(self):
         if self.backtest_thread and self.backtest_thread.isRunning():
@@ -294,8 +337,8 @@ class BacktestTab(QWidget):
         
         if success:
             self.log("✅ 开始更新指标和图表面板...")
-            self.update_metrics(results)
-            if 'equity_curve_path' in results and 'trade_dist_path' in results:
-                self.load_charts(results['equity_curve_path'], results['trade_dist_path'])
-            QMessageBox.information(self, "回测完成", "回测执行成功并已渲染出图表！")
+            # 延迟一小会儿确保图片文件已完全写入磁盘并能被加载
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(500, self.load_latest_report)
+            QMessageBox.information(self, "回测完成", "回测执行成功并已更新面板！")
             self.log("所有回测流程结束。")
