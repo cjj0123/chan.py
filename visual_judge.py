@@ -116,7 +116,20 @@ MASTER_PROMPT = """系统角色定义
   "key_risk": "一句话风险提示",
   "score": 85
 }
+
+--------------------------------------------------------------------------------
+# 补充规则与容错说明 (Padding tokens to satisfy Gemini caching minimums)
+# 1. 如果K线图数据时间不足或因网络导致断线，请尽量在现有图表中提取有效笔和线段。
+# 2. 如果MACD面积肉眼无法直接看出背驰，重点看当前柱子是否缩短/黄白线是否钝化。
+# 3. 区间套必须看到内部结构的背驰才算买点/卖点。
+# 4. 所有分析最终必须统一输出合法的 JSON，任何多余的开头结尾描述一概忽略。
+# 5. 对于不同宽度的显示设备，忽略分辨率问题，只认图表内部的相对几何结构。
+# 6. 为了满足 Google Caching API 的最小 1024 token 限制，这里补充一些长尾细节。
+# 7. 例如：缠中说禅要求买卖点必须是绝对的精确，但量化中允许有1%的毛刺。
+# 8. 在多级别体系下，大级别决定方向，小级别决定进出场点。请务必结合 30M 和 5M 综合判定。
+--------------------------------------------------------------------------------
 """
+
 
 
 ENGLISH_MASTER_PROMPT = """System Role Definition
@@ -164,6 +177,15 @@ I will provide stock K-line charts at the same time point:
   "key_risk": "One sentence risk warning",
   "score": 85
 }
+
+--------------------------------------------------------------------------------
+# 补充规则与容错说明 (Padding tokens to satisfy Gemini caching minimums)
+# 1. 如果K线图数据时间不足或因网络导致断线，请尽量在现有图表中提取有效笔和线段。
+# 2. 如果MACD面积肉眼无法直接看出背驰，重点看当前柱子是否缩短/黄白线是否钝化。
+# 3. 区间套必须看到内部结构的背驰才算买点/卖点。
+# 4. 所有分析最终必须统一输出合法的 JSON，任何多余的开头结尾描述一概忽略。
+# 5. 对于不同宽度的显示设备，忽略分辨率问题，只认图表内部的相对几何结构。
+--------------------------------------------------------------------------------
 """
 
 class GeminiCacheManager:
@@ -180,9 +202,9 @@ class GeminiCacheManager:
             return None
             
         try:
-            # 检查现有存活的缓存 (TTL假定为最少60分钟，我们设50分钟过期重建)
+            # 检查现有存活的缓存 (TTL调整为12小时，我们设11.5小时过期重建)
             now = datetime.datetime.now()
-            if self.cache and self.last_created and (now - self.last_created).total_seconds() < 3000:
+            if self.cache and self.last_created and (now - self.last_created).total_seconds() < 41400:
                 # 缓存依然有效
                 return genai.GenerativeModel.from_cached_content(cached_content=self.cache)
             
@@ -194,12 +216,12 @@ class GeminiCacheManager:
                 pass
 
             # 创建新缓存
-            print(f"   ❄️  [GeminiCache] 正在云端创建指令缓存 (TTL: 60分钟)...")
+            print(f"   ❄️  [GeminiCache] 正在云端创建指令缓存 (TTL: 12小时/覆盖单日交易时间)...")
             self.cache = caching.CachedContent.create(
                 model=f'models/{model_id}',
                 display_name=self.cache_name,
                 system_instruction=MASTER_PROMPT,
-                ttl=datetime.timedelta(minutes=60),
+                ttl=datetime.timedelta(minutes=720),
             )
             self.last_created = now
             print(f"   ✅  [GeminiCache] 上下文缓存创建成功，大幅降低后续请求 Token 消耗！")
