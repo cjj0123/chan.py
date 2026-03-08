@@ -265,7 +265,7 @@ class HKTradingController(QObject):
             start_time_5m = end_time - timedelta(days=7)
             start_time_5m_str = start_time_5m.strftime("%Y-%m-%d")
             
-            # 顺序获取30M和5M数据（与A股系统保持一致）
+            # 顺序获取30M数据（5M数据延迟到发现信号后再获取，以节省API调用）
             try:
                 # 获取30M数据
                 chan_30m = CChan(
@@ -274,16 +274,6 @@ class HKTradingController(QObject):
                     end_time=end_time_str,
                     data_src=DATA_SRC.FUTU,
                     lv_list=[KL_TYPE.K_30M],
-                    config=self.chan_config
-                )
-                
-                # 获取5M数据（使用7天范围确保获取最新数据）
-                chan_5m = CChan(
-                    code=code,
-                    begin_time=start_time_5m_str,
-                    end_time=end_time_str,
-                    data_src=DATA_SRC.FUTU,
-                    lv_list=[KL_TYPE.K_5M],
                     config=self.chan_config
                 )
             except Exception as e:
@@ -302,14 +292,32 @@ class HKTradingController(QObject):
                 self.log_message.emit(f"{code} 30分钟K线数据不足({kline_30m_count}根)，跳过分析")
                 return None
             
-            # 检查5M数据是否足够
-            if chan_5m is not None:
-                kline_5m_count = 0
-                for _ in chan_5m[0].klu_iter():
-                    kline_5m_count += 1
-                if kline_5m_count < 20:  # 如果5M数据少于20根K线，则认为数据不足
-                    self.log_message.emit(f"{code} 5分钟K线数据不足({kline_5m_count}根)，仅使用30M数据进行分析")
-                    chan_5m = None
+            # 从30M级别获取最新的买卖点（主分析基于30M）
+            latest_bsps = chan_30m.get_latest_bsp(idx=0, number=1)
+            if not latest_bsps:
+                return None  # 无信号，不再继续获取 5M 数据
+            
+            # ====== 发现买卖点，按需获取 5M 数据（用于后续图表生成） ======
+            chan_5m = None
+            try:
+                chan_5m = CChan(
+                    code=code,
+                    begin_time=start_time_5m_str,
+                    end_time=end_time_str,
+                    data_src=DATA_SRC.FUTU,
+                    lv_list=[KL_TYPE.K_5M],
+                    config=self.chan_config
+                )
+                
+                # 检查5M数据是否足够
+                if chan_5m is not None:
+                    kline_5m_count = 0
+                    for _ in chan_5m[0].klu_iter():
+                        kline_5m_count += 1
+                    if kline_5m_count < 20:
+                        chan_5m = None
+            except Exception as e:
+                self.log_message.emit(f"{code} 获取5M次级别数据失败 (非致命): {e}")
             
             # 从30M级别获取最新的买卖点（主分析基于30M）
             latest_bsps = chan_30m.get_latest_bsp(idx=0, number=1)
@@ -436,7 +444,29 @@ class HKTradingController(QObject):
                 self.log_message.emit(f"生成图表异常 {code}: {e}")
                 return []
 
-    def execute_trade(self, code: str, action: str, quantity: int, price: float) -> bool:
+    def is_in_continuous_trading_session(self) -> bool:
+        """
+        判断当前是否处于港股持续交易时段 (CTS)
+        上午: 09:30 - 12:00
+        下午: 13:00 - 16:00
+        """
+        now = datetime.now()
+        # 港股交易日判断 (简单版，实际可结合 market_calendars)
+        if now.weekday() >= 5:  # 周六日不交易
+            return False
+            
+        current_time = now.time()
+        morning_start = datetime.strptime("09:30", "%H:%M").time()
+        morning_end = datetime.strptime("12:00", "%H:%M").time()
+        afternoon_start = datetime.strptime("13:00", "%H:%M").time()
+        afternoon_end = datetime.strptime("16:00", "%H:%M").time()
+        
+        is_morning = morning_start <= current_time <= morning_end
+        is_afternoon = afternoon_start <= current_time <= afternoon_end
+        
+        return is_morning or is_afternoon
+
+    def execute_trade(self, code: str, action: str, quantity: int, price: float, urgent: bool = False) -> bool:
         """
         执行交易
 
@@ -445,56 +475,54 @@ class HKTradingController(QObject):
             action: 交易动作 ('BUY' or 'SELL')
             quantity: 数量
             price: 价格
-
-        Returns:
-            交易是否成功
+            urgent: 是否为紧急模式 (如止损、清仓)
         """
         if quantity <= 0:
             self.log_message.emit(f"无效数量 {quantity}，跳过交易 {code}")
             return False
         
         try:
-            if action.upper() == 'BUY':
-                # 买单使用略高价格确保成交，价格保留 3 位小数 (港股精度)
-                order_price = round(price * 1.01, 3)
+            is_cts = self.is_in_continuous_trading_session()
+            trd_side = TrdSide.BUY if action.upper() == 'BUY' else TrdSide.SELL
+            
+            # 策略：如果是紧急模式且在持续交易时段，使用市价单保证成交
+            if urgent and is_cts:
+                self.log_message.emit(f"🚀 {code} 触发紧急模式，使用【市价单】执行 {action}")
                 ret, data = self.trd_ctx.place_order(
-                    price=order_price,
+                    price=0,  # 市价单价格传0
                     qty=quantity,
                     code=code,
-                    trd_side=TrdSide.BUY,
-                    order_type=OrderType.NORMAL,  # 港股增强限价单
+                    trd_side=trd_side,
+                    order_type=OrderType.MARKET,
                     trd_env=self.trd_env
                 )
-                
-                if ret == RET_OK:
-                    order_id = data.iloc[0]['order_id']
-                    self.log_message.emit(f"买入订单已提交 {code}: 数量={quantity}, 价格={order_price}, 订单ID={order_id}")
-                    return True
-                else:
-                    self.log_message.emit(f"买入订单失败 {code}: {data}")
-                    return False
-                    
-            elif action.upper() == 'SELL':
-                # 卖单使用略低价格确保成交，价格保留 3 位小数 (港股精度)
-                order_price = round(price * 0.99, 3)
-                ret, data = self.trd_ctx.place_order(
-                    price=order_price,
-                    qty=quantity,
-                    code=code,
-                    trd_side=TrdSide.SELL,
-                    order_type=OrderType.NORMAL,  # 港股增强限价单
-                    trd_env=self.trd_env
-                )
-                
-                if ret == RET_OK:
-                    order_id = data.iloc[0]['order_id']
-                    self.log_message.emit(f"卖出订单已提交 {code}: 数量={quantity}, 价格={order_price}, 订单ID={order_id}")
-                    return True
-                else:
-                    self.log_message.emit(f"卖出订单失败 {code}: {data}")
-                    return False
             else:
-                self.log_message.emit(f"未知交易动作: {action}")
+                # 常规模式或非交易时段，使用增强限价单
+                # 如果是紧急模式但不在 CTS，缓冲区从 1% 扩大到 3%
+                buffer = 0.03 if urgent else 0.01
+                if action.upper() == 'BUY':
+                    order_price = round(price * (1 + buffer), 3)
+                else:
+                    order_price = round(price * (1 - buffer), 3)
+                
+                mode_str = "紧急(回退)" if urgent else "常规"
+                self.log_message.emit(f"📝 {code} 使用【增强限价单】({mode_str}) 执行 {action}: 价格={order_price}")
+                
+                ret, data = self.trd_ctx.place_order(
+                    price=order_price,
+                    qty=quantity,
+                    code=code,
+                    trd_side=trd_side,
+                    order_type=OrderType.NORMAL,
+                    trd_env=self.trd_env
+                )
+            
+            if ret == RET_OK:
+                order_id = data.iloc[0]['order_id']
+                self.log_message.emit(f"✅ {action} 订单已提交 {code}: 订单ID={order_id}")
+                return True
+            else:
+                self.log_message.emit(f"❌ {action} 订单失败 {code}: {data}")
                 return False
                 
         except Exception as e:
@@ -554,205 +582,185 @@ class HKTradingController(QObject):
 
     def run_scan_and_trade(self):
         """
-        执行完整的扫描和交易流程。
-        这是供 GUI 调用的主要入口方法。内部包含循环机制。
+        执行循环扫描和交易流程。
+        - 快速回路 (Fast Loop, ~60s): 检查追踪止损、清仓申请、更新报价。
+        - 慢速策略扫描 (Slow Scan, ~30m): 基于 30 分钟 K 线边界触发完整缠论分析。
         """
         self._is_running = True
-        self.log_message.emit("🚀 启动港股自动化扫描与交易守护进程 (5分钟循环)...")
+        self.log_message.emit("🚀 启动港股双速自动化监控进程 (60s 风险监测 / 30m 策略扫描)...")
+        
+        # 初始化扫描时间为当前 Bar，避免启动时立即触发不完整的 Bar 分析
+        now = datetime.now()
+        last_strategy_scan_time = now.replace(minute=(now.minute // 30) * 30, second=0, microsecond=0)
         
         while self._is_running:
-            # 清理过期图表
-            self._cleanup_old_charts(hours=24)
-            
-            # 检查是否在交易时间内
-            if not self.is_trading_time():
-                self.log_message.emit("非交易时间，等待 60 秒后重试...")
-                time.sleep(60)
-                continue
+            try:
+                # 0. 基础维护
+                self._cleanup_old_charts(hours=24)
                 
-            # 记录开始时间用于性能监控
-            start_time = time.time()
+                # 检查是否在交易时间内
+                if not self.is_trading_time():
+                    self.log_message.emit("💤 非交易时间，等待 60 秒后重试...")
+                    for _ in range(60):
+                        if not self._is_running: break
+                        time.sleep(1)
+                    continue
+                
+                now = datetime.now()
+                # 计算属于哪个 30 分钟 K 线桶 (例如 10:29 -> 10:00, 10:31 -> 10:30)
+                current_bar_time = now.replace(minute=(now.minute // 30) * 30, second=0, microsecond=0)
+                
+                # 1. 快速风险监测 (每轮必跑)
+                self.log_message.emit(f"💓 [快速监测] 检查持仓风险与最新报价... ({now.strftime('%H:%M:%S')})")
+                watchlist_codes = self.get_watchlist_codes()
+                if not watchlist_codes:
+                    time.sleep(10)
+                    continue
 
-        try:
-            # 1. 获取自选股列表
-            watchlist_codes = self.get_watchlist_codes()
-            if not watchlist_codes:
-                self.log_message.emit("❌ 自选股列表为空，无法继续。")
+                # 批量更新价格并检查止损
+                self._check_trailing_stops()
+                
+                # 2. 慢速策略扫描触发逻辑
+                # 规则：如果当前 Bar 时间与上次不同，且已经过了 Bar 开始后 2 分钟（等待数据稳定）
+                should_scan_strategy = False
+                if last_strategy_scan_time != current_bar_time:
+                    # 额外等待 1 分钟让 30M 棒线在富途后端稳定
+                    if now.minute % 30 >= 1: 
+                        should_scan_strategy = True
+                
+                if should_scan_strategy:
+                    self.log_message.emit(f"🔍 [策略扫描] 捕获到新的 30M 周期 ({current_bar_time.strftime('%H:%M')})，启动完整缠论分析...")
+                    # 执行原有的完整扫描逻辑
+                    self._perform_full_strategy_scan(watchlist_codes)
+                    last_strategy_scan_time = current_bar_time
+                    self.log_message.emit("✅ [策略扫描] 本轮分析完成。")
+                
+                # 进度清理
                 self.scan_finished.emit(0, 0, 0, 0)
-                return
+                
+                # 休眠 60 秒（风险监测频率）
+                self.log_message.emit("💤 监测中，60秒后进入下一轮快速巡检...")
+                for _ in range(60):
+                    if not self._is_running: break
+                    time.sleep(1)
 
+            except Exception as e:
+                self.log_message.emit(f"❌ 运行循环发生异常: {e}")
+                time.sleep(10)
+
+        self.log_message.emit("🔚 港股自动化监控进程已安全退出。")
+
+    def _perform_full_strategy_scan(self, watchlist_codes: List[str]):
+        """原有的完整缠论分析和交易决策逻辑"""
+        try:
+            start_time = time.time()
             total_stocks = len(watchlist_codes)
-            self.log_message.emit(f"📊 准备分析 {total_stocks} 只港股...")
-
-            # 2. 收集候选信号
+            
+            # 1. 收集候选信号
             candidate_signals = []
             for i, code in enumerate(watchlist_codes, 1):
-                if not self._is_running:
-                    break
-                self.scan_progress.emit(i, total_stocks, f"分析 {code}")
+                if not self._is_running: break
+                self.scan_progress.emit(i, total_stocks, f"策略分析 {code}")
+                
                 # 获取股票信息
                 stock_info = self.get_stock_info(code)
-                if not stock_info:
-                    self.log_message.emit(f"{code} 股票信息获取失败，跳过")
-                    continue
+                if not stock_info: continue
                 
-                current_price = stock_info['current_price']
-                if current_price <= 0:
-                    self.log_message.emit(f"{code} 实时报价无效（价格: {current_price}），尝试通过缠论分析获取价格...")
-                    # 先进行缠论分析，看是否能获取到有效价格
-                    chan_result = self.analyze_with_chan(code)
-                    if not chan_result:
-                        self.log_message.emit(f"{code} 缠论分析也失败，跳过")
-                        continue
-                    
-                    # 如果缠论分析成功，使用其中的价格
-                    bsp_price = chan_result.get('bsp_price', 0)
-                    if bsp_price > 0:
-                        current_price = bsp_price
-                        stock_info['current_price'] = current_price
-                        self.log_message.emit(f"{code} 使用缠论分析价格: {current_price}")
-                    else:
-                        self.log_message.emit(f"{code} 缠论分析价格也无效（{bsp_price}），跳过")
-                        continue
-                
-                # 缠论分析
+                # 缠论分析 (30M 主信号)
                 chan_result = self.analyze_with_chan(code)
-                if not chan_result:
-                    self.log_message.emit(f"{code} 无缠论信号，跳过")
-                    continue
+                if not chan_result: continue
                 
-                # 记录信号类型
+                # 提取信号基本属性
                 bsp_type = chan_result.get('bsp_type', '未知')
                 is_buy = chan_result.get('is_buy_signal', False)
                 bsp_time_str = chan_result.get('bsp_datetime_str', '')
-                bsp_type_display = f"{'b' if is_buy else 's'}{bsp_type}"
+                current_price = stock_info['current_price']
                 
-                # ML 增加过滤 (仅对买点严格校验)
-                ml_passed = True
-                if is_buy and hasattr(chan_result.get('chan_analysis', {}), 'get_bsp'):
-                    chan_env = chan_result['chan_analysis']
-                    bsp_list = chan_env.get_bsp()
-                    if bsp_list:
-                        last_bsp = bsp_list[-1]
-                        ml_res = self.signal_validator.validate_signal(chan_env, last_bsp, threshold=self.ml_threshold)
-                        if not ml_res['is_valid']:
-                            self.log_message.emit(f"🤖 {code} {bsp_type_display} 触发 ML 过滤: {ml_res['msg']} (Prob: {ml_res['prob']:.2f})")
-                            ml_passed = False
-                        else:
-                            self.log_message.emit(f"✨ {code} {bsp_type_display} ML 校验通过 (Prob: {ml_res['prob']:.2f})")
-                            
-                if not ml_passed:
+                # ML / 重复 / 持仓 过滤逻辑 (保持原有逻辑)
+                if not self._validate_and_filter_signal(code, chan_result, stock_info):
                     continue
                 
-                # 信号去重逻辑
-                last_executed_time = self.executed_signals.get(code, "")
-                if last_executed_time == bsp_time_str:
-                    self.log_message.emit(f"{code} {bsp_type_display} 信号时间 {bsp_time_str} 已执行过，跳过重复处理")
-                    continue
-                    
-                last_discovered_time = self.discovered_signals.get(code, "")
-                if last_discovered_time == bsp_time_str:
-                    self.log_message.emit(f"{code} {bsp_type_display} 信号时间 {bsp_time_str} 已发现过，跳过重复通知")
-                    continue
-
-                # 持仓过滤
-                position_qty = self.get_position_quantity(code)
-                if is_buy and position_qty > 0:
-                    self.log_message.emit(f"{code} 已有持仓({position_qty}股)，跳过买入")
-                    continue
-                
-                if not is_buy and position_qty <= 0:
-                    self.log_message.emit(f"{code} 无持仓，跳过卖出")
-                    continue
-                
-                # 待成交订单过滤
-                side_str = 'BUY' if is_buy else 'SELL'
-                if self.check_pending_orders(code, side_str):
-                    self.log_message.emit(f"{code} 存在活跃 {side_str} 订单，跳过下单")
-                    continue
-                
-                # 收集候选信号
+                # 收集有效信号
                 signal_data = {
                     'code': code,
                     'is_buy': is_buy,
                     'bsp_type': bsp_type,
                     'current_price': current_price,
-                    'position_qty': position_qty,
+                    'position_qty': self.get_position_quantity(code),
                     'lot_size': stock_info.get('lot_size', 100),
                     'chan_result': chan_result
                 }
                 
-                # 记录已发现的信号
+                # 记录已发现
                 if bsp_time_str:
                     self.discovered_signals[code] = bsp_time_str
                     self._save_discovered_signals()
                 
                 candidate_signals.append(signal_data)
-                self.log_message.emit(f"✅ {code} 候选信号已收集")
 
-            # 3. 生成图表
-            signals_with_charts = []
-            for i, signal in enumerate(candidate_signals, 1):
-                if not self._is_running:
-                    break
-                self.scan_progress.emit(i, len(candidate_signals), f"生成图表 {signal['code']}")
-                chart_paths = self.generate_charts(signal['code'], signal['chan_result']['chan_analysis'])
-                if chart_paths:
-                    signal_with_chart = signal.copy()
-                    signal_with_chart['chart_paths'] = chart_paths
-                    signals_with_charts.append(signal_with_chart)
-                    self.log_message.emit(f"✅ {signal['code']} 图表已生成 ({len(chart_paths)} 张)")
-                else:
-                    self.log_message.emit(f"{signal['code']} 图表生成失败")
+            # 2. 生成图表 & 评分 & 执行
+            if candidate_signals:
+                scored_signals = self._process_candidate_signals(candidate_signals)
+                if scored_signals:
+                    available_funds = self.get_available_funds()
+                    self._execute_trades(scored_signals, available_funds)
 
-            # 4. 批量评分
-            if signals_with_charts:
-                scored_signals = self._batch_score_signals(signals_with_charts)
-                # 记录信号评分
-                for signal in scored_signals:
-                    self.performance_monitor.record_signal(signal['score'])
-            else:
-                scored_signals = []
-
-            # 5. 执行交易
-            available_funds = self.get_available_funds()
-            if scored_signals:
-                sell_signals, buy_signals, executed_sell, executed_buy, final_funds = self._execute_trades(
-                    scored_signals, available_funds
-                )
-            else:
-                sell_signals, buy_signals, executed_sell, executed_buy, final_funds = [], [], 0, 0, available_funds
-
-            # 6. 发送完成信号
-            self.scan_finished.emit(executed_sell, executed_buy, 0, 0)
+            # 记录性能
+            duration = time.time() - start_time
+            self.performance_monitor.record_scan_performance(len(watchlist_codes), duration)
             
-            # 记录扫描性能数据
-            end_time = time.time()
-            duration = end_time - start_time
-            if duration > 0:
-                self.performance_monitor.record_scan_performance(len(watchlist_codes), duration)
-                self.log_message.emit(f"📊 性能监控: 扫描速度 {len(watchlist_codes)/duration:.2f} 只/秒")
-
         except Exception as e:
-            self.log_message.emit(f"❌ 扫描交易流程发生严重错误: {e}")
-            self.scan_finished.emit(0, 0, 0, 0)
-            
-            # 记录失败的扫描
-            self.performance_monitor.record_execution(False)
-            
-            if self._is_running:
-                self.log_message.emit("💤 发生异常，休息 60 秒后重试...")
-                time.sleep(60)
+            self.log_message.emit(f"⚠️ 策略扫描子流程错误: {e}")
 
-        if self._is_running:
-            self.log_message.emit("💤 本轮扫描结束，休眠 5 分钟后进入下一轮。")
-            # 不阻碍线程停止，拆分 sleep
-            for _ in range(300):
-                if not self._is_running:
-                    break
-                time.sleep(1)
+    def _validate_and_filter_signal(self, code, chan_result, stock_info) -> bool:
+        """封装原有的信号验证和过滤逻辑"""
+        is_buy = chan_result.get('is_buy_signal', False)
+        bsp_time_str = chan_result.get('bsp_datetime_str', '')
+        bsp_type = chan_result.get('bsp_type', '未知')
+        bsp_type_display = f"{'b' if is_buy else 's'}{bsp_type}"
         
-        self.log_message.emit("🔚 港股自动化扫描与交易守护进程已退出。")
+        # 1. ML 过滤
+        if is_buy:
+            chan_env = chan_result.get('chan_analysis', {}).get('chan_30m')
+            if chan_env:
+                bsp_list = chan_env.get_bsp()
+                if bsp_list:
+                    ml_res = self.signal_validator.validate_signal(chan_env, bsp_list[-1], threshold=self.ml_threshold)
+                    if not ml_res['is_valid']:
+                        self.log_message.emit(f"🤖 {code} {bsp_type_display} ML 过滤: {ml_res['msg']}")
+                        return False
+
+        # 2. 重复执行校验
+        if self.executed_signals.get(code) == bsp_time_str:
+            return False
+        if self.discovered_signals.get(code) == bsp_time_str:
+            return False
+
+        # 3. 持仓方向校验
+        position_qty = self.get_position_quantity(code)
+        if is_buy and position_qty > 0: return False
+        if not is_buy and position_qty <= 0: return False
+
+        # 4. 挂单校验
+        if self.check_pending_orders(code, 'BUY' if is_buy else 'SELL'):
+            return False
+
+        return True
+
+    def _process_candidate_signals(self, candidate_signals: List[Dict]) -> List[Dict]:
+        """封装图表生成和评分流程"""
+        signals_with_charts = []
+        for signal in candidate_signals:
+            chart_paths = self.generate_charts(signal['code'], signal['chan_result']['chan_analysis'])
+            if chart_paths:
+                s = signal.copy()
+                s['chart_paths'] = chart_paths
+                signals_with_charts.append(s)
+        
+        if signals_with_charts:
+            return self._batch_score_signals(signals_with_charts)
+        return []
+
 
     def _batch_score_signals(self, signals_with_charts: List[Dict]) -> List[Dict]:
         """批量评分信号"""
@@ -1010,7 +1018,7 @@ class HKTradingController(QObject):
                 self.log_message.emit(f"🚨 {code} 触发移动止损! 最高价={highest:.3f}, 现价={current_price:.3f}, 止损位={stop_price:.3f}")
                 
                 # 尝试强制抛售所有持仓
-                if self.execute_trade(code, 'SELL', qty, current_price):
+                if self.execute_trade(code, 'SELL', qty, current_price, urgent=True):
                     self.log_message.emit(f"✅ {code} 止损抛售成功: {qty} 股")
                     del self.position_trackers[code]
                     
@@ -1605,7 +1613,7 @@ class HKTradingController(QObject):
                 self.log_message.emit(f"正在清仓 {code}: 数量={qty}, 价格={current_price}")
                 
                 # 执行卖出
-                if self.execute_trade(code, 'SELL', qty, current_price):
+                if self.execute_trade(code, 'SELL', qty, current_price, urgent=True):
                     self.log_message.emit(f"✅ {code} 清仓成功")
                     success_count += 1
                     # 记录风险管理日志
