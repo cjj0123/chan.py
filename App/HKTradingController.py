@@ -514,6 +514,31 @@ class HKTradingController(QObject):
             self.log_message.emit(f"获取资金信息异常：{e}")
             return 0.0
 
+    def _cleanup_old_charts(self, hours: int = 24):
+        """
+        清理旧的图表进行空间释放。
+        默认清理指定的 hours 之前的 .png 图表。
+        """
+        import time
+        try:
+            now = time.time()
+            cutoff = now - (hours * 3600)
+            count = 0
+            if os.path.exists(self.charts_dir):
+                for filename in os.listdir(self.charts_dir):
+                    if filename.endswith('.png'):
+                        filepath = os.path.join(self.charts_dir, filename)
+                        if os.path.getmtime(filepath) < cutoff:
+                            try:
+                                os.remove(filepath)
+                                count += 1
+                            except OSError:
+                                pass
+            if count > 0:
+                self.log_message.emit(f"♻️ 自动清理：已删除 {count} 张超过 {hours} 小时的旧图表图片，释放空间")
+        except Exception as e:
+            logger.error(f"清理旧图表失败: {e}")
+
     def run_scan_and_trade(self):
         """
         执行完整的扫描和交易流程。
@@ -523,6 +548,9 @@ class HKTradingController(QObject):
         self.log_message.emit("🚀 启动港股自动化扫描与交易守护进程 (5分钟循环)...")
         
         while self._is_running:
+            # 清理过期图表
+            self._cleanup_old_charts(hours=24)
+            
             # 检查是否在交易时间内
             if not self.is_trading_time():
                 self.log_message.emit("非交易时间，等待 60 秒后重试...")
