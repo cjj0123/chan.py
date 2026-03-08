@@ -622,6 +622,56 @@ class HKTradingController(QObject):
         status_msg = "暂停" if paused else "恢复"
         self.log_message.emit(f"🔄 自动化扫描已{status_msg} (通过 Discord 指令)")
 
+    def manual_trade(self, code: str, action: str, quantity: int) -> dict:
+        """
+        通过 Discord 手动下单（买入或卖出）。
+
+        Args:
+            code: 股票代码，如 'HK.09988'
+            action: 'BUY' 或 'SELL'
+            quantity: 交易数量 (股)
+
+        Returns:
+            dict with keys: success (bool), message (str), price (float)
+        """
+        action = action.upper()
+        if action not in ('BUY', 'SELL'):
+            return {'success': False, 'message': f"无效操作：{action}，应为 BUY 或 SELL", 'price': 0}
+
+        if quantity <= 0:
+            return {'success': False, 'message': f"无效数量：{quantity}", 'price': 0}
+
+        # 确保格式正确
+        if not code.startswith('HK.'):
+            code = f"HK.{code}"
+
+        self.log_message.emit(f"📡 Discord 手动指令 - 正在获取 {code} 最新行情...")
+        info = self.get_stock_info(code)
+        if not info or info.get('current_price', 0) <= 0:
+            return {'success': False, 'message': f"无法获取 {code} 的最新价格，请检查股票代码是否正确。", 'price': 0}
+
+        current_price = info['current_price']
+        lot_size = info.get('lot_size', 100)
+
+        # 检查数量是否为合法手数的整数倍
+        if lot_size > 0 and quantity % lot_size != 0:
+            return {
+                'success': False,
+                'message': f"❌ 数量 {quantity} 不是最小交易单位 {lot_size} 的整数倍。",
+                'price': current_price
+            }
+
+        self.log_message.emit(f"📝 Discord 手动指令 - {action} {code}: 数量={quantity}, 参考价={current_price}")
+
+        success = self.execute_trade(code, action, quantity, current_price, urgent=True)
+
+        if success:
+            msg = f"✅ **{action}** {code} **{quantity}** 股，参考价 **{current_price:.3f}**，订单已提交。"
+        else:
+            msg = f"❌ {action} {code} {quantity} 股失败，请查看 GUI 日志。"
+
+        return {'success': success, 'message': msg, 'price': current_price}
+
     def run_scan_and_trade(self):
         """
         执行循环扫描和交易流程。

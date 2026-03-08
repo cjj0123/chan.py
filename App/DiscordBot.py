@@ -12,6 +12,7 @@ import asyncio
 import os
 import threading
 from datetime import datetime
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -86,17 +87,119 @@ class DiscordBot:
         async def liquidate(ctx):
             if not self._is_allowed(ctx): return
             if self.controller:
-                await ctx.send("⚠️ **接收到清仓指令，正在执行...**")
-                # 触发 controller 的一键清仓
+                # 先询问确认
+                await ctx.send(
+                    "⚠️ **确认清仓所有持仓？**\n"
+                    "请在 30 秒内回复 `yes` 确认，或者无视此消息取消。"
+                )
+                def check(m):
+                    return m.author.id == ctx.author.id and m.channel.id == ctx.channel.id and m.content.lower() == 'yes'
                 try:
-                    # 获取事件循环以执行异步任务（如果 controller 的方法是异步的）
-                    if hasattr(self.controller, 'close_all_positions'):
-                        self.controller.close_all_positions()
-                        await ctx.send("✅ **一键清仓指令已下发**")
-                except Exception as e:
-                    await ctx.send(f"❌ 执行失败: {str(e)}")
+                    await self.bot.wait_for('message', check=check, timeout=30.0)
+                    await ctx.send("🚀 **正在执行一键清仓...**")
+                    try:
+                        if hasattr(self.controller, 'close_all_positions'):
+                            self.controller.close_all_positions()
+                            await ctx.send("✅ **一键清仓指令已下发，请查看 GUI 日志。**")
+                    except Exception as e:
+                        await ctx.send(f"❌ 执行失败: {str(e)}")
+                except asyncio.TimeoutError:
+                    await ctx.send("⏰ 超时取消，未执行清仓操作。")
             else:
                 await ctx.send("❌ 未连接到交易控制器")
+
+        @self.bot.command(name='buy')
+        async def buy(ctx, code: Optional[str] = None, qty: Optional[int] = None):
+            """买入指定股票: /buy <股票代码> <数量>  例: /buy 09988 1000"""
+            if not self._is_allowed(ctx): return
+            if not self.controller:
+                await ctx.send("❌ 未连接到交易控制器")
+                return
+            if not code or qty is None or qty <= 0:
+                await ctx.send(
+                    "❓ **使用方法**: `/buy <股票代码> <数量>`\n"
+                    "例: `/buy 09988 1000` 或 `/buy HK.09988 1000`"
+                )
+                return
+
+            clean_code = code.upper().replace('HK.', '')
+            full_code = f"HK.{clean_code}"
+
+            # 先查询最新价格给用户确认
+            await ctx.send(f"🔍 正在查询 {full_code} 最新价格...")
+            info = self.controller.get_stock_info(full_code)
+            if not info or info.get('current_price', 0) <= 0:
+                await ctx.send(f"❌ 无法获取 {full_code} 的实时报价，请检查股票代码是否正确。")
+                return
+
+            price = info['current_price']
+            lot_size = info.get('lot_size', 100)
+            estimated_cost = price * qty
+
+            await ctx.send(
+                f"📊 **买入确认**\n"
+                f"▸ 股票: `{full_code}`\n"
+                f"▸ 数量: `{qty}` 股  (最小单位: {lot_size} 股)\n"
+                f"▸ 参考价: `{price:.3f}` HKD\n"
+                f"▸ 预估金额: `{estimated_cost:,.2f}` HKD\n\n"
+                f"⚠️ 请在 **30 秒**内回复 `yes` 确认，或无视此消息取消。"
+            )
+
+            def check(m):
+                return m.author.id == ctx.author.id and m.channel.id == ctx.channel.id and m.content.lower() == 'yes'
+            try:
+                await self.bot.wait_for('message', check=check, timeout=30.0)
+                await ctx.send(f"🚀 **正在提交买入订单: {full_code} × {qty} 股...**")
+                result = self.controller.manual_trade(full_code, 'BUY', qty)
+                await ctx.send(result['message'])
+            except asyncio.TimeoutError:
+                await ctx.send("⏰ 超时取消，**未**执行买入操作。")
+
+        @self.bot.command(name='sell')
+        async def sell(ctx, code: Optional[str] = None, qty: Optional[int] = None):
+            """卖出指定股票: /sell <股票代码> <数量>  例: /sell 09988 1000"""
+            if not self._is_allowed(ctx): return
+            if not self.controller:
+                await ctx.send("❌ 未连接到交易控制器")
+                return
+            if not code or qty is None or qty <= 0:
+                await ctx.send(
+                    "❓ **使用方法**: `/sell <股票代码> <数量>`\n"
+                    "例: `/sell 09988 1000` 或 `/sell HK.09988 1000`"
+                )
+                return
+
+            clean_code = code.upper().replace('HK.', '')
+            full_code = f"HK.{clean_code}"
+
+            await ctx.send(f"🔍 正在查询 {full_code} 最新价格...")
+            info = self.controller.get_stock_info(full_code)
+            if not info or info.get('current_price', 0) <= 0:
+                await ctx.send(f"❌ 无法获取 {full_code} 的实时报价，请检查股票代码是否正确。")
+                return
+
+            price = info['current_price']
+            lot_size = info.get('lot_size', 100)
+            estimated_proceeds = price * qty
+
+            await ctx.send(
+                f"📊 **卖出确认**\n"
+                f"▸ 股票: `{full_code}`\n"
+                f"▸ 数量: `{qty}` 股  (最小单位: {lot_size} 股)\n"
+                f"▸ 参考价: `{price:.3f}` HKD\n"
+                f"▸ 预计回款: `{estimated_proceeds:,.2f}` HKD\n\n"
+                f"⚠️ 请在 **30 秒**内回复 `yes` 确认，或无视此消息取消。"
+            )
+
+            def check(m):
+                return m.author.id == ctx.author.id and m.channel.id == ctx.channel.id and m.content.lower() == 'yes'
+            try:
+                await self.bot.wait_for('message', check=check, timeout=30.0)
+                await ctx.send(f"🚀 **正在提交卖出订单: {full_code} × {qty} 股...**")
+                result = self.controller.manual_trade(full_code, 'SELL', qty)
+                await ctx.send(result['message'])
+            except asyncio.TimeoutError:
+                await ctx.send("⏰ 超时取消，**未**执行卖出操作。")
 
     async def send_notification(self, message: str, chart_path: str = None):
         """推送通知和图表到指定频道"""
