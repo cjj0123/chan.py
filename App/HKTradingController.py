@@ -1557,3 +1557,65 @@ class HKTradingController(QObject):
         except Exception as e:
             self.log_message.emit(f"❌ 处理实时信号异常 {code}: {e}")
             return False
+
+    @pyqtSlot(result=bool)
+    def close_all_positions(self) -> bool:
+        """
+        一键清仓：卖出当前账户中的所有持仓
+        
+        Returns:
+            bool: 是否成功执行了清仓操作
+        """
+        try:
+            self.log_message.emit("🚨 正在启动一键清仓流程...")
+            
+            # 1. 查询所有持仓
+            ret, data = self.trd_ctx.position_list_query(trd_env=self.trd_env)
+            if ret != RET_OK:
+                self.log_message.emit(f"❌ 获取持仓列表失败: {data}")
+                return False
+                
+            if data.empty:
+                self.log_message.emit("ℹ️ 当前账户无任何持仓，无需清仓。")
+                return True
+                
+            self.log_message.emit(f"发现 {len(data)} 个持仓代码，准备逐一清仓。")
+            
+            success_count = 0
+            # 过滤掉数量为0的持仓
+            valid_positions = data[data['qty'] > 0]
+            total_count = len(valid_positions)
+            
+            if total_count == 0:
+                self.log_message.emit("ℹ️ 当前账户无有效持仓，无需清仓。")
+                return True
+            
+            for _, position in valid_positions.iterrows():
+                code = position['code']
+                qty = int(position['qty'])
+                
+                # 获取最新价格以尝试卖出
+                info = self.get_stock_info(code)
+                current_price = info.get('current_price', 0) if info else 0
+                
+                if current_price <= 0:
+                    self.log_message.emit(f"⚠️ 无法获取 {code} 的最新价格，跳过清仓。")
+                    continue
+                
+                self.log_message.emit(f"正在清仓 {code}: 数量={qty}, 价格={current_price}")
+                
+                # 执行卖出
+                if self.execute_trade(code, 'SELL', qty, current_price):
+                    self.log_message.emit(f"✅ {code} 清仓成功")
+                    success_count += 1
+                    # 记录风险管理日志
+                    self.risk_manager.record_trade(code, 'SELL', qty, current_price, score=0, pnl=0)
+                else:
+                    self.log_message.emit(f"❌ {code} 清仓失败")
+            
+            self.log_message.emit(f"🏁 一键清仓完成：成功 {success_count}/{total_count}")
+            return success_count == total_count
+            
+        except Exception as e:
+            self.log_message.emit(f"❌ 一键清仓异常: {e}")
+            return False

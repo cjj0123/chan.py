@@ -364,6 +364,12 @@ class TraderGUI(QMainWindow):
         self.query_funds_btn.clicked.connect(self.on_query_funds_clicked)
         hk_auto_layout.addWidget(self.query_funds_btn)
         
+        # 一键清仓按钮
+        self.liquidate_btn = QPushButton("一键清仓")
+        self.liquidate_btn.clicked.connect(self.on_liquidate_clicked)
+        self.liquidate_btn.setStyleSheet("background-color: #ff4d4f; color: white; font-weight: bold;")
+        hk_auto_layout.addWidget(self.liquidate_btn)
+        
         hk_auto_layout.addStretch()
         auto_layout.addLayout(hk_auto_layout)
         
@@ -465,7 +471,6 @@ class TraderGUI(QMainWindow):
             # 同时查询持仓
             from futu import OpenHKTradeContext, TrdEnv, RET_OK
             try:
-                # 获取控制器中的环境或者使用默认模拟环境
                 env = temp_controller.trd_env
                 trd_ctx = OpenHKTradeContext(host='127.0.0.1', port=11111)
                 ret, data = trd_ctx.position_list_query(trd_env=env)
@@ -482,12 +487,64 @@ class TraderGUI(QMainWindow):
             except Exception as e:
                 self.append_auto_log(f"⚠️ 查询持仓出现异常: {e}")
             
-            temp_controller.quote_ctx.close()
-            temp_controller.trd_ctx.close()
+            # 关闭临时控制器的连接
+            if hasattr(temp_controller, 'quote_ctx') and temp_controller.quote_ctx:
+                temp_controller.quote_ctx.close()
+            if hasattr(temp_controller, 'trd_ctx') and temp_controller.trd_ctx:
+                temp_controller.trd_ctx.close()
             
-            self.append_auto_log(f"💰 账户可用资金完毕。可用资金: {funds:.2f}")
+            self.append_auto_log(f"💰 账户可用资金: {funds:.2f}")
         except Exception as e:
-            self.append_auto_log(f"❌ 查询失败: {e}")
+            self.append_auto_log(f"❌ 查询账户资金异常: {e}")
+            
+    def on_liquidate_clicked(self):
+        """
+        处理一键清仓点击事件
+        """
+        reply = QMessageBox.question(
+            self, '确认清仓',
+            "⚠️ 您确定要执行【一键清仓】吗？\n这将以市价/当前价卖出账户中的所有持仓股票！\n请确保交易环境（模拟/实盘）正确。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            # 获取或创建一个控制器来执行清仓
+            controller = None
+            if hasattr(self, 'hk_trading_controller') and self.hk_trading_controller:
+                controller = self.hk_trading_controller
+            else:
+                try:
+                    controller = HKTradingController()
+                    controller.log_message.connect(self.append_auto_log)
+                except Exception as e:
+                    self.append_auto_log(f"❌ 初始化清仓控制器失败: {e}")
+            
+            if controller:
+                self.liquidate_btn.setEnabled(False)
+                self.liquidate_btn.setText("正在清仓...")
+                
+                # 定义清仓后的收尾工作
+                def run_liquidate():
+                    success = controller.close_all_positions()
+                    
+                    # 使用 QTimer.singleShot 回到主线程操作 UI
+                    from PyQt6.QtCore import QTimer
+                    def on_finished():
+                        self.liquidate_btn.setEnabled(True)
+                        self.liquidate_btn.setText("一键清仓")
+                        if success:
+                            QMessageBox.information(self, "清仓结果", "✅ 一键清仓执行完成。")
+                        else:
+                            QMessageBox.warning(self, "清仓结果", "⚠️ 一键清仓执行部分失败或出现异常，请检查日志。")
+                    
+                    QTimer.singleShot(0, on_finished)
+                
+                # 开启后台线程清仓
+                import threading
+                threading.Thread(target=run_liquidate, daemon=True).start()
+            else:
+                QMessageBox.critical(self, "错误", "❌ 无法连接接口，清仓操作无法执行。")
 
     def on_repair_data_clicked(self):
         """处理修复数据按钮点击"""
