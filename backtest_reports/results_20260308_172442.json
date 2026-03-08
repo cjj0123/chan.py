@@ -1,0 +1,35 @@
+{
+  "initial_funds": 100000,
+  "final_cash": 86259.43521295187,
+  "final_portfolio_value": 124827.43521295187,
+  "total_return_pct": 0.24827435212951868,
+  "final_positions": {
+    "HK.00836": {
+      "qty": 1400,
+      "avg_price": 17.62
+    },
+    "HK.02688": {
+      "qty": 200,
+      "avg_price": 69.5
+    }
+  },
+  "trades_count": 246,
+  "total_buys": 124,
+  "total_sells": 122,
+  "total_profit_loss_no_cost": -7181.899998800363,
+  "profit_factor": 0.9822976104791754,
+  "max_drawdown_pct": 0.0,
+  "cost_statistics": {
+    "total_cost": 6558.664788248042,
+    "total_commission": 1402.92014999844,
+    "total_stamp_duty": 4798,
+    "total_trading_fee": 264.21662824970616,
+    "total_clearing_fee": 93.52800999989601
+  },
+  "win_rate": 0.5573770491803278,
+  "avg_profit": 1626.400661220543,
+  "avg_loss": 1176.0301838202554,
+  "profit_loss_ratio": 1.3829582638238835,
+  "annualized_return": 0.11863549931613515,
+  "trades_per_month": 10.221606648199446
+}

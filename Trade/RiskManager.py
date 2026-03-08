@@ -175,7 +175,8 @@ class RiskManager:
         logger.warning(f"熔断机制触发: {reason}, 持续时间: {self.circuit_breaker_duration}秒")
     
     def calculate_position_size(self, code: str, available_funds: float, current_price: float, 
-                             signal_score: int, risk_factor: float = 1.0) -> int:
+                             signal_score: int, risk_factor: float = 1.0, 
+                             atr: Optional[float] = None, atr_multiplier: float = 2.0) -> int:
         """
         计算建议的仓位大小
         
@@ -185,6 +186,8 @@ class RiskManager:
             current_price: 当前价格
             signal_score: 信号评分
             risk_factor: 风险因子（基于波动率等）
+            atr: ATR (Average True Range) 的值，用于计算止损距离
+            atr_multiplier: ATR止损倍数
         
         Returns:
             int: 建议的股数
@@ -199,20 +202,30 @@ class RiskManager:
                 logger.warning(f"达到最大持仓数量限制 ({self.max_total_positions})，跳过 {code}")
                 return 0
             
-            # 基于信号评分调整仓位
-            score_factor = min(signal_score / 100.0, 1.0)  # 评分越高，仓位越大
+            # 基于信号评分调整最大投入比例
+            score_factor = min(signal_score / 100.0, 1.0)
             if signal_score < self.min_visual_score:
                 return 0  # 评分不足，不交易
             
-            # 基于风险因子调整仓位
-            risk_adjusted_ratio = self.max_position_ratio * score_factor / risk_factor
+            # 使用 ATR 方式计算可买入数量
+            max_investment = available_funds * self.max_position_ratio * score_factor / risk_factor
             
-            # 计算最大可买入金额
-            max_investment = available_funds * risk_adjusted_ratio
-            
-            # 计算股数（考虑最小交易单位）
             lot_size = self._get_lot_size(code)
-            max_shares = int(max_investment / current_price)
+            
+            if atr and atr > 0:
+                # 每笔交易最大可承受亏损额度 = 最大投入金额 * 单笔回撤容忍度(如5%)
+                # 假设单笔交易风险为总资金的一个比例，这里使用最大持仓的百分比作为损失限界
+                max_loss_amount = available_funds * 0.02 * score_factor # 2% total equity risk per trade
+                stop_distance = atr * atr_multiplier
+                max_shares = int(max_loss_amount / stop_distance)
+                
+                # 不能超过可用资金允许的上限
+                max_shares_by_funds = int(max_investment / current_price)
+                max_shares = min(max_shares, max_shares_by_funds)
+            else:
+                # 降级：如果没有ATR数据，直接使用资金占比分配
+                max_shares = int(max_investment / current_price)
+                
             shares = (max_shares // lot_size) * lot_size
             
             logger.info(f"仓位计算 - {code}: 可用资金={available_funds:.2f}, 价格={current_price:.2f}, "

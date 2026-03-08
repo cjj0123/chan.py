@@ -1,0 +1,982 @@
+2026-03-08 17:48:26,887 - INFO - 🚀 连接数据库: chan_trading.db, 导出目录: stock_cache
+2026-03-08 17:48:26,889 - INFO - 处理表: kline_day (频率: DAY)
+2026-03-08 17:48:26,929 - INFO -   - 导出股票: HK.00100
+2026-03-08 17:48:26,964 - INFO -     ✅ 成功导出 76 条记录 -> stock_cache/HK.00100_K_DAY.parquet
+2026-03-08 17:48:26,964 - INFO -   - 导出股票: HK.00288
+2026-03-08 17:48:26,969 - INFO -     ✅ 成功导出 780 条记录 -> stock_cache/HK.00288_K_DAY.parquet
+2026-03-08 17:48:26,969 - INFO -   - 导出股票: HK.00300
+2026-03-08 17:48:26,972 - INFO -     ✅ 成功导出 605 条记录 -> stock_cache/HK.00300_K_DAY.parquet
+2026-03-08 17:48:26,973 - INFO -   - 导出股票: HK.00358
+2026-03-08 17:48:26,976 - INFO -     ✅ 成功导出 780 条记录 -> stock_cache/HK.00358_K_DAY.parquet
+2026-03-08 17:48:26,976 - INFO -   - 导出股票: HK.00699
+2026-03-08 17:48:26,979 - INFO -     ✅ 成功导出 162 条记录 -> stock_cache/HK.00699_K_DAY.parquet
+2026-03-08 17:48:26,979 - INFO -   - 导出股票: HK.00700
+2026-03-08 17:48:26,982 - INFO -     ✅ 成功导出 780 条记录 -> stock_cache/HK.00700_K_DAY.parquet
+2026-03-08 17:48:26,982 - INFO -   - 导出股票: HK.00836
+2026-03-08 17:48:26,986 - INFO -     ✅ 成功导出 780 条记录 -> stock_cache/HK.00836_K_DAY.parquet
+2026-03-08 17:48:26,986 - INFO -   - 导出股票: HK.00883
+2026-03-08 17:48:26,990 - INFO -     ✅ 成功导出 780 条记录 -> stock_cache/HK.00883_K_DAY.parquet
+2026-03-08 17:48:26,990 - INFO -   - 导出股票: HK.00916
+2026-03-08 17:48:26,993 - INFO -     ✅ 成功导出 780 条记录 -> stock_cache/HK.00916_K_DAY.parquet
+2026-03-08 17:48:26,993 - INFO -   - 导出股票: HK.00966
+2026-03-08 17:48:26,996 - INFO -     ✅ 成功导出 574 条记录 -> stock_cache/HK.00966_K_DAY.parquet
+2026-03-08 17:48:26,996 - INFO -   - 导出股票: HK.00981
+2026-03-08 17:48:27,000 - INFO -     ✅ 成功导出 780 条记录 -> stock_cache/HK.00981_K_DAY.parquet
+2026-03-08 17:48:27,000 - INFO -   - 导出股票: HK.01133
+2026-03-08 17:48:27,004 - INFO -     ✅ 成功导出 421 条记录 -> stock_cache/HK.01133_K_DAY.parquet
+2026-03-08 17:48:27,004 - INFO -   - 导出股票: HK.01177
+2026-03-08 17:48:27,008 - INFO -     ✅ 成功导出 780 条记录 -> stock_cache/HK.01177_K_DAY.parquet
+2026-03-08 17:48:27,008 - INFO -   - 导出股票: HK.01347
+2026-03-08 17:48:27,013 - INFO -     ✅ 成功导出 780 条记录 -> stock_cache/HK.01347_K_DAY.parquet
+2026-03-08 17:48:27,013 - INFO -   - 导出股票: HK.01378
+2026-03-08 17:48:27,017 - INFO -     ✅ 成功导出 780 条记录 -> stock_cache/HK.01378_K_DAY.parquet
+2026-03-08 17:48:27,017 - INFO -   - 导出股票: HK.01618
+2026-03-08 17:48:27,021 - INFO -     ✅ 成功导出 780 条记录 -> stock_cache/HK.01618_K_DAY.parquet
+2026-03-08 17:48:27,021 - INFO -   - 导出股票: HK.01787
+2026-03-08 17:48:27,026 - INFO -     ✅ 成功导出 780 条记录 -> stock_cache/HK.01787_K_DAY.parquet
+2026-03-08 17:48:27,026 - INFO -   - 导出股票: HK.02020
+2026-03-08 17:48:27,030 - INFO -     ✅ 成功导出 780 条记录 -> stock_cache/HK.02020_K_DAY.parquet
+2026-03-08 17:48:27,030 - INFO -   - 导出股票: HK.02259
+2026-03-08 17:48:27,033 - INFO -     ✅ 成功导出 210 条记录 -> stock_cache/HK.02259_K_DAY.parquet
+2026-03-08 17:48:27,033 - INFO -   - 导出股票: HK.02357
+2026-03-08 17:48:27,037 - INFO -     ✅ 成功导出 780 条记录 -> stock_cache/HK.02357_K_DAY.parquet
+2026-03-08 17:48:27,037 - INFO -   - 导出股票: HK.02469
+2026-03-08 17:48:27,040 - INFO -     ✅ 成功导出 780 条记录 -> stock_cache/HK.02469_K_DAY.parquet
+2026-03-08 17:48:27,040 - INFO -   - 导出股票: HK.02513
+2026-03-08 17:48:27,042 - INFO -     ✅ 成功导出 78 条记录 -> stock_cache/HK.02513_K_DAY.parquet
+2026-03-08 17:48:27,042 - INFO -   - 导出股票: HK.02580
+2026-03-08 17:48:27,044 - INFO -     ✅ 成功导出 165 条记录 -> stock_cache/HK.02580_K_DAY.parquet
+2026-03-08 17:48:27,044 - INFO -   - 导出股票: HK.02688
+2026-03-08 17:48:27,047 - INFO -     ✅ 成功导出 768 条记录 -> stock_cache/HK.02688_K_DAY.parquet
+2026-03-08 17:48:27,047 - INFO -   - 导出股票: HK.02899
+2026-03-08 17:48:27,051 - INFO -     ✅ 成功导出 780 条记录 -> stock_cache/HK.02899_K_DAY.parquet
+2026-03-08 17:48:27,051 - INFO -   - 导出股票: HK.03288
+2026-03-08 17:48:27,053 - INFO -     ✅ 成功导出 354 条记录 -> stock_cache/HK.03288_K_DAY.parquet
+2026-03-08 17:48:27,053 - INFO -   - 导出股票: HK.03378
+2026-03-08 17:48:27,056 - INFO -     ✅ 成功导出 96 条记录 -> stock_cache/HK.03378_K_DAY.parquet
+2026-03-08 17:48:27,056 - INFO -   - 导出股票: HK.06603
+2026-03-08 17:48:27,059 - INFO -     ✅ 成功导出 233 条记录 -> stock_cache/HK.06603_K_DAY.parquet
+2026-03-08 17:48:27,059 - INFO -   - 导出股票: HK.06608
+2026-03-08 17:48:27,062 - INFO -     ✅ 成功导出 780 条记录 -> stock_cache/HK.06608_K_DAY.parquet
+2026-03-08 17:48:27,062 - INFO -   - 导出股票: HK.06682
+2026-03-08 17:48:27,066 - INFO -     ✅ 成功导出 780 条记录 -> stock_cache/HK.06682_K_DAY.parquet
+2026-03-08 17:48:27,066 - INFO -   - 导出股票: HK.09885
+2026-03-08 17:48:27,068 - INFO -     ✅ 成功导出 590 条记录 -> stock_cache/HK.09885_K_DAY.parquet
+2026-03-08 17:48:27,068 - INFO -   - 导出股票: HK.09959
+2026-03-08 17:48:27,072 - INFO -     ✅ 成功导出 780 条记录 -> stock_cache/HK.09959_K_DAY.parquet
+2026-03-08 17:48:27,072 - INFO -   - 导出股票: HK.09981
+2026-03-08 17:48:27,074 - INFO -     ✅ 成功导出 26 条记录 -> stock_cache/HK.09981_K_DAY.parquet
+2026-03-08 17:48:27,074 - INFO -   - 导出股票: HK.09988
+2026-03-08 17:48:27,078 - INFO -     ✅ 成功导出 780 条记录 -> stock_cache/HK.09988_K_DAY.parquet
+2026-03-08 17:48:27,078 - INFO -   - 导出股票: HK.09995
+2026-03-08 17:48:27,082 - INFO -     ✅ 成功导出 780 条记录 -> stock_cache/HK.09995_K_DAY.parquet
+2026-03-08 17:48:27,082 - INFO -   - 导出股票: SH.600089
+2026-03-08 17:48:27,085 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SH.600089_K_DAY.parquet
+2026-03-08 17:48:27,085 - INFO -   - 导出股票: SH.600101
+2026-03-08 17:48:27,093 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SH.600101_K_DAY.parquet
+2026-03-08 17:48:27,093 - INFO -   - 导出股票: SH.600505
+2026-03-08 17:48:27,097 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SH.600505_K_DAY.parquet
+2026-03-08 17:48:27,097 - INFO -   - 导出股票: SH.600641
+2026-03-08 17:48:27,100 - INFO -     ✅ 成功导出 764 条记录 -> stock_cache/SH.600641_K_DAY.parquet
+2026-03-08 17:48:27,100 - INFO -   - 导出股票: SH.600644
+2026-03-08 17:48:27,104 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SH.600644_K_DAY.parquet
+2026-03-08 17:48:27,104 - INFO -   - 导出股票: SH.600674
+2026-03-08 17:48:27,107 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SH.600674_K_DAY.parquet
+2026-03-08 17:48:27,108 - INFO -   - 导出股票: SH.600795
+2026-03-08 17:48:27,111 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SH.600795_K_DAY.parquet
+2026-03-08 17:48:27,111 - INFO -   - 导出股票: SH.600803
+2026-03-08 17:48:27,114 - INFO -     ✅ 成功导出 753 条记录 -> stock_cache/SH.600803_K_DAY.parquet
+2026-03-08 17:48:27,114 - INFO -   - 导出股票: SH.600886
+2026-03-08 17:48:27,117 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SH.600886_K_DAY.parquet
+2026-03-08 17:48:27,117 - INFO -   - 导出股票: SH.600995
+2026-03-08 17:48:27,121 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SH.600995_K_DAY.parquet
+2026-03-08 17:48:27,121 - INFO -   - 导出股票: SH.601012
+2026-03-08 17:48:27,124 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SH.601012_K_DAY.parquet
+2026-03-08 17:48:27,124 - INFO -   - 导出股票: SH.601179
+2026-03-08 17:48:27,127 - INFO -     ✅ 成功导出 753 条记录 -> stock_cache/SH.601179_K_DAY.parquet
+2026-03-08 17:48:27,127 - INFO -   - 导出股票: SH.601899
+2026-03-08 17:48:27,130 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SH.601899_K_DAY.parquet
+2026-03-08 17:48:27,130 - INFO -   - 导出股票: SH.603281
+2026-03-08 17:48:27,133 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SH.603281_K_DAY.parquet
+2026-03-08 17:48:27,133 - INFO -   - 导出股票: SH.688041
+2026-03-08 17:48:27,136 - INFO -     ✅ 成功导出 745 条记录 -> stock_cache/SH.688041_K_DAY.parquet
+2026-03-08 17:48:27,136 - INFO -   - 导出股票: SH.688102
+2026-03-08 17:48:27,140 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SH.688102_K_DAY.parquet
+2026-03-08 17:48:27,140 - INFO -   - 导出股票: SH.688122
+2026-03-08 17:48:27,143 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SH.688122_K_DAY.parquet
+2026-03-08 17:48:27,143 - INFO -   - 导出股票: SH.688193
+2026-03-08 17:48:27,146 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SH.688193_K_DAY.parquet
+2026-03-08 17:48:27,146 - INFO -   - 导出股票: SH.688256
+2026-03-08 17:48:27,149 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SH.688256_K_DAY.parquet
+2026-03-08 17:48:27,149 - INFO -   - 导出股票: SH.688333
+2026-03-08 17:48:27,153 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SH.688333_K_DAY.parquet
+2026-03-08 17:48:27,153 - INFO -   - 导出股票: SH.688676
+2026-03-08 17:48:27,156 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SH.688676_K_DAY.parquet
+2026-03-08 17:48:27,157 - INFO -   - 导出股票: SH.688719
+2026-03-08 17:48:27,161 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SH.688719_K_DAY.parquet
+2026-03-08 17:48:27,161 - INFO -   - 导出股票: SH.900922
+2026-03-08 17:48:27,165 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SH.900922_K_DAY.parquet
+2026-03-08 17:48:27,165 - INFO -   - 导出股票: SH.900948
+2026-03-08 17:48:27,168 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SH.900948_K_DAY.parquet
+2026-03-08 17:48:27,168 - INFO -   - 导出股票: SZ.000682
+2026-03-08 17:48:27,172 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SZ.000682_K_DAY.parquet
+2026-03-08 17:48:27,172 - INFO -   - 导出股票: SZ.000792
+2026-03-08 17:48:27,175 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SZ.000792_K_DAY.parquet
+2026-03-08 17:48:27,175 - INFO -   - 导出股票: SZ.002028
+2026-03-08 17:48:27,178 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SZ.002028_K_DAY.parquet
+2026-03-08 17:48:27,178 - INFO -   - 导出股票: SZ.002039
+2026-03-08 17:48:27,182 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SZ.002039_K_DAY.parquet
+2026-03-08 17:48:27,182 - INFO -   - 导出股票: SZ.002149
+2026-03-08 17:48:27,185 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SZ.002149_K_DAY.parquet
+2026-03-08 17:48:27,185 - INFO -   - 导出股票: SZ.002270
+2026-03-08 17:48:27,188 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SZ.002270_K_DAY.parquet
+2026-03-08 17:48:27,188 - INFO -   - 导出股票: SZ.002374
+2026-03-08 17:48:27,192 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SZ.002374_K_DAY.parquet
+2026-03-08 17:48:27,192 - INFO -   - 导出股票: SZ.002714
+2026-03-08 17:48:27,196 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SZ.002714_K_DAY.parquet
+2026-03-08 17:48:27,196 - INFO -   - 导出股票: SZ.002747
+2026-03-08 17:48:27,199 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SZ.002747_K_DAY.parquet
+2026-03-08 17:48:27,199 - INFO -   - 导出股票: SZ.002922
+2026-03-08 17:48:27,203 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SZ.002922_K_DAY.parquet
+2026-03-08 17:48:27,203 - INFO -   - 导出股票: SZ.002941
+2026-03-08 17:48:27,206 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SZ.002941_K_DAY.parquet
+2026-03-08 17:48:27,206 - INFO -   - 导出股票: SZ.300124
+2026-03-08 17:48:27,209 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SZ.300124_K_DAY.parquet
+2026-03-08 17:48:27,209 - INFO -   - 导出股票: SZ.300277
+2026-03-08 17:48:27,213 - INFO -     ✅ 成功导出 735 条记录 -> stock_cache/SZ.300277_K_DAY.parquet
+2026-03-08 17:48:27,213 - INFO -   - 导出股票: SZ.300476
+2026-03-08 17:48:27,216 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SZ.300476_K_DAY.parquet
+2026-03-08 17:48:27,216 - INFO -   - 导出股票: SZ.300498
+2026-03-08 17:48:27,219 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SZ.300498_K_DAY.parquet
+2026-03-08 17:48:27,219 - INFO -   - 导出股票: SZ.300751
+2026-03-08 17:48:27,222 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SZ.300751_K_DAY.parquet
+2026-03-08 17:48:27,222 - INFO -   - 导出股票: SZ.300772
+2026-03-08 17:48:27,226 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SZ.300772_K_DAY.parquet
+2026-03-08 17:48:27,226 - INFO -   - 导出股票: SZ.301200
+2026-03-08 17:48:27,229 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SZ.301200_K_DAY.parquet
+2026-03-08 17:48:27,229 - INFO -   - 导出股票: SZ.301306
+2026-03-08 17:48:27,232 - INFO -     ✅ 成功导出 765 条记录 -> stock_cache/SZ.301306_K_DAY.parquet
+2026-03-08 17:48:27,232 - INFO -   - 导出股票: SZ.301517
+2026-03-08 17:48:27,235 - INFO -     ✅ 成功导出 747 条记录 -> stock_cache/SZ.301517_K_DAY.parquet
+2026-03-08 17:48:27,235 - INFO -   - 导出股票: SZ.301589
+2026-03-08 17:48:27,237 - INFO -     ✅ 成功导出 738 条记录 -> stock_cache/SZ.301589_K_DAY.parquet
+2026-03-08 17:48:27,237 - INFO -   - 导出股票: US.AAPL
+2026-03-08 17:48:27,241 - INFO -     ✅ 成功导出 796 条记录 -> stock_cache/US.AAPL_K_DAY.parquet
+2026-03-08 17:48:27,241 - INFO -   - 导出股票: US.ACMR
+2026-03-08 17:48:27,244 - INFO -     ✅ 成功导出 796 条记录 -> stock_cache/US.ACMR_K_DAY.parquet
+2026-03-08 17:48:27,244 - INFO -   - 导出股票: US.ADM
+2026-03-08 17:48:27,248 - INFO -     ✅ 成功导出 796 条记录 -> stock_cache/US.ADM_K_DAY.parquet
+2026-03-08 17:48:27,248 - INFO -   - 导出股票: US.AMD
+2026-03-08 17:48:27,251 - INFO -     ✅ 成功导出 796 条记录 -> stock_cache/US.AMD_K_DAY.parquet
+2026-03-08 17:48:27,251 - INFO -   - 导出股票: US.APP
+2026-03-08 17:48:27,254 - INFO -     ✅ 成功导出 796 条记录 -> stock_cache/US.APP_K_DAY.parquet
+2026-03-08 17:48:27,254 - INFO -   - 导出股票: US.AREC
+2026-03-08 17:48:27,259 - INFO -     ✅ 成功导出 796 条记录 -> stock_cache/US.AREC_K_DAY.parquet
+2026-03-08 17:48:27,259 - INFO -   - 导出股票: US.ASML
+2026-03-08 17:48:27,263 - INFO -     ✅ 成功导出 796 条记录 -> stock_cache/US.ASML_K_DAY.parquet
+2026-03-08 17:48:27,263 - INFO -   - 导出股票: US.BE
+2026-03-08 17:48:27,267 - INFO -     ✅ 成功导出 796 条记录 -> stock_cache/US.BE_K_DAY.parquet
+2026-03-08 17:48:27,267 - INFO -   - 导出股票: US.COIN
+2026-03-08 17:48:27,271 - INFO -     ✅ 成功导出 796 条记录 -> stock_cache/US.COIN_K_DAY.parquet
+2026-03-08 17:48:27,271 - INFO -   - 导出股票: US.CRCL
+2026-03-08 17:48:27,274 - INFO -     ✅ 成功导出 378 条记录 -> stock_cache/US.CRCL_K_DAY.parquet
+2026-03-08 17:48:27,274 - INFO -   - 导出股票: US.CRML
+2026-03-08 17:48:27,277 - INFO -     ✅ 成功导出 757 条记录 -> stock_cache/US.CRML_K_DAY.parquet
+2026-03-08 17:48:27,277 - INFO -   - 导出股票: US.FIG
+2026-03-08 17:48:27,280 - INFO -     ✅ 成功导出 302 条记录 -> stock_cache/US.FIG_K_DAY.parquet
+2026-03-08 17:48:27,280 - INFO -   - 导出股票: US.GOOG
+2026-03-08 17:48:27,284 - INFO -     ✅ 成功导出 796 条记录 -> stock_cache/US.GOOG_K_DAY.parquet
+2026-03-08 17:48:27,284 - INFO -   - 导出股票: US.HMY
+2026-03-08 17:48:27,287 - INFO -     ✅ 成功导出 796 条记录 -> stock_cache/US.HMY_K_DAY.parquet
+2026-03-08 17:48:27,287 - INFO -   - 导出股票: US.HSY
+2026-03-08 17:48:27,291 - INFO -     ✅ 成功导出 796 条记录 -> stock_cache/US.HSY_K_DAY.parquet
+2026-03-08 17:48:27,291 - INFO -   - 导出股票: US.INTC
+2026-03-08 17:48:27,294 - INFO -     ✅ 成功导出 796 条记录 -> stock_cache/US.INTC_K_DAY.parquet
+2026-03-08 17:48:27,295 - INFO -   - 导出股票: US.ISRG
+2026-03-08 17:48:27,298 - INFO -     ✅ 成功导出 796 条记录 -> stock_cache/US.ISRG_K_DAY.parquet
+2026-03-08 17:48:27,298 - INFO -   - 导出股票: US.JKS
+2026-03-08 17:48:27,301 - INFO -     ✅ 成功导出 796 条记录 -> stock_cache/US.JKS_K_DAY.parquet
+2026-03-08 17:48:27,301 - INFO -   - 导出股票: US.LEU
+2026-03-08 17:48:27,304 - INFO -     ✅ 成功导出 796 条记录 -> stock_cache/US.LEU_K_DAY.parquet
+2026-03-08 17:48:27,304 - INFO -   - 导出股票: US.META
+2026-03-08 17:48:27,308 - INFO -     ✅ 成功导出 796 条记录 -> stock_cache/US.META_K_DAY.parquet
+2026-03-08 17:48:27,308 - INFO -   - 导出股票: US.MP
+2026-03-08 17:48:27,311 - INFO -     ✅ 成功导出 795 条记录 -> stock_cache/US.MP_K_DAY.parquet
+2026-03-08 17:48:27,311 - INFO -   - 导出股票: US.NBIS
+2026-03-08 17:48:27,315 - INFO -     ✅ 成功导出 593 条记录 -> stock_cache/US.NBIS_K_DAY.parquet
+2026-03-08 17:48:27,315 - INFO -   - 导出股票: US.NVDA
+2026-03-08 17:48:27,319 - INFO -     ✅ 成功导出 795 条记录 -> stock_cache/US.NVDA_K_DAY.parquet
+2026-03-08 17:48:27,319 - INFO -   - 导出股票: US.NVX
+2026-03-08 17:48:27,322 - INFO -     ✅ 成功导出 792 条记录 -> stock_cache/US.NVX_K_DAY.parquet
+2026-03-08 17:48:27,322 - INFO -   - 导出股票: US.ORCL
+2026-03-08 17:48:27,325 - INFO -     ✅ 成功导出 795 条记录 -> stock_cache/US.ORCL_K_DAY.parquet
+2026-03-08 17:48:27,325 - INFO -   - 导出股票: US.PDD
+2026-03-08 17:48:27,329 - INFO -     ✅ 成功导出 795 条记录 -> stock_cache/US.PDD_K_DAY.parquet
+2026-03-08 17:48:27,329 - INFO -   - 导出股票: US.PGY
+2026-03-08 17:48:27,332 - INFO -     ✅ 成功导出 795 条记录 -> stock_cache/US.PGY_K_DAY.parquet
+2026-03-08 17:48:27,332 - INFO -   - 导出股票: US.PPTA
+2026-03-08 17:48:27,337 - INFO -     ✅ 成功导出 795 条记录 -> stock_cache/US.PPTA_K_DAY.parquet
+2026-03-08 17:48:27,337 - INFO -   - 导出股票: US.SLV
+2026-03-08 17:48:27,341 - INFO -     ✅ 成功导出 795 条记录 -> stock_cache/US.SLV_K_DAY.parquet
+2026-03-08 17:48:27,341 - INFO -   - 导出股票: US.SMMT
+2026-03-08 17:48:27,344 - INFO -     ✅ 成功导出 795 条记录 -> stock_cache/US.SMMT_K_DAY.parquet
+2026-03-08 17:48:27,344 - INFO -   - 导出股票: US.SPY
+2026-03-08 17:48:27,347 - INFO -     ✅ 成功导出 795 条记录 -> stock_cache/US.SPY_K_DAY.parquet
+2026-03-08 17:48:27,347 - INFO -   - 导出股票: US.SY
+2026-03-08 17:48:27,351 - INFO -     ✅ 成功导出 795 条记录 -> stock_cache/US.SY_K_DAY.parquet
+2026-03-08 17:48:27,351 - INFO -   - 导出股票: US.TER
+2026-03-08 17:48:27,354 - INFO -     ✅ 成功导出 795 条记录 -> stock_cache/US.TER_K_DAY.parquet
+2026-03-08 17:48:27,354 - INFO -   - 导出股票: US.TSLA
+2026-03-08 17:48:27,357 - INFO -     ✅ 成功导出 795 条记录 -> stock_cache/US.TSLA_K_DAY.parquet
+2026-03-08 17:48:27,357 - INFO -   - 导出股票: US.TSM
+2026-03-08 17:48:27,360 - INFO -     ✅ 成功导出 795 条记录 -> stock_cache/US.TSM_K_DAY.parquet
+2026-03-08 17:48:27,360 - INFO -   - 导出股票: US.UAMY
+2026-03-08 17:48:27,364 - INFO -     ✅ 成功导出 795 条记录 -> stock_cache/US.UAMY_K_DAY.parquet
+2026-03-08 17:48:27,364 - INFO -   - 导出股票: US.UEC
+2026-03-08 17:48:27,367 - INFO -     ✅ 成功导出 795 条记录 -> stock_cache/US.UEC_K_DAY.parquet
+2026-03-08 17:48:27,367 - INFO -   - 导出股票: US.USAR
+2026-03-08 17:48:27,370 - INFO -     ✅ 成功导出 491 条记录 -> stock_cache/US.USAR_K_DAY.parquet
+2026-03-08 17:48:27,370 - INFO -   - 导出股票: US.UUUU
+2026-03-08 17:48:27,372 - INFO -     ✅ 成功导出 795 条记录 -> stock_cache/US.UUUU_K_DAY.parquet
+2026-03-08 17:48:27,372 - INFO -   - 导出股票: US.WWR
+2026-03-08 17:48:27,375 - INFO -     ✅ 成功导出 795 条记录 -> stock_cache/US.WWR_K_DAY.parquet
+2026-03-08 17:48:27,375 - INFO -   - 导出股票: US.YMM
+2026-03-08 17:48:27,379 - INFO -     ✅ 成功导出 795 条记录 -> stock_cache/US.YMM_K_DAY.parquet
+2026-03-08 17:48:27,379 - INFO -   - 导出股票: US.ZLAB
+2026-03-08 17:48:27,382 - INFO -     ✅ 成功导出 795 条记录 -> stock_cache/US.ZLAB_K_DAY.parquet
+2026-03-08 17:48:27,382 - INFO - 处理表: kline_30m (频率: 30M)
+2026-03-08 17:48:27,446 - INFO -   - 导出股票: HK.00100
+2026-03-08 17:48:27,449 - INFO -     ✅ 成功导出 412 条记录 -> stock_cache/HK.00100_K_30M.parquet
+2026-03-08 17:48:27,449 - INFO -   - 导出股票: HK.00288
+2026-03-08 17:48:27,465 - ERROR -     ❌ 导出 kline_30m 的 HK.00288 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,465 - INFO -   - 导出股票: HK.00300
+2026-03-08 17:48:27,479 - ERROR -     ❌ 导出 kline_30m 的 HK.00300 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,479 - INFO -   - 导出股票: HK.00358
+2026-03-08 17:48:27,494 - ERROR -     ❌ 导出 kline_30m 的 HK.00358 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,494 - INFO -   - 导出股票: HK.00699
+2026-03-08 17:48:27,499 - INFO -     ✅ 成功导出 884 条记录 -> stock_cache/HK.00699_K_30M.parquet
+2026-03-08 17:48:27,499 - INFO -   - 导出股票: HK.00700
+2026-03-08 17:48:27,511 - ERROR -     ❌ 导出 kline_30m 的 HK.00700 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,511 - INFO -   - 导出股票: HK.00836
+2026-03-08 17:48:27,521 - ERROR -     ❌ 导出 kline_30m 的 HK.00836 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,521 - INFO -   - 导出股票: HK.00883
+2026-03-08 17:48:27,536 - ERROR -     ❌ 导出 kline_30m 的 HK.00883 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,536 - INFO -   - 导出股票: HK.00916
+2026-03-08 17:48:27,551 - ERROR -     ❌ 导出 kline_30m 的 HK.00916 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,552 - INFO -   - 导出股票: HK.00966
+2026-03-08 17:48:27,566 - ERROR -     ❌ 导出 kline_30m 的 HK.00966 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,566 - INFO -   - 导出股票: HK.00981
+2026-03-08 17:48:27,576 - ERROR -     ❌ 导出 kline_30m 的 HK.00981 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,576 - INFO -   - 导出股票: HK.01133
+2026-03-08 17:48:27,585 - ERROR -     ❌ 导出 kline_30m 的 HK.01133 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,585 - INFO -   - 导出股票: HK.01177
+2026-03-08 17:48:27,598 - ERROR -     ❌ 导出 kline_30m 的 HK.01177 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,598 - INFO -   - 导出股票: HK.01347
+2026-03-08 17:48:27,609 - ERROR -     ❌ 导出 kline_30m 的 HK.01347 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,609 - INFO -   - 导出股票: HK.01378
+2026-03-08 17:48:27,623 - ERROR -     ❌ 导出 kline_30m 的 HK.01378 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,623 - INFO -   - 导出股票: HK.01618
+2026-03-08 17:48:27,638 - ERROR -     ❌ 导出 kline_30m 的 HK.01618 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,638 - INFO -   - 导出股票: HK.01787
+2026-03-08 17:48:27,653 - ERROR -     ❌ 导出 kline_30m 的 HK.01787 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,653 - INFO -   - 导出股票: HK.02020
+2026-03-08 17:48:27,669 - ERROR -     ❌ 导出 kline_30m 的 HK.02020 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,669 - INFO -   - 导出股票: HK.02259
+2026-03-08 17:48:27,674 - INFO -     ✅ 成功导出 1137 条记录 -> stock_cache/HK.02259_K_30M.parquet
+2026-03-08 17:48:27,674 - INFO -   - 导出股票: HK.02357
+2026-03-08 17:48:27,684 - ERROR -     ❌ 导出 kline_30m 的 HK.02357 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,684 - INFO -   - 导出股票: HK.02469
+2026-03-08 17:48:27,709 - ERROR -     ❌ 导出 kline_30m 的 HK.02469 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,709 - INFO -   - 导出股票: HK.02513
+2026-03-08 17:48:27,712 - INFO -     ✅ 成功导出 423 条记录 -> stock_cache/HK.02513_K_30M.parquet
+2026-03-08 17:48:27,712 - INFO -   - 导出股票: HK.02580
+2026-03-08 17:48:27,718 - INFO -     ✅ 成功导出 1357 条记录 -> stock_cache/HK.02580_K_30M.parquet
+2026-03-08 17:48:27,718 - INFO -   - 导出股票: HK.02688
+2026-03-08 17:48:27,733 - ERROR -     ❌ 导出 kline_30m 的 HK.02688 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,733 - INFO -   - 导出股票: HK.02899
+2026-03-08 17:48:27,748 - ERROR -     ❌ 导出 kline_30m 的 HK.02899 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,748 - INFO -   - 导出股票: HK.03288
+2026-03-08 17:48:27,757 - INFO -     ✅ 成功导出 1929 条记录 -> stock_cache/HK.03288_K_30M.parquet
+2026-03-08 17:48:27,757 - INFO -   - 导出股票: HK.03378
+2026-03-08 17:48:27,760 - INFO -     ✅ 成功导出 521 条记录 -> stock_cache/HK.03378_K_30M.parquet
+2026-03-08 17:48:27,760 - INFO -   - 导出股票: HK.06603
+2026-03-08 17:48:27,768 - INFO -     ✅ 成功导出 1852 条记录 -> stock_cache/HK.06603_K_30M.parquet
+2026-03-08 17:48:27,768 - INFO -   - 导出股票: HK.06608
+2026-03-08 17:48:27,778 - ERROR -     ❌ 导出 kline_30m 的 HK.06608 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,778 - INFO -   - 导出股票: HK.06682
+2026-03-08 17:48:27,792 - ERROR -     ❌ 导出 kline_30m 的 HK.06682 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,792 - INFO -   - 导出股票: HK.09885
+2026-03-08 17:48:27,807 - ERROR -     ❌ 导出 kline_30m 的 HK.09885 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,807 - INFO -   - 导出股票: HK.09959
+2026-03-08 17:48:27,817 - ERROR -     ❌ 导出 kline_30m 的 HK.09959 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,817 - INFO -   - 导出股票: HK.09981
+2026-03-08 17:48:27,819 - INFO -     ✅ 成功导出 148 条记录 -> stock_cache/HK.09981_K_30M.parquet
+2026-03-08 17:48:27,819 - INFO -   - 导出股票: HK.09988
+2026-03-08 17:48:27,829 - ERROR -     ❌ 导出 kline_30m 的 HK.09988 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,829 - INFO -   - 导出股票: HK.09995
+2026-03-08 17:48:27,843 - ERROR -     ❌ 导出 kline_30m 的 HK.09995 异常: ("Expected bytes, got a 'int' object", 'Conversion failed for column volume with type object')
+2026-03-08 17:48:27,843 - INFO -   - 导出股票: SH.600089
+2026-03-08 17:48:27,856 - INFO -     ✅ 成功导出 4192 条记录 -> stock_cache/SH.600089_K_30M.parquet
+2026-03-08 17:48:27,856 - INFO -   - 导出股票: SH.600101
+2026-03-08 17:48:27,869 - INFO -     ✅ 成功导出 4072 条记录 -> stock_cache/SH.600101_K_30M.parquet
+2026-03-08 17:48:27,869 - INFO -   - 导出股票: SH.600505
+2026-03-08 17:48:27,882 - INFO -     ✅ 成功导出 4088 条记录 -> stock_cache/SH.600505_K_30M.parquet
+2026-03-08 17:48:27,882 - INFO -   - 导出股票: SH.600641
+2026-03-08 17:48:27,898 - INFO -     ✅ 成功导出 4184 条记录 -> stock_cache/SH.600641_K_30M.parquet
+2026-03-08 17:48:27,898 - INFO -   - 导出股票: SH.600644
+2026-03-08 17:48:27,913 - INFO -     ✅ 成功导出 4192 条记录 -> stock_cache/SH.600644_K_30M.parquet
+2026-03-08 17:48:27,913 - INFO -   - 导出股票: SH.600674
+2026-03-08 17:48:27,926 - INFO -     ✅ 成功导出 4192 条记录 -> stock_cache/SH.600674_K_30M.parquet
+2026-03-08 17:48:27,926 - INFO -   - 导出股票: SH.600795
+2026-03-08 17:48:27,937 - INFO -     ✅ 成功导出 3168 条记录 -> stock_cache/SH.600795_K_30M.parquet
+2026-03-08 17:48:27,937 - INFO -   - 导出股票: SH.600803
+2026-03-08 17:48:27,951 - INFO -     ✅ 成功导出 4008 条记录 -> stock_cache/SH.600803_K_30M.parquet
+2026-03-08 17:48:27,951 - INFO -   - 导出股票: SH.600886
+2026-03-08 17:48:27,964 - INFO -     ✅ 成功导出 4192 条记录 -> stock_cache/SH.600886_K_30M.parquet
+2026-03-08 17:48:27,964 - INFO -   - 导出股票: SH.600995
+2026-03-08 17:48:27,975 - INFO -     ✅ 成功导出 2952 条记录 -> stock_cache/SH.600995_K_30M.parquet
+2026-03-08 17:48:27,975 - INFO -   - 导出股票: SH.601012
+2026-03-08 17:48:27,988 - INFO -     ✅ 成功导出 4136 条记录 -> stock_cache/SH.601012_K_30M.parquet
+2026-03-08 17:48:27,988 - INFO -   - 导出股票: SH.601179
+2026-03-08 17:48:28,000 - INFO -     ✅ 成功导出 4032 条记录 -> stock_cache/SH.601179_K_30M.parquet
+2026-03-08 17:48:28,000 - INFO -   - 导出股票: SH.601899
+2026-03-08 17:48:28,014 - INFO -     ✅ 成功导出 4192 条记录 -> stock_cache/SH.601899_K_30M.parquet
+2026-03-08 17:48:28,014 - INFO -   - 导出股票: SH.603281
+2026-03-08 17:48:28,027 - INFO -     ✅ 成功导出 4192 条记录 -> stock_cache/SH.603281_K_30M.parquet
+2026-03-08 17:48:28,027 - INFO -   - 导出股票: SH.688041
+2026-03-08 17:48:28,037 - INFO -     ✅ 成功导出 2872 条记录 -> stock_cache/SH.688041_K_30M.parquet
+2026-03-08 17:48:28,037 - INFO -   - 导出股票: SH.688102
+2026-03-08 17:48:28,049 - INFO -     ✅ 成功导出 4192 条记录 -> stock_cache/SH.688102_K_30M.parquet
+2026-03-08 17:48:28,049 - INFO -   - 导出股票: SH.688122
+2026-03-08 17:48:28,062 - INFO -     ✅ 成功导出 4192 条记录 -> stock_cache/SH.688122_K_30M.parquet
+2026-03-08 17:48:28,062 - INFO -   - 导出股票: SH.688193
+2026-03-08 17:48:28,074 - INFO -     ✅ 成功导出 4192 条记录 -> stock_cache/SH.688193_K_30M.parquet
+2026-03-08 17:48:28,074 - INFO -   - 导出股票: SH.688256
+2026-03-08 17:48:28,085 - INFO -     ✅ 成功导出 2952 条记录 -> stock_cache/SH.688256_K_30M.parquet
+2026-03-08 17:48:28,085 - INFO -   - 导出股票: SH.688333
+2026-03-08 17:48:28,098 - INFO -     ✅ 成功导出 4192 条记录 -> stock_cache/SH.688333_K_30M.parquet
+2026-03-08 17:48:28,098 - INFO -   - 导出股票: SH.688676
+2026-03-08 17:48:28,112 - INFO -     ✅ 成功导出 4192 条记录 -> stock_cache/SH.688676_K_30M.parquet
+2026-03-08 17:48:28,112 - INFO -   - 导出股票: SH.688719
+2026-03-08 17:48:28,125 - INFO -     ✅ 成功导出 4192 条记录 -> stock_cache/SH.688719_K_30M.parquet
+2026-03-08 17:48:28,125 - INFO -   - 导出股票: SH.900922
+2026-03-08 17:48:28,138 - INFO -     ✅ 成功导出 4192 条记录 -> stock_cache/SH.900922_K_30M.parquet
+2026-03-08 17:48:28,138 - INFO -   - 导出股票: SH.900948
+2026-03-08 17:48:28,153 - INFO -     ✅ 成功导出 3928 条记录 -> stock_cache/SH.900948_K_30M.parquet
+2026-03-08 17:48:28,153 - INFO -   - 导出股票: SZ.000682
+2026-03-08 17:48:28,167 - INFO -     ✅ 成功导出 4112 条记录 -> stock_cache/SZ.000682_K_30M.parquet
+2026-03-08 17:48:28,167 - INFO -   - 导出股票: SZ.000792
+2026-03-08 17:48:28,177 - INFO -     ✅ 成功导出 2952 条记录 -> stock_cache/SZ.000792_K_30M.parquet
+2026-03-08 17:48:28,177 - INFO -   - 导出股票: SZ.002028
+2026-03-08 17:48:28,190 - INFO -     ✅ 成功导出 4032 条记录 -> stock_cache/SZ.002028_K_30M.parquet
+2026-03-08 17:48:28,190 - INFO -   - 导出股票: SZ.002039
+2026-03-08 17:48:28,202 - INFO -     ✅ 成功导出 4136 条记录 -> stock_cache/SZ.002039_K_30M.parquet
+2026-03-08 17:48:28,202 - INFO -   - 导出股票: SZ.002149
+2026-03-08 17:48:28,216 - INFO -     ✅ 成功导出 4112 条记录 -> stock_cache/SZ.002149_K_30M.parquet
+2026-03-08 17:48:28,216 - INFO -   - 导出股票: SZ.002270
+2026-03-08 17:48:28,229 - INFO -     ✅ 成功导出 4056 条记录 -> stock_cache/SZ.002270_K_30M.parquet
+2026-03-08 17:48:28,229 - INFO -   - 导出股票: SZ.002374
+2026-03-08 17:48:28,243 - INFO -     ✅ 成功导出 4192 条记录 -> stock_cache/SZ.002374_K_30M.parquet
+2026-03-08 17:48:28,243 - INFO -   - 导出股票: SZ.002714
+2026-03-08 17:48:28,256 - INFO -     ✅ 成功导出 4072 条记录 -> stock_cache/SZ.002714_K_30M.parquet
+2026-03-08 17:48:28,256 - INFO -   - 导出股票: SZ.002747
+2026-03-08 17:48:28,269 - INFO -     ✅ 成功导出 4192 条记录 -> stock_cache/SZ.002747_K_30M.parquet
+2026-03-08 17:48:28,269 - INFO -   - 导出股票: SZ.002922
+2026-03-08 17:48:28,283 - INFO -     ✅ 成功导出 4192 条记录 -> stock_cache/SZ.002922_K_30M.parquet
+2026-03-08 17:48:28,283 - INFO -   - 导出股票: SZ.002941
+2026-03-08 17:48:28,298 - INFO -     ✅ 成功导出 4136 条记录 -> stock_cache/SZ.002941_K_30M.parquet
+2026-03-08 17:48:28,298 - INFO -   - 导出股票: SZ.300124
+2026-03-08 17:48:28,312 - INFO -     ✅ 成功导出 4136 条记录 -> stock_cache/SZ.300124_K_30M.parquet
+2026-03-08 17:48:28,312 - INFO -   - 导出股票: SZ.300277
+2026-03-08 17:48:28,324 - INFO -     ✅ 成功导出 4032 条记录 -> stock_cache/SZ.300277_K_30M.parquet
+2026-03-08 17:48:28,324 - INFO -   - 导出股票: SZ.300476
+2026-03-08 17:48:28,337 - INFO -     ✅ 成功导出 4192 条记录 -> stock_cache/SZ.300476_K_30M.parquet
+2026-03-08 17:48:28,338 - INFO -   - 导出股票: SZ.300498
+2026-03-08 17:48:28,351 - INFO -     ✅ 成功导出 4192 条记录 -> stock_cache/SZ.300498_K_30M.parquet
+2026-03-08 17:48:28,351 - INFO -   - 导出股票: SZ.300751
+2026-03-08 17:48:28,365 - INFO -     ✅ 成功导出 4192 条记录 -> stock_cache/SZ.300751_K_30M.parquet
+2026-03-08 17:48:28,365 - INFO -   - 导出股票: SZ.300772
+2026-03-08 17:48:28,378 - INFO -     ✅ 成功导出 4136 条记录 -> stock_cache/SZ.300772_K_30M.parquet
+2026-03-08 17:48:28,378 - INFO -   - 导出股票: SZ.301200
+2026-03-08 17:48:28,392 - INFO -     ✅ 成功导出 4192 条记录 -> stock_cache/SZ.301200_K_30M.parquet
+2026-03-08 17:48:28,392 - INFO -   - 导出股票: SZ.301306
+2026-03-08 17:48:28,405 - INFO -     ✅ 成功导出 4112 条记录 -> stock_cache/SZ.301306_K_30M.parquet
+2026-03-08 17:48:28,405 - INFO -   - 导出股票: SZ.301517
+2026-03-08 17:48:28,418 - INFO -     ✅ 成功导出 4120 条记录 -> stock_cache/SZ.301517_K_30M.parquet
+2026-03-08 17:48:28,418 - INFO -   - 导出股票: SZ.301589
+2026-03-08 17:48:28,431 - INFO -     ✅ 成功导出 3976 条记录 -> stock_cache/SZ.301589_K_30M.parquet
+2026-03-08 17:48:28,431 - INFO -   - 导出股票: US.AAPL
+2026-03-08 17:48:28,434 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.AAPL_K_30M.parquet
+2026-03-08 17:48:28,435 - INFO -   - 导出股票: US.ACMR
+2026-03-08 17:48:28,438 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.ACMR_K_30M.parquet
+2026-03-08 17:48:28,438 - INFO -   - 导出股票: US.ADM
+2026-03-08 17:48:28,440 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.ADM_K_30M.parquet
+2026-03-08 17:48:28,440 - INFO -   - 导出股票: US.AMD
+2026-03-08 17:48:28,444 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.AMD_K_30M.parquet
+2026-03-08 17:48:28,444 - INFO -   - 导出股票: US.APP
+2026-03-08 17:48:28,446 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.APP_K_30M.parquet
+2026-03-08 17:48:28,446 - INFO -   - 导出股票: US.AREC
+2026-03-08 17:48:28,450 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.AREC_K_30M.parquet
+2026-03-08 17:48:28,450 - INFO -   - 导出股票: US.ASML
+2026-03-08 17:48:28,453 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.ASML_K_30M.parquet
+2026-03-08 17:48:28,453 - INFO -   - 导出股票: US.BE
+2026-03-08 17:48:28,456 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.BE_K_30M.parquet
+2026-03-08 17:48:28,456 - INFO -   - 导出股票: US.COIN
+2026-03-08 17:48:28,459 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.COIN_K_30M.parquet
+2026-03-08 17:48:28,459 - INFO -   - 导出股票: US.CRCL
+2026-03-08 17:48:28,461 - INFO -     ✅ 成功导出 189 条记录 -> stock_cache/US.CRCL_K_30M.parquet
+2026-03-08 17:48:28,461 - INFO -   - 导出股票: US.CRML
+2026-03-08 17:48:28,465 - INFO -     ✅ 成功导出 507 条记录 -> stock_cache/US.CRML_K_30M.parquet
+2026-03-08 17:48:28,465 - INFO -   - 导出股票: US.FIG
+2026-03-08 17:48:28,466 - INFO -     ✅ 成功导出 151 条记录 -> stock_cache/US.FIG_K_30M.parquet
+2026-03-08 17:48:28,466 - INFO -   - 导出股票: US.GOOG
+2026-03-08 17:48:28,469 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.GOOG_K_30M.parquet
+2026-03-08 17:48:28,469 - INFO -   - 导出股票: US.HMY
+2026-03-08 17:48:28,472 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.HMY_K_30M.parquet
+2026-03-08 17:48:28,472 - INFO -   - 导出股票: US.HSY
+2026-03-08 17:48:28,475 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.HSY_K_30M.parquet
+2026-03-08 17:48:28,475 - INFO -   - 导出股票: US.INTC
+2026-03-08 17:48:28,477 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.INTC_K_30M.parquet
+2026-03-08 17:48:28,477 - INFO -   - 导出股票: US.ISRG
+2026-03-08 17:48:28,480 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.ISRG_K_30M.parquet
+2026-03-08 17:48:28,480 - INFO -   - 导出股票: US.JKS
+2026-03-08 17:48:28,483 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.JKS_K_30M.parquet
+2026-03-08 17:48:28,483 - INFO -   - 导出股票: US.LEU
+2026-03-08 17:48:28,486 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.LEU_K_30M.parquet
+2026-03-08 17:48:28,486 - INFO -   - 导出股票: US.META
+2026-03-08 17:48:28,489 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.META_K_30M.parquet
+2026-03-08 17:48:28,489 - INFO -   - 导出股票: US.MP
+2026-03-08 17:48:28,492 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.MP_K_30M.parquet
+2026-03-08 17:48:28,492 - INFO -   - 导出股票: US.NBIS
+2026-03-08 17:48:28,495 - INFO -     ✅ 成功导出 344 条记录 -> stock_cache/US.NBIS_K_30M.parquet
+2026-03-08 17:48:28,495 - INFO -   - 导出股票: US.NVDA
+2026-03-08 17:48:28,498 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.NVDA_K_30M.parquet
+2026-03-08 17:48:28,498 - INFO -   - 导出股票: US.NVX
+2026-03-08 17:48:28,501 - INFO -     ✅ 成功导出 543 条记录 -> stock_cache/US.NVX_K_30M.parquet
+2026-03-08 17:48:28,501 - INFO -   - 导出股票: US.ORCL
+2026-03-08 17:48:28,503 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.ORCL_K_30M.parquet
+2026-03-08 17:48:28,503 - INFO -   - 导出股票: US.PDD
+2026-03-08 17:48:28,506 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.PDD_K_30M.parquet
+2026-03-08 17:48:28,506 - INFO -   - 导出股票: US.PGY
+2026-03-08 17:48:28,508 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.PGY_K_30M.parquet
+2026-03-08 17:48:28,508 - INFO -   - 导出股票: US.PPTA
+2026-03-08 17:48:28,511 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.PPTA_K_30M.parquet
+2026-03-08 17:48:28,511 - INFO -   - 导出股票: US.SLV
+2026-03-08 17:48:28,514 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.SLV_K_30M.parquet
+2026-03-08 17:48:28,514 - INFO -   - 导出股票: US.SMMT
+2026-03-08 17:48:28,516 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.SMMT_K_30M.parquet
+2026-03-08 17:48:28,516 - INFO -   - 导出股票: US.SPY
+2026-03-08 17:48:28,519 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.SPY_K_30M.parquet
+2026-03-08 17:48:28,519 - INFO -   - 导出股票: US.SY
+2026-03-08 17:48:28,522 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.SY_K_30M.parquet
+2026-03-08 17:48:28,522 - INFO -   - 导出股票: US.TER
+2026-03-08 17:48:28,524 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.TER_K_30M.parquet
+2026-03-08 17:48:28,524 - INFO -   - 导出股票: US.TSLA
+2026-03-08 17:48:28,527 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.TSLA_K_30M.parquet
+2026-03-08 17:48:28,527 - INFO -   - 导出股票: US.TSM
+2026-03-08 17:48:28,530 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.TSM_K_30M.parquet
+2026-03-08 17:48:28,530 - INFO -   - 导出股票: US.UAMY
+2026-03-08 17:48:28,532 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.UAMY_K_30M.parquet
+2026-03-08 17:48:28,532 - INFO -   - 导出股票: US.UEC
+2026-03-08 17:48:28,535 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.UEC_K_30M.parquet
+2026-03-08 17:48:28,535 - INFO -   - 导出股票: US.USAR
+2026-03-08 17:48:28,537 - INFO -     ✅ 成功导出 246 条记录 -> stock_cache/US.USAR_K_30M.parquet
+2026-03-08 17:48:28,537 - INFO -   - 导出股票: US.UUUU
+2026-03-08 17:48:28,539 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.UUUU_K_30M.parquet
+2026-03-08 17:48:28,539 - INFO -   - 导出股票: US.WWR
+2026-03-08 17:48:28,542 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.WWR_K_30M.parquet
+2026-03-08 17:48:28,542 - INFO -   - 导出股票: US.YMM
+2026-03-08 17:48:28,545 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.YMM_K_30M.parquet
+2026-03-08 17:48:28,545 - INFO -   - 导出股票: US.ZLAB
+2026-03-08 17:48:28,547 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.ZLAB_K_30M.parquet
+2026-03-08 17:48:28,547 - INFO - 处理表: kline_5m (频率: 5M)
+2026-03-08 17:48:28,915 - INFO -   - 导出股票: HK.00100
+2026-03-08 17:48:28,928 - INFO -     ✅ 成功导出 2472 条记录 -> stock_cache/HK.00100_K_5M.parquet
+2026-03-08 17:48:28,928 - INFO -   - 导出股票: HK.00288
+2026-03-08 17:48:29,028 - INFO -     ✅ 成功导出 33814 条记录 -> stock_cache/HK.00288_K_5M.parquet
+2026-03-08 17:48:29,028 - INFO -   - 导出股票: HK.00300
+2026-03-08 17:48:29,099 - INFO -     ✅ 成功导出 23488 条记录 -> stock_cache/HK.00300_K_5M.parquet
+2026-03-08 17:48:29,099 - INFO -   - 导出股票: HK.00358
+2026-03-08 17:48:29,197 - INFO -     ✅ 成功导出 34012 条记录 -> stock_cache/HK.00358_K_5M.parquet
+2026-03-08 17:48:29,197 - INFO -   - 导出股票: HK.00699
+2026-03-08 17:48:29,218 - INFO -     ✅ 成功导出 5304 条记录 -> stock_cache/HK.00699_K_5M.parquet
+2026-03-08 17:48:29,218 - INFO -   - 导出股票: HK.00700
+2026-03-08 17:48:29,271 - INFO -     ✅ 成功导出 17260 条记录 -> stock_cache/HK.00700_K_5M.parquet
+2026-03-08 17:48:29,271 - INFO -   - 导出股票: HK.00836
+2026-03-08 17:48:29,312 - INFO -     ✅ 成功导出 17260 条记录 -> stock_cache/HK.00836_K_5M.parquet
+2026-03-08 17:48:29,312 - INFO -   - 导出股票: HK.00883
+2026-03-08 17:48:29,411 - INFO -     ✅ 成功导出 33738 条记录 -> stock_cache/HK.00883_K_5M.parquet
+2026-03-08 17:48:29,411 - INFO -   - 导出股票: HK.00916
+2026-03-08 17:48:29,492 - INFO -     ✅ 成功导出 33814 条记录 -> stock_cache/HK.00916_K_5M.parquet
+2026-03-08 17:48:29,492 - INFO -   - 导出股票: HK.00966
+2026-03-08 17:48:29,585 - INFO -     ✅ 成功导出 33850 条记录 -> stock_cache/HK.00966_K_5M.parquet
+2026-03-08 17:48:29,585 - INFO -   - 导出股票: HK.00981
+2026-03-08 17:48:29,625 - INFO -     ✅ 成功导出 17260 条记录 -> stock_cache/HK.00981_K_5M.parquet
+2026-03-08 17:48:29,625 - INFO -   - 导出股票: HK.01133
+2026-03-08 17:48:29,664 - INFO -     ✅ 成功导出 17260 条记录 -> stock_cache/HK.01133_K_5M.parquet
+2026-03-08 17:48:29,664 - INFO -   - 导出股票: HK.01177
+2026-03-08 17:48:29,761 - INFO -     ✅ 成功导出 33850 条记录 -> stock_cache/HK.01177_K_5M.parquet
+2026-03-08 17:48:29,761 - INFO -   - 导出股票: HK.01347
+2026-03-08 17:48:29,803 - INFO -     ✅ 成功导出 17260 条记录 -> stock_cache/HK.01347_K_5M.parquet
+2026-03-08 17:48:29,803 - INFO -   - 导出股票: HK.01378
+2026-03-08 17:48:29,889 - INFO -     ✅ 成功导出 34048 条记录 -> stock_cache/HK.01378_K_5M.parquet
+2026-03-08 17:48:29,889 - INFO -   - 导出股票: HK.01618
+2026-03-08 17:48:29,994 - INFO -     ✅ 成功导出 33616 条记录 -> stock_cache/HK.01618_K_5M.parquet
+2026-03-08 17:48:29,994 - INFO -   - 导出股票: HK.01787
+2026-03-08 17:48:30,076 - INFO -     ✅ 成功导出 33880 条记录 -> stock_cache/HK.01787_K_5M.parquet
+2026-03-08 17:48:30,076 - INFO -   - 导出股票: HK.02020
+2026-03-08 17:48:30,167 - INFO -     ✅ 成功导出 34144 条记录 -> stock_cache/HK.02020_K_5M.parquet
+2026-03-08 17:48:30,167 - INFO -   - 导出股票: HK.02259
+2026-03-08 17:48:30,191 - INFO -     ✅ 成功导出 6822 条记录 -> stock_cache/HK.02259_K_5M.parquet
+2026-03-08 17:48:30,191 - INFO -   - 导出股票: HK.02357
+2026-03-08 17:48:30,232 - INFO -     ✅ 成功导出 17260 条记录 -> stock_cache/HK.02357_K_5M.parquet
+2026-03-08 17:48:30,232 - INFO -   - 导出股票: HK.02469
+2026-03-08 17:48:30,311 - INFO -     ✅ 成功导出 33352 条记录 -> stock_cache/HK.02469_K_5M.parquet
+2026-03-08 17:48:30,311 - INFO -   - 导出股票: HK.02513
+2026-03-08 17:48:30,322 - INFO -     ✅ 成功导出 2538 条记录 -> stock_cache/HK.02513_K_5M.parquet
+2026-03-08 17:48:30,322 - INFO -   - 导出股票: HK.02580
+2026-03-08 17:48:30,344 - INFO -     ✅ 成功导出 8142 条记录 -> stock_cache/HK.02580_K_5M.parquet
+2026-03-08 17:48:30,344 - INFO -   - 导出股票: HK.02688
+2026-03-08 17:48:30,438 - INFO -     ✅ 成功导出 33682 条记录 -> stock_cache/HK.02688_K_5M.parquet
+2026-03-08 17:48:30,438 - INFO -   - 导出股票: HK.02899
+2026-03-08 17:48:30,529 - INFO -     ✅ 成功导出 34012 条记录 -> stock_cache/HK.02899_K_5M.parquet
+2026-03-08 17:48:30,529 - INFO -   - 导出股票: HK.03288
+2026-03-08 17:48:30,559 - INFO -     ✅ 成功导出 11574 条记录 -> stock_cache/HK.03288_K_5M.parquet
+2026-03-08 17:48:30,559 - INFO -   - 导出股票: HK.03378
+2026-03-08 17:48:30,573 - INFO -     ✅ 成功导出 3126 条记录 -> stock_cache/HK.03378_K_5M.parquet
+2026-03-08 17:48:30,573 - INFO -   - 导出股票: HK.06603
+2026-03-08 17:48:30,602 - INFO -     ✅ 成功导出 11112 条记录 -> stock_cache/HK.06603_K_5M.parquet
+2026-03-08 17:48:30,602 - INFO -   - 导出股票: HK.06608
+2026-03-08 17:48:30,789 - INFO -     ✅ 成功导出 17260 条记录 -> stock_cache/HK.06608_K_5M.parquet
+2026-03-08 17:48:30,789 - INFO -   - 导出股票: HK.06682
+2026-03-08 17:48:30,904 - INFO -     ✅ 成功导出 33784 条记录 -> stock_cache/HK.06682_K_5M.parquet
+2026-03-08 17:48:30,905 - INFO -   - 导出股票: HK.09885
+2026-03-08 17:48:30,991 - INFO -     ✅ 成功导出 33353 条记录 -> stock_cache/HK.09885_K_5M.parquet
+2026-03-08 17:48:30,992 - INFO -   - 导出股票: HK.09959
+2026-03-08 17:48:31,036 - INFO -     ✅ 成功导出 17260 条记录 -> stock_cache/HK.09959_K_5M.parquet
+2026-03-08 17:48:31,036 - INFO -   - 导出股票: HK.09981
+2026-03-08 17:48:31,041 - INFO -     ✅ 成功导出 888 条记录 -> stock_cache/HK.09981_K_5M.parquet
+2026-03-08 17:48:31,041 - INFO -   - 导出股票: HK.09988
+2026-03-08 17:48:31,086 - INFO -     ✅ 成功导出 17260 条记录 -> stock_cache/HK.09988_K_5M.parquet
+2026-03-08 17:48:31,086 - INFO -   - 导出股票: HK.09995
+2026-03-08 17:48:31,182 - INFO -     ✅ 成功导出 33550 条记录 -> stock_cache/HK.09995_K_5M.parquet
+2026-03-08 17:48:31,182 - INFO -   - 导出股票: SH.600089
+2026-03-08 17:48:31,244 - INFO -     ✅ 成功导出 24232 条记录 -> stock_cache/SH.600089_K_5M.parquet
+2026-03-08 17:48:31,244 - INFO -   - 导出股票: SH.600101
+2026-03-08 17:48:31,305 - INFO -     ✅ 成功导出 24712 条记录 -> stock_cache/SH.600101_K_5M.parquet
+2026-03-08 17:48:31,305 - INFO -   - 导出股票: SH.600505
+2026-03-08 17:48:31,364 - INFO -     ✅ 成功导出 24184 条记录 -> stock_cache/SH.600505_K_5M.parquet
+2026-03-08 17:48:31,364 - INFO -   - 导出股票: SH.600641
+2026-03-08 17:48:31,425 - INFO -     ✅ 成功导出 24184 条记录 -> stock_cache/SH.600641_K_5M.parquet
+2026-03-08 17:48:31,425 - INFO -   - 导出股票: SH.600644
+2026-03-08 17:48:31,571 - INFO -     ✅ 成功导出 24616 条记录 -> stock_cache/SH.600644_K_5M.parquet
+2026-03-08 17:48:31,571 - INFO -   - 导出股票: SH.600674
+2026-03-08 17:48:31,642 - INFO -     ✅ 成功导出 25144 条记录 -> stock_cache/SH.600674_K_5M.parquet
+2026-03-08 17:48:31,642 - INFO -   - 导出股票: SH.600795
+2026-03-08 17:48:31,678 - INFO -     ✅ 成功导出 12568 条记录 -> stock_cache/SH.600795_K_5M.parquet
+2026-03-08 17:48:31,678 - INFO -   - 导出股票: SH.600803
+2026-03-08 17:48:31,735 - INFO -     ✅ 成功导出 23896 条记录 -> stock_cache/SH.600803_K_5M.parquet
+2026-03-08 17:48:31,735 - INFO -   - 导出股票: SH.600886
+2026-03-08 17:48:31,802 - INFO -     ✅ 成功导出 25144 条记录 -> stock_cache/SH.600886_K_5M.parquet
+2026-03-08 17:48:31,802 - INFO -   - 导出股票: SH.600995
+2026-03-08 17:48:31,835 - INFO -     ✅ 成功导出 12616 条记录 -> stock_cache/SH.600995_K_5M.parquet
+2026-03-08 17:48:31,835 - INFO -   - 导出股票: SH.601012
+2026-03-08 17:48:31,904 - INFO -     ✅ 成功导出 24280 条记录 -> stock_cache/SH.601012_K_5M.parquet
+2026-03-08 17:48:31,904 - INFO -   - 导出股票: SH.601179
+2026-03-08 17:48:31,962 - INFO -     ✅ 成功导出 23952 条记录 -> stock_cache/SH.601179_K_5M.parquet
+2026-03-08 17:48:31,962 - INFO -   - 导出股票: SH.601899
+2026-03-08 17:48:32,020 - INFO -     ✅ 成功导出 24712 条记录 -> stock_cache/SH.601899_K_5M.parquet
+2026-03-08 17:48:32,020 - INFO -   - 导出股票: SH.603281
+2026-03-08 17:48:32,082 - INFO -     ✅ 成功导出 24424 条记录 -> stock_cache/SH.603281_K_5M.parquet
+2026-03-08 17:48:32,082 - INFO -   - 导出股票: SH.688041
+2026-03-08 17:48:32,115 - INFO -     ✅ 成功导出 12136 条记录 -> stock_cache/SH.688041_K_5M.parquet
+2026-03-08 17:48:32,115 - INFO -   - 导出股票: SH.688102
+2026-03-08 17:48:32,175 - INFO -     ✅ 成功导出 24472 条记录 -> stock_cache/SH.688102_K_5M.parquet
+2026-03-08 17:48:32,175 - INFO -   - 导出股票: SH.688122
+2026-03-08 17:48:32,232 - INFO -     ✅ 成功导出 24184 条记录 -> stock_cache/SH.688122_K_5M.parquet
+2026-03-08 17:48:32,232 - INFO -   - 导出股票: SH.688193
+2026-03-08 17:48:32,290 - INFO -     ✅ 成功导出 24616 条记录 -> stock_cache/SH.688193_K_5M.parquet
+2026-03-08 17:48:32,291 - INFO -   - 导出股票: SH.688256
+2026-03-08 17:48:32,323 - INFO -     ✅ 成功导出 12616 条记录 -> stock_cache/SH.688256_K_5M.parquet
+2026-03-08 17:48:32,323 - INFO -   - 导出股票: SH.688333
+2026-03-08 17:48:32,382 - INFO -     ✅ 成功导出 24184 条记录 -> stock_cache/SH.688333_K_5M.parquet
+2026-03-08 17:48:32,382 - INFO -   - 导出股票: SH.688676
+2026-03-08 17:48:32,443 - INFO -     ✅ 成功导出 24232 条记录 -> stock_cache/SH.688676_K_5M.parquet
+2026-03-08 17:48:32,444 - INFO -   - 导出股票: SH.688719
+2026-03-08 17:48:32,502 - INFO -     ✅ 成功导出 24184 条记录 -> stock_cache/SH.688719_K_5M.parquet
+2026-03-08 17:48:32,502 - INFO -   - 导出股票: SH.900922
+2026-03-08 17:48:32,559 - INFO -     ✅ 成功导出 24184 条记录 -> stock_cache/SH.900922_K_5M.parquet
+2026-03-08 17:48:32,559 - INFO -   - 导出股票: SH.900948
+2026-03-08 17:48:32,591 - INFO -     ✅ 成功导出 12616 条记录 -> stock_cache/SH.900948_K_5M.parquet
+2026-03-08 17:48:32,591 - INFO -   - 导出股票: SZ.000682
+2026-03-08 17:48:32,660 - INFO -     ✅ 成功导出 24232 条记录 -> stock_cache/SZ.000682_K_5M.parquet
+2026-03-08 17:48:32,660 - INFO -   - 导出股票: SZ.000792
+2026-03-08 17:48:32,694 - INFO -     ✅ 成功导出 12616 条记录 -> stock_cache/SZ.000792_K_5M.parquet
+2026-03-08 17:48:32,694 - INFO -   - 导出股票: SZ.002028
+2026-03-08 17:48:32,756 - INFO -     ✅ 成功导出 24424 条记录 -> stock_cache/SZ.002028_K_5M.parquet
+2026-03-08 17:48:32,756 - INFO -   - 导出股票: SZ.002039
+2026-03-08 17:48:32,826 - INFO -     ✅ 成功导出 24232 条记录 -> stock_cache/SZ.002039_K_5M.parquet
+2026-03-08 17:48:32,826 - INFO -   - 导出股票: SZ.002149
+2026-03-08 17:48:32,895 - INFO -     ✅ 成功导出 24472 条记录 -> stock_cache/SZ.002149_K_5M.parquet
+2026-03-08 17:48:32,895 - INFO -   - 导出股票: SZ.002270
+2026-03-08 17:48:32,956 - INFO -     ✅ 成功导出 25000 条记录 -> stock_cache/SZ.002270_K_5M.parquet
+2026-03-08 17:48:32,956 - INFO -   - 导出股票: SZ.002374
+2026-03-08 17:48:33,022 - INFO -     ✅ 成功导出 24184 条记录 -> stock_cache/SZ.002374_K_5M.parquet
+2026-03-08 17:48:33,022 - INFO -   - 导出股票: SZ.002714
+2026-03-08 17:48:33,087 - INFO -     ✅ 成功导出 24424 条记录 -> stock_cache/SZ.002714_K_5M.parquet
+2026-03-08 17:48:33,087 - INFO -   - 导出股票: SZ.002747
+2026-03-08 17:48:33,145 - INFO -     ✅ 成功导出 24232 条记录 -> stock_cache/SZ.002747_K_5M.parquet
+2026-03-08 17:48:33,145 - INFO -   - 导出股票: SZ.002922
+2026-03-08 17:48:33,205 - INFO -     ✅ 成功导出 24472 条记录 -> stock_cache/SZ.002922_K_5M.parquet
+2026-03-08 17:48:33,205 - INFO -   - 导出股票: SZ.002941
+2026-03-08 17:48:33,267 - INFO -     ✅ 成功导出 24232 条记录 -> stock_cache/SZ.002941_K_5M.parquet
+2026-03-08 17:48:33,267 - INFO -   - 导出股票: SZ.300124
+2026-03-08 17:48:33,331 - INFO -     ✅ 成功导出 24232 条记录 -> stock_cache/SZ.300124_K_5M.parquet
+2026-03-08 17:48:33,331 - INFO -   - 导出股票: SZ.300277
+2026-03-08 17:48:33,387 - INFO -     ✅ 成功导出 23464 条记录 -> stock_cache/SZ.300277_K_5M.parquet
+2026-03-08 17:48:33,387 - INFO -   - 导出股票: SZ.300476
+2026-03-08 17:48:33,448 - INFO -     ✅ 成功导出 24952 条记录 -> stock_cache/SZ.300476_K_5M.parquet
+2026-03-08 17:48:33,448 - INFO -   - 导出股票: SZ.300498
+2026-03-08 17:48:33,515 - INFO -     ✅ 成功导出 24424 条记录 -> stock_cache/SZ.300498_K_5M.parquet
+2026-03-08 17:48:33,515 - INFO -   - 导出股票: SZ.300751
+2026-03-08 17:48:33,575 - INFO -     ✅ 成功导出 24232 条记录 -> stock_cache/SZ.300751_K_5M.parquet
+2026-03-08 17:48:33,575 - INFO -   - 导出股票: SZ.300772
+2026-03-08 17:48:33,635 - INFO -     ✅ 成功导出 24280 条记录 -> stock_cache/SZ.300772_K_5M.parquet
+2026-03-08 17:48:33,635 - INFO -   - 导出股票: SZ.301200
+2026-03-08 17:48:33,694 - INFO -     ✅ 成功导出 24232 条记录 -> stock_cache/SZ.301200_K_5M.parquet
+2026-03-08 17:48:33,694 - INFO -   - 导出股票: SZ.301306
+2026-03-08 17:48:33,758 - INFO -     ✅ 成功导出 24472 条记录 -> stock_cache/SZ.301306_K_5M.parquet
+2026-03-08 17:48:33,758 - INFO -   - 导出股票: SZ.301517
+2026-03-08 17:48:33,817 - INFO -     ✅ 成功导出 23752 条记录 -> stock_cache/SZ.301517_K_5M.parquet
+2026-03-08 17:48:33,817 - INFO -   - 导出股票: SZ.301589
+2026-03-08 17:48:33,873 - INFO -     ✅ 成功导出 22936 条记录 -> stock_cache/SZ.301589_K_5M.parquet
+2026-03-08 17:48:33,874 - INFO -   - 导出股票: US.AAPL
+2026-03-08 17:48:33,879 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.AAPL_K_5M.parquet
+2026-03-08 17:48:33,879 - INFO -   - 导出股票: US.ACMR
+2026-03-08 17:48:33,882 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.ACMR_K_5M.parquet
+2026-03-08 17:48:33,882 - INFO -   - 导出股票: US.ADM
+2026-03-08 17:48:33,885 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.ADM_K_5M.parquet
+2026-03-08 17:48:33,885 - INFO -   - 导出股票: US.AMD
+2026-03-08 17:48:33,889 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.AMD_K_5M.parquet
+2026-03-08 17:48:33,889 - INFO -   - 导出股票: US.APP
+2026-03-08 17:48:33,891 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.APP_K_5M.parquet
+2026-03-08 17:48:33,891 - INFO -   - 导出股票: US.AREC
+2026-03-08 17:48:33,895 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.AREC_K_5M.parquet
+2026-03-08 17:48:33,895 - INFO -   - 导出股票: US.ASML
+2026-03-08 17:48:33,897 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.ASML_K_5M.parquet
+2026-03-08 17:48:33,898 - INFO -   - 导出股票: US.BE
+2026-03-08 17:48:33,900 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.BE_K_5M.parquet
+2026-03-08 17:48:33,900 - INFO -   - 导出股票: US.COIN
+2026-03-08 17:48:33,903 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.COIN_K_5M.parquet
+2026-03-08 17:48:33,903 - INFO -   - 导出股票: US.CRCL
+2026-03-08 17:48:33,905 - INFO -     ✅ 成功导出 189 条记录 -> stock_cache/US.CRCL_K_5M.parquet
+2026-03-08 17:48:33,905 - INFO -   - 导出股票: US.CRML
+2026-03-08 17:48:33,908 - INFO -     ✅ 成功导出 507 条记录 -> stock_cache/US.CRML_K_5M.parquet
+2026-03-08 17:48:33,908 - INFO -   - 导出股票: US.FIG
+2026-03-08 17:48:33,910 - INFO -     ✅ 成功导出 151 条记录 -> stock_cache/US.FIG_K_5M.parquet
+2026-03-08 17:48:33,910 - INFO -   - 导出股票: US.GOOG
+2026-03-08 17:48:33,913 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.GOOG_K_5M.parquet
+2026-03-08 17:48:33,913 - INFO -   - 导出股票: US.HMY
+2026-03-08 17:48:33,916 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.HMY_K_5M.parquet
+2026-03-08 17:48:33,916 - INFO -   - 导出股票: US.HSY
+2026-03-08 17:48:33,918 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.HSY_K_5M.parquet
+2026-03-08 17:48:33,918 - INFO -   - 导出股票: US.INTC
+2026-03-08 17:48:33,921 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.INTC_K_5M.parquet
+2026-03-08 17:48:33,921 - INFO -   - 导出股票: US.ISRG
+2026-03-08 17:48:33,924 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.ISRG_K_5M.parquet
+2026-03-08 17:48:33,924 - INFO -   - 导出股票: US.JKS
+2026-03-08 17:48:33,927 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.JKS_K_5M.parquet
+2026-03-08 17:48:33,927 - INFO -   - 导出股票: US.LEU
+2026-03-08 17:48:33,932 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.LEU_K_5M.parquet
+2026-03-08 17:48:33,932 - INFO -   - 导出股票: US.META
+2026-03-08 17:48:33,935 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.META_K_5M.parquet
+2026-03-08 17:48:33,935 - INFO -   - 导出股票: US.MP
+2026-03-08 17:48:33,938 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.MP_K_5M.parquet
+2026-03-08 17:48:33,938 - INFO -   - 导出股票: US.NBIS
+2026-03-08 17:48:33,940 - INFO -     ✅ 成功导出 344 条记录 -> stock_cache/US.NBIS_K_5M.parquet
+2026-03-08 17:48:33,940 - INFO -   - 导出股票: US.NVDA
+2026-03-08 17:48:33,943 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.NVDA_K_5M.parquet
+2026-03-08 17:48:33,943 - INFO -   - 导出股票: US.NVX
+2026-03-08 17:48:33,946 - INFO -     ✅ 成功导出 543 条记录 -> stock_cache/US.NVX_K_5M.parquet
+2026-03-08 17:48:33,946 - INFO -   - 导出股票: US.ORCL
+2026-03-08 17:48:33,949 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.ORCL_K_5M.parquet
+2026-03-08 17:48:33,949 - INFO -   - 导出股票: US.PDD
+2026-03-08 17:48:33,952 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.PDD_K_5M.parquet
+2026-03-08 17:48:33,952 - INFO -   - 导出股票: US.PGY
+2026-03-08 17:48:33,954 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.PGY_K_5M.parquet
+2026-03-08 17:48:33,954 - INFO -   - 导出股票: US.PPTA
+2026-03-08 17:48:33,958 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.PPTA_K_5M.parquet
+2026-03-08 17:48:33,958 - INFO -   - 导出股票: US.SLV
+2026-03-08 17:48:33,960 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.SLV_K_5M.parquet
+2026-03-08 17:48:33,960 - INFO -   - 导出股票: US.SMMT
+2026-03-08 17:48:33,963 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.SMMT_K_5M.parquet
+2026-03-08 17:48:33,963 - INFO -   - 导出股票: US.SPY
+2026-03-08 17:48:33,967 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.SPY_K_5M.parquet
+2026-03-08 17:48:33,967 - INFO -   - 导出股票: US.SY
+2026-03-08 17:48:33,969 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.SY_K_5M.parquet
+2026-03-08 17:48:33,969 - INFO -   - 导出股票: US.TER
+2026-03-08 17:48:33,972 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.TER_K_5M.parquet
+2026-03-08 17:48:33,972 - INFO -   - 导出股票: US.TSLA
+2026-03-08 17:48:33,975 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.TSLA_K_5M.parquet
+2026-03-08 17:48:33,975 - INFO -   - 导出股票: US.TSM
+2026-03-08 17:48:33,977 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.TSM_K_5M.parquet
+2026-03-08 17:48:33,977 - INFO -   - 导出股票: US.UAMY
+2026-03-08 17:48:33,981 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.UAMY_K_5M.parquet
+2026-03-08 17:48:33,981 - INFO -   - 导出股票: US.UEC
+2026-03-08 17:48:33,983 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.UEC_K_5M.parquet
+2026-03-08 17:48:33,983 - INFO -   - 导出股票: US.USAR
+2026-03-08 17:48:33,985 - INFO -     ✅ 成功导出 246 条记录 -> stock_cache/US.USAR_K_5M.parquet
+2026-03-08 17:48:33,985 - INFO -   - 导出股票: US.UUUU
+2026-03-08 17:48:33,988 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.UUUU_K_5M.parquet
+2026-03-08 17:48:33,988 - INFO -   - 导出股票: US.WWR
+2026-03-08 17:48:33,991 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.WWR_K_5M.parquet
+2026-03-08 17:48:33,991 - INFO -   - 导出股票: US.YMM
+2026-03-08 17:48:33,993 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.YMM_K_5M.parquet
+2026-03-08 17:48:33,993 - INFO -   - 导出股票: US.ZLAB
+2026-03-08 17:48:33,995 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.ZLAB_K_5M.parquet
+2026-03-08 17:48:33,996 - INFO - 处理表: kline_1m (频率: 1M)
+2026-03-08 17:48:36,499 - INFO -   - 导出股票: HK.00100
+2026-03-08 17:48:36,541 - INFO -     ✅ 成功导出 12398 条记录 -> stock_cache/HK.00100_K_1M.parquet
+2026-03-08 17:48:36,541 - INFO -   - 导出股票: HK.00288
+2026-03-08 17:48:36,950 - INFO -     ✅ 成功导出 137836 条记录 -> stock_cache/HK.00288_K_1M.parquet
+2026-03-08 17:48:36,950 - INFO -   - 导出股票: HK.00300
+2026-03-08 17:48:37,241 - INFO -     ✅ 成功导出 101850 条记录 -> stock_cache/HK.00300_K_1M.parquet
+2026-03-08 17:48:37,241 - INFO -   - 导出股票: HK.00358
+2026-03-08 17:48:37,649 - INFO -     ✅ 成功导出 138836 条记录 -> stock_cache/HK.00358_K_1M.parquet
+2026-03-08 17:48:37,649 - INFO -   - 导出股票: HK.00699
+2026-03-08 17:48:37,736 - INFO -     ✅ 成功导出 26602 条记录 -> stock_cache/HK.00699_K_1M.parquet
+2026-03-08 17:48:37,736 - INFO -   - 导出股票: HK.00700
+2026-03-08 17:48:37,974 - INFO -     ✅ 成功导出 81555 条记录 -> stock_cache/HK.00700_K_1M.parquet
+2026-03-08 17:48:37,974 - INFO -   - 导出股票: HK.00836
+2026-03-08 17:48:38,179 - INFO -     ✅ 成功导出 81555 条记录 -> stock_cache/HK.00836_K_1M.parquet
+2026-03-08 17:48:38,179 - INFO -   - 导出股票: HK.00883
+2026-03-08 17:48:38,384 - INFO -     ✅ 成功导出 81555 条记录 -> stock_cache/HK.00883_K_1M.parquet
+2026-03-08 17:48:38,384 - INFO -   - 导出股票: HK.00916
+2026-03-08 17:48:38,777 - INFO -     ✅ 成功导出 138354 条记录 -> stock_cache/HK.00916_K_1M.parquet
+2026-03-08 17:48:38,777 - INFO -   - 导出股票: HK.00966
+2026-03-08 17:48:39,169 - INFO -     ✅ 成功导出 138836 条记录 -> stock_cache/HK.00966_K_1M.parquet
+2026-03-08 17:48:39,170 - INFO -   - 导出股票: HK.00981
+2026-03-08 17:48:39,419 - INFO -     ✅ 成功导出 81555 条记录 -> stock_cache/HK.00981_K_1M.parquet
+2026-03-08 17:48:39,419 - INFO -   - 导出股票: HK.01133
+2026-03-08 17:48:39,626 - INFO -     ✅ 成功导出 81555 条记录 -> stock_cache/HK.01133_K_1M.parquet
+2026-03-08 17:48:39,626 - INFO -   - 导出股票: HK.01177
+2026-03-08 17:48:40,130 - INFO -     ✅ 成功导出 137836 条记录 -> stock_cache/HK.01177_K_1M.parquet
+2026-03-08 17:48:40,130 - INFO -   - 导出股票: HK.01347
+2026-03-08 17:48:40,357 - INFO -     ✅ 成功导出 81555 条记录 -> stock_cache/HK.01347_K_1M.parquet
+2026-03-08 17:48:40,357 - INFO -   - 导出股票: HK.01378
+2026-03-08 17:48:40,740 - INFO -     ✅ 成功导出 138836 条记录 -> stock_cache/HK.01378_K_1M.parquet
+2026-03-08 17:48:40,740 - INFO -   - 导出股票: HK.01618
+2026-03-08 17:48:41,166 - INFO -     ✅ 成功导出 138166 条记录 -> stock_cache/HK.01618_K_1M.parquet
+2026-03-08 17:48:41,166 - INFO -   - 导出股票: HK.01787
+2026-03-08 17:48:41,571 - INFO -     ✅ 成功导出 138836 条记录 -> stock_cache/HK.01787_K_1M.parquet
+2026-03-08 17:48:41,571 - INFO -   - 导出股票: HK.02020
+2026-03-08 17:48:41,963 - INFO -     ✅ 成功导出 138836 条记录 -> stock_cache/HK.02020_K_1M.parquet
+2026-03-08 17:48:41,963 - INFO -   - 导出股票: HK.02259
+2026-03-08 17:48:42,069 - INFO -     ✅ 成功导出 34215 条记录 -> stock_cache/HK.02259_K_1M.parquet
+2026-03-08 17:48:42,069 - INFO -   - 导出股票: HK.02357
+2026-03-08 17:48:42,444 - INFO -     ✅ 成功导出 81555 条记录 -> stock_cache/HK.02357_K_1M.parquet
+2026-03-08 17:48:42,444 - INFO -   - 导出股票: HK.02469
+2026-03-08 17:48:42,855 - INFO -     ✅ 成功导出 138498 条记录 -> stock_cache/HK.02469_K_1M.parquet
+2026-03-08 17:48:42,856 - INFO -   - 导出股票: HK.02513
+2026-03-08 17:48:42,901 - INFO -     ✅ 成功导出 12729 条记录 -> stock_cache/HK.02513_K_1M.parquet
+2026-03-08 17:48:42,901 - INFO -   - 导出股票: HK.02580
+2026-03-08 17:48:43,010 - INFO -     ✅ 成功导出 40835 条记录 -> stock_cache/HK.02580_K_1M.parquet
+2026-03-08 17:48:43,010 - INFO -   - 导出股票: HK.02688
+2026-03-08 17:48:43,396 - INFO -     ✅ 成功导出 136850 条记录 -> stock_cache/HK.02688_K_1M.parquet
+2026-03-08 17:48:43,396 - INFO -   - 导出股票: HK.02899
+2026-03-08 17:48:43,800 - INFO -     ✅ 成功导出 138836 条记录 -> stock_cache/HK.02899_K_1M.parquet
+2026-03-08 17:48:43,800 - INFO -   - 导出股票: HK.03288
+2026-03-08 17:48:43,957 - INFO -     ✅ 成功导出 58047 条记录 -> stock_cache/HK.03288_K_1M.parquet
+2026-03-08 17:48:43,957 - INFO -   - 导出股票: HK.03378
+2026-03-08 17:48:44,006 - INFO -     ✅ 成功导出 15679 条记录 -> stock_cache/HK.03378_K_1M.parquet
+2026-03-08 17:48:44,006 - INFO -   - 导出股票: HK.06603
+2026-03-08 17:48:44,159 - INFO -     ✅ 成功导出 55730 条记录 -> stock_cache/HK.06603_K_1M.parquet
+2026-03-08 17:48:44,159 - INFO -   - 导出股票: HK.06608
+2026-03-08 17:48:44,232 - INFO -     ✅ 成功导出 25832 条记录 -> stock_cache/HK.06608_K_1M.parquet
+2026-03-08 17:48:44,232 - INFO -   - 导出股票: HK.06682
+2026-03-08 17:48:44,658 - INFO -     ✅ 成功导出 137840 条记录 -> stock_cache/HK.06682_K_1M.parquet
+2026-03-08 17:48:44,658 - INFO -   - 导出股票: HK.09885
+2026-03-08 17:48:45,068 - INFO -     ✅ 成功导出 136846 条记录 -> stock_cache/HK.09885_K_1M.parquet
+2026-03-08 17:48:45,068 - INFO -   - 导出股票: HK.09959
+2026-03-08 17:48:45,283 - INFO -     ✅ 成功导出 81555 条记录 -> stock_cache/HK.09959_K_1M.parquet
+2026-03-08 17:48:45,283 - INFO -   - 导出股票: HK.09981
+2026-03-08 17:48:45,301 - INFO -     ✅ 成功导出 4454 条记录 -> stock_cache/HK.09981_K_1M.parquet
+2026-03-08 17:48:45,301 - INFO -   - 导出股票: HK.09988
+2026-03-08 17:48:45,527 - INFO -     ✅ 成功导出 81555 条记录 -> stock_cache/HK.09988_K_1M.parquet
+2026-03-08 17:48:45,527 - INFO -   - 导出股票: HK.09995
+2026-03-08 17:48:45,939 - INFO -     ✅ 成功导出 137836 条记录 -> stock_cache/HK.09995_K_1M.parquet
+2026-03-08 17:48:45,939 - INFO -   - 导出股票: SH.600089
+2026-03-08 17:48:46,283 - INFO -     ✅ 成功导出 113070 条记录 -> stock_cache/SH.600089_K_1M.parquet
+2026-03-08 17:48:46,283 - INFO -   - 导出股票: SH.600101
+2026-03-08 17:48:46,634 - INFO -     ✅ 成功导出 113070 条记录 -> stock_cache/SH.600101_K_1M.parquet
+2026-03-08 17:48:46,634 - INFO -   - 导出股票: SH.600505
+2026-03-08 17:48:46,966 - INFO -     ✅ 成功导出 112034 条记录 -> stock_cache/SH.600505_K_1M.parquet
+2026-03-08 17:48:46,966 - INFO -   - 导出股票: SH.600641
+2026-03-08 17:48:47,302 - INFO -     ✅ 成功导出 113275 条记录 -> stock_cache/SH.600641_K_1M.parquet
+2026-03-08 17:48:47,302 - INFO -   - 导出股票: SH.600644
+2026-03-08 17:48:47,650 - INFO -     ✅ 成功导出 114034 条记录 -> stock_cache/SH.600644_K_1M.parquet
+2026-03-08 17:48:47,650 - INFO -   - 导出股票: SH.600674
+2026-03-08 17:48:48,009 - INFO -     ✅ 成功导出 116034 条记录 -> stock_cache/SH.600674_K_1M.parquet
+2026-03-08 17:48:48,009 - INFO -   - 导出股票: SH.600795
+2026-03-08 17:48:48,191 - INFO -     ✅ 成功导出 59081 条记录 -> stock_cache/SH.600795_K_1M.parquet
+2026-03-08 17:48:48,191 - INFO -   - 导出股票: SH.600803
+2026-03-08 17:48:48,538 - INFO -     ✅ 成功导出 110588 条记录 -> stock_cache/SH.600803_K_1M.parquet
+2026-03-08 17:48:48,539 - INFO -   - 导出股票: SH.600886
+2026-03-08 17:48:48,889 - INFO -     ✅ 成功导出 116444 条记录 -> stock_cache/SH.600886_K_1M.parquet
+2026-03-08 17:48:48,889 - INFO -   - 导出股票: SH.600995
+2026-03-08 17:48:49,075 - INFO -     ✅ 成功导出 59081 条记录 -> stock_cache/SH.600995_K_1M.parquet
+2026-03-08 17:48:49,075 - INFO -   - 导出股票: SH.601012
+2026-03-08 17:48:49,460 - INFO -     ✅ 成功导出 113070 条记录 -> stock_cache/SH.601012_K_1M.parquet
+2026-03-08 17:48:49,460 - INFO -   - 导出股票: SH.601179
+2026-03-08 17:48:49,800 - INFO -     ✅ 成功导出 114070 条记录 -> stock_cache/SH.601179_K_1M.parquet
+2026-03-08 17:48:49,800 - INFO -   - 导出股票: SH.601899
+2026-03-08 17:48:50,154 - INFO -     ✅ 成功导出 113070 条记录 -> stock_cache/SH.601899_K_1M.parquet
+2026-03-08 17:48:50,154 - INFO -   - 导出股票: SH.603281
+2026-03-08 17:48:50,492 - INFO -     ✅ 成功导出 114070 条记录 -> stock_cache/SH.603281_K_1M.parquet
+2026-03-08 17:48:50,492 - INFO -   - 导出股票: SH.688041
+2026-03-08 17:48:50,673 - INFO -     ✅ 成功导出 56671 条记录 -> stock_cache/SH.688041_K_1M.parquet
+2026-03-08 17:48:50,673 - INFO -   - 导出股票: SH.688102
+2026-03-08 17:48:51,006 - INFO -     ✅ 成功导出 112793 条记录 -> stock_cache/SH.688102_K_1M.parquet
+2026-03-08 17:48:51,007 - INFO -   - 导出股票: SH.688122
+2026-03-08 17:48:51,339 - INFO -     ✅ 成功导出 113034 条记录 -> stock_cache/SH.688122_K_1M.parquet
+2026-03-08 17:48:51,339 - INFO -   - 导出股票: SH.688193
+2026-03-08 17:48:51,689 - INFO -     ✅ 成功导出 113034 条记录 -> stock_cache/SH.688193_K_1M.parquet
+2026-03-08 17:48:51,689 - INFO -   - 导出股票: SH.688256
+2026-03-08 17:48:51,868 - INFO -     ✅ 成功导出 59081 条记录 -> stock_cache/SH.688256_K_1M.parquet
+2026-03-08 17:48:51,868 - INFO -   - 导出股票: SH.688333
+2026-03-08 17:48:52,202 - INFO -     ✅ 成功导出 114034 条记录 -> stock_cache/SH.688333_K_1M.parquet
+2026-03-08 17:48:52,202 - INFO -   - 导出股票: SH.688676
+2026-03-08 17:48:52,533 - INFO -     ✅ 成功导出 113070 条记录 -> stock_cache/SH.688676_K_1M.parquet
+2026-03-08 17:48:52,533 - INFO -   - 导出股票: SH.688719
+2026-03-08 17:48:52,880 - INFO -     ✅ 成功导出 113070 条记录 -> stock_cache/SH.688719_K_1M.parquet
+2026-03-08 17:48:52,880 - INFO -   - 导出股票: SH.900922
+2026-03-08 17:48:53,225 - INFO -     ✅ 成功导出 112034 条记录 -> stock_cache/SH.900922_K_1M.parquet
+2026-03-08 17:48:53,225 - INFO -   - 导出股票: SH.900948
+2026-03-08 17:48:53,404 - INFO -     ✅ 成功导出 59081 条记录 -> stock_cache/SH.900948_K_1M.parquet
+2026-03-08 17:48:53,404 - INFO -   - 导出股票: SZ.000682
+2026-03-08 17:48:53,745 - INFO -     ✅ 成功导出 113034 条记录 -> stock_cache/SZ.000682_K_1M.parquet
+2026-03-08 17:48:53,745 - INFO -   - 导出股票: SZ.000792
+2026-03-08 17:48:53,924 - INFO -     ✅ 成功导出 59081 条记录 -> stock_cache/SZ.000792_K_1M.parquet
+2026-03-08 17:48:53,924 - INFO -   - 导出股票: SZ.002028
+2026-03-08 17:48:54,270 - INFO -     ✅ 成功导出 112070 条记录 -> stock_cache/SZ.002028_K_1M.parquet
+2026-03-08 17:48:54,270 - INFO -   - 导出股票: SZ.002039
+2026-03-08 17:48:54,628 - INFO -     ✅ 成功导出 113034 条记录 -> stock_cache/SZ.002039_K_1M.parquet
+2026-03-08 17:48:54,628 - INFO -   - 导出股票: SZ.002149
+2026-03-08 17:48:55,003 - INFO -     ✅ 成功导出 113793 条记录 -> stock_cache/SZ.002149_K_1M.parquet
+2026-03-08 17:48:55,003 - INFO -   - 导出股票: SZ.002270
+2026-03-08 17:48:55,383 - INFO -     ✅ 成功导出 112034 条记录 -> stock_cache/SZ.002270_K_1M.parquet
+2026-03-08 17:48:55,383 - INFO -   - 导出股票: SZ.002374
+2026-03-08 17:48:55,726 - INFO -     ✅ 成功导出 113034 条记录 -> stock_cache/SZ.002374_K_1M.parquet
+2026-03-08 17:48:55,726 - INFO -   - 导出股票: SZ.002714
+2026-03-08 17:48:56,073 - INFO -     ✅ 成功导出 114034 条记录 -> stock_cache/SZ.002714_K_1M.parquet
+2026-03-08 17:48:56,073 - INFO -   - 导出股票: SZ.002747
+2026-03-08 17:48:56,436 - INFO -     ✅ 成功导出 112311 条记录 -> stock_cache/SZ.002747_K_1M.parquet
+2026-03-08 17:48:56,436 - INFO -   - 导出股票: SZ.002922
+2026-03-08 17:48:56,768 - INFO -     ✅ 成功导出 111034 条记录 -> stock_cache/SZ.002922_K_1M.parquet
+2026-03-08 17:48:56,768 - INFO -   - 导出股票: SZ.002941
+2026-03-08 17:48:57,102 - INFO -     ✅ 成功导出 113070 条记录 -> stock_cache/SZ.002941_K_1M.parquet
+2026-03-08 17:48:57,102 - INFO -   - 导出股票: SZ.300124
+2026-03-08 17:48:57,441 - INFO -     ✅ 成功导出 113070 条记录 -> stock_cache/SZ.300124_K_1M.parquet
+2026-03-08 17:48:57,441 - INFO -   - 导出股票: SZ.300277
+2026-03-08 17:48:57,760 - INFO -     ✅ 成功导出 108660 条记录 -> stock_cache/SZ.300277_K_1M.parquet
+2026-03-08 17:48:57,760 - INFO -   - 导出股票: SZ.300476
+2026-03-08 17:48:58,082 - INFO -     ✅ 成功导出 113034 条记录 -> stock_cache/SZ.300476_K_1M.parquet
+2026-03-08 17:48:58,082 - INFO -   - 导出股票: SZ.300498
+2026-03-08 17:48:58,423 - INFO -     ✅ 成功导出 113070 条记录 -> stock_cache/SZ.300498_K_1M.parquet
+2026-03-08 17:48:58,423 - INFO -   - 导出股票: SZ.300751
+2026-03-08 17:48:58,769 - INFO -     ✅ 成功导出 112070 条记录 -> stock_cache/SZ.300751_K_1M.parquet
+2026-03-08 17:48:58,769 - INFO -   - 导出股票: SZ.300772
+2026-03-08 17:48:59,123 - INFO -     ✅ 成功导出 113034 条记录 -> stock_cache/SZ.300772_K_1M.parquet
+2026-03-08 17:48:59,123 - INFO -   - 导出股票: SZ.301200
+2026-03-08 17:48:59,466 - INFO -     ✅ 成功导出 113311 条记录 -> stock_cache/SZ.301200_K_1M.parquet
+2026-03-08 17:48:59,466 - INFO -   - 导出股票: SZ.301306
+2026-03-08 17:48:59,810 - INFO -     ✅ 成功导出 113793 条记录 -> stock_cache/SZ.301306_K_1M.parquet
+2026-03-08 17:48:59,810 - INFO -   - 导出股票: SZ.301517
+2026-03-08 17:49:00,159 - INFO -     ✅ 成功导出 112901 条记录 -> stock_cache/SZ.301517_K_1M.parquet
+2026-03-08 17:49:00,159 - INFO -   - 导出股票: SZ.301589
+2026-03-08 17:49:00,490 - INFO -     ✅ 成功导出 108383 条记录 -> stock_cache/SZ.301589_K_1M.parquet
+2026-03-08 17:49:00,490 - INFO -   - 导出股票: US.AAPL
+2026-03-08 17:49:00,501 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.AAPL_K_1M.parquet
+2026-03-08 17:49:00,501 - INFO -   - 导出股票: US.ACMR
+2026-03-08 17:49:00,505 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.ACMR_K_1M.parquet
+2026-03-08 17:49:00,505 - INFO -   - 导出股票: US.ADM
+2026-03-08 17:49:00,509 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.ADM_K_1M.parquet
+2026-03-08 17:49:00,509 - INFO -   - 导出股票: US.AMD
+2026-03-08 17:49:00,512 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.AMD_K_1M.parquet
+2026-03-08 17:49:00,512 - INFO -   - 导出股票: US.APP
+2026-03-08 17:49:00,516 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.APP_K_1M.parquet
+2026-03-08 17:49:00,516 - INFO -   - 导出股票: US.AREC
+2026-03-08 17:49:00,521 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.AREC_K_1M.parquet
+2026-03-08 17:49:00,521 - INFO -   - 导出股票: US.ASML
+2026-03-08 17:49:00,524 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.ASML_K_1M.parquet
+2026-03-08 17:49:00,524 - INFO -   - 导出股票: US.BE
+2026-03-08 17:49:00,529 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.BE_K_1M.parquet
+2026-03-08 17:49:00,529 - INFO -   - 导出股票: US.COIN
+2026-03-08 17:49:00,531 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.COIN_K_1M.parquet
+2026-03-08 17:49:00,531 - INFO -   - 导出股票: US.CRCL
+2026-03-08 17:49:00,533 - INFO -     ✅ 成功导出 189 条记录 -> stock_cache/US.CRCL_K_1M.parquet
+2026-03-08 17:49:00,533 - INFO -   - 导出股票: US.CRML
+2026-03-08 17:49:00,537 - INFO -     ✅ 成功导出 507 条记录 -> stock_cache/US.CRML_K_1M.parquet
+2026-03-08 17:49:00,537 - INFO -   - 导出股票: US.FIG
+2026-03-08 17:49:00,539 - INFO -     ✅ 成功导出 151 条记录 -> stock_cache/US.FIG_K_1M.parquet
+2026-03-08 17:49:00,539 - INFO -   - 导出股票: US.GOOG
+2026-03-08 17:49:00,543 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.GOOG_K_1M.parquet
+2026-03-08 17:49:00,543 - INFO -   - 导出股票: US.HMY
+2026-03-08 17:49:00,546 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.HMY_K_1M.parquet
+2026-03-08 17:49:00,546 - INFO -   - 导出股票: US.HSY
+2026-03-08 17:49:00,549 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.HSY_K_1M.parquet
+2026-03-08 17:49:00,549 - INFO -   - 导出股票: US.INTC
+2026-03-08 17:49:00,553 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.INTC_K_1M.parquet
+2026-03-08 17:49:00,553 - INFO -   - 导出股票: US.ISRG
+2026-03-08 17:49:00,558 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.ISRG_K_1M.parquet
+2026-03-08 17:49:00,558 - INFO -   - 导出股票: US.JKS
+2026-03-08 17:49:00,562 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.JKS_K_1M.parquet
+2026-03-08 17:49:00,562 - INFO -   - 导出股票: US.LEU
+2026-03-08 17:49:00,565 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.LEU_K_1M.parquet
+2026-03-08 17:49:00,565 - INFO -   - 导出股票: US.META
+2026-03-08 17:49:00,569 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.META_K_1M.parquet
+2026-03-08 17:49:00,569 - INFO -   - 导出股票: US.MP
+2026-03-08 17:49:00,572 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.MP_K_1M.parquet
+2026-03-08 17:49:00,572 - INFO -   - 导出股票: US.NBIS
+2026-03-08 17:49:00,576 - INFO -     ✅ 成功导出 344 条记录 -> stock_cache/US.NBIS_K_1M.parquet
+2026-03-08 17:49:00,576 - INFO -   - 导出股票: US.NVDA
+2026-03-08 17:49:00,579 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.NVDA_K_1M.parquet
+2026-03-08 17:49:00,579 - INFO -   - 导出股票: US.NVX
+2026-03-08 17:49:00,583 - INFO -     ✅ 成功导出 543 条记录 -> stock_cache/US.NVX_K_1M.parquet
+2026-03-08 17:49:00,583 - INFO -   - 导出股票: US.ORCL
+2026-03-08 17:49:00,587 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.ORCL_K_1M.parquet
+2026-03-08 17:49:00,587 - INFO -   - 导出股票: US.PDD
+2026-03-08 17:49:00,590 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.PDD_K_1M.parquet
+2026-03-08 17:49:00,590 - INFO -   - 导出股票: US.PGY
+2026-03-08 17:49:00,594 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.PGY_K_1M.parquet
+2026-03-08 17:49:00,594 - INFO -   - 导出股票: US.PPTA
+2026-03-08 17:49:00,597 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.PPTA_K_1M.parquet
+2026-03-08 17:49:00,597 - INFO -   - 导出股票: US.SLV
+2026-03-08 17:49:00,601 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.SLV_K_1M.parquet
+2026-03-08 17:49:00,601 - INFO -   - 导出股票: US.SMMT
+2026-03-08 17:49:00,604 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.SMMT_K_1M.parquet
+2026-03-08 17:49:00,604 - INFO -   - 导出股票: US.SPY
+2026-03-08 17:49:00,608 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.SPY_K_1M.parquet
+2026-03-08 17:49:00,608 - INFO -   - 导出股票: US.SY
+2026-03-08 17:49:00,611 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.SY_K_1M.parquet
+2026-03-08 17:49:00,611 - INFO -   - 导出股票: US.TER
+2026-03-08 17:49:00,614 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.TER_K_1M.parquet
+2026-03-08 17:49:00,614 - INFO -   - 导出股票: US.TSLA
+2026-03-08 17:49:00,617 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.TSLA_K_1M.parquet
+2026-03-08 17:49:00,617 - INFO -   - 导出股票: US.TSM
+2026-03-08 17:49:00,621 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.TSM_K_1M.parquet
+2026-03-08 17:49:00,621 - INFO -   - 导出股票: US.UAMY
+2026-03-08 17:49:00,623 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.UAMY_K_1M.parquet
+2026-03-08 17:49:00,624 - INFO -   - 导出股票: US.UEC
+2026-03-08 17:49:00,626 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.UEC_K_1M.parquet
+2026-03-08 17:49:00,626 - INFO -   - 导出股票: US.USAR
+2026-03-08 17:49:00,628 - INFO -     ✅ 成功导出 246 条记录 -> stock_cache/US.USAR_K_1M.parquet
+2026-03-08 17:49:00,628 - INFO -   - 导出股票: US.UUUU
+2026-03-08 17:49:00,631 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.UUUU_K_1M.parquet
+2026-03-08 17:49:00,631 - INFO -   - 导出股票: US.WWR
+2026-03-08 17:49:00,634 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.WWR_K_1M.parquet
+2026-03-08 17:49:00,634 - INFO -   - 导出股票: US.YMM
+2026-03-08 17:49:00,638 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.YMM_K_1M.parquet
+2026-03-08 17:49:00,638 - INFO -   - 导出股票: US.ZLAB
+2026-03-08 17:49:00,641 - INFO -     ✅ 成功导出 546 条记录 -> stock_cache/US.ZLAB_K_1M.parquet
+2026-03-08 17:49:00,642 - INFO - 🎉 全部导出完成！共生成 462 个 parquet 文件，并生成默认 lot_size 配置。

@@ -130,6 +130,9 @@ class HKTradingController(QObject):
 
         self.last_login_time = None
         
+        # 记录持仓的追踪止损状态: { 'HK.00700': {'highest_price': 300.5, 'atr': 5.2, 'atr_multiplier': 2.0} }
+        self.position_trackers = {}
+        
         # --- ML Validation ---
         self.signal_validator = SignalValidator()
         self.ml_threshold = 0.60
@@ -764,6 +767,12 @@ class HKTradingController(QObject):
         if self.risk_manager.check_circuit_breaker():
             self.log_message.emit("⚠️ 熔断机制激活，暂停所有交易操作")
             return [], [], 0, 0, available_funds_at_start
+            
+        # ==============================================================
+        # Trailing Stop-Loss (移动追踪止损) 检查
+        # 独立于缠论信号，基于当前实时价格与历史最高价的回撤距离来触发
+        # ==============================================================
+        self._check_trailing_stops()
         
         # 分离并排序信号
         sell_signals = [s for s in all_signals if not s['is_buy']]
@@ -850,13 +859,27 @@ class HKTradingController(QObject):
                 
                 # 只有视觉评分 >= 阈值才执行交易
                 if score >= self.min_visual_score:
-                    # 使用风险管理器计算动态仓位
+                    # 获取该股票近乎最近的数据以计算 ATR
+                    atr_value = None
+                    atr_multiplier = 2.0
+                    chan_res = signal.get('chan_result', {})
+                    chan_analysis = chan_res.get('chan_analysis', {})
+                    # 尝试从30M或其它可用级别计算 ATR
+                    chan_30m = chan_analysis.get('chan_30m')
+                    if chan_30m:
+                        kl_list = [kl for kl in chan_30m[0].klu_iter()]
+                        atr_value = self._calculate_atr(kl_list, period=14)
+                        self.log_message.emit(f"{code} 波动率诊断: ATR={atr_value:.3f}")
+                    
+                    # 使用风险管理器计算动态仓位，通过 ATR 限额
                     buy_quantity = self.risk_manager.calculate_position_size(
                         code=code,
                         available_funds=available_funds,
                         current_price=price,
                         signal_score=score,
-                        risk_factor=1.0  # 可以根据波动率等计算风险因子
+                        risk_factor=1.0,
+                        atr=atr_value,
+                        atr_multiplier=atr_multiplier
                     )
                     
                     if buy_quantity <= 0:
@@ -888,6 +911,15 @@ class HKTradingController(QObject):
                         if bsp_time_str:
                             self.executed_signals[code] = bsp_time_str
                             self._save_executed_signals()
+                        
+                        # 初始化或更新追踪止损基准值
+                        if atr_value and atr_value > 0:
+                            self.position_trackers[code] = {
+                                'highest_price': price,
+                                'atr': atr_value,
+                                'atr_multiplier': atr_multiplier
+                            }
+                            self.log_message.emit(f"🛡️ {code} 已启动移动止损监控: 初始价={price:.3f}, ATR={atr_value:.3f}")
                             
                         self.log_message.emit(f"✅ 买入成功 {code}, 剩余资金: {available_funds:.2f}, 已买入{stocks_bought}/{max_stocks_to_buy}只")
                     else:
@@ -905,6 +937,88 @@ class HKTradingController(QObject):
             self.trd_ctx.close()
         except Exception as e:
             logger.error(f"关闭 Futu 连接时出错: {e}")
+
+    def _calculate_atr(self, kline_list: List, period: int = 14) -> float:
+        """
+        计算 ATR（Average True Range）
+        """
+        if not kline_list or len(kline_list) < period + 1:
+            return 0.0
+            
+        import numpy as np
+        
+        tr_list = []
+        # 从最后往前获取所需数量的K线，多取1根用于计算 TR
+        klines_for_atr = kline_list[-(period+1):]
+        
+        for i in range(1, len(klines_for_atr)):
+            current = klines_for_atr[i]
+            previous = klines_for_atr[i-1]
+            
+            high = current.high
+            low = current.low
+            prev_close = previous.close
+            
+            tr1 = high - low
+            tr2 = abs(high - prev_close)
+            tr3 = abs(low - prev_close)
+            
+            tr = max(tr1, tr2, tr3)
+            tr_list.append(tr)
+            
+        # 简单移动平均计算 ATR
+        if not tr_list:
+            return 0.0
+        return float(np.mean(tr_list))
+
+    def _check_trailing_stops(self):
+        """
+        检查所有在池中的持仓是否触发移动止损
+        """
+        if not hasattr(self, 'position_trackers') or not self.position_trackers:
+            return
+            
+        codes_to_check = list(self.position_trackers.keys())
+        for code in codes_to_check:
+            # 1. 查询当前真实持仓
+            qty = self.get_position_quantity(code)
+            if qty <= 0:
+                # 已经没有持仓了（可能通过缠论普通信号平仓），移除追踪
+                self.log_message.emit(f"🔄 {code} 已无持仓，停止移动止损追踪")
+                del self.position_trackers[code]
+                continue
+                
+            # 2. 查询最新价格
+            info = self.get_stock_info(code)
+            if not info or info.get('current_price', 0) <= 0:
+                continue
+                
+            current_price = info['current_price']
+            tracker = self.position_trackers[code]
+            
+            # 3. 更新最高价
+            if current_price > tracker['highest_price']:
+                tracker['highest_price'] = current_price
+                self.log_message.debug(f"📈 {code} 创持仓新高: {current_price:.3f}")
+                
+            # 4. 判断回撤止损
+            highest = tracker['highest_price']
+            stop_distance = tracker['atr'] * tracker['atr_multiplier']
+            stop_price = highest - stop_distance
+            
+            if current_price < stop_price:
+                self.log_message.emit(f"🚨 {code} 触发移动止损! 最高价={highest:.3f}, 现价={current_price:.3f}, 止损位={stop_price:.3f}")
+                
+                # 尝试强制抛售所有持仓
+                if self.execute_trade(code, 'SELL', qty, current_price):
+                    self.log_message.emit(f"✅ {code} 止损抛售成功: {qty} 股")
+                    del self.position_trackers[code]
+                    
+                    # 通知风控记录盈亏
+                    # 如果有记录买入均价更好，这里近似计算 pnl 或者留给后端对齐 
+                    self.risk_manager.record_trade(code, 'SELL', qty, current_price, score=0, pnl=0)
+                else:
+                    self.log_message.emit(f"❌ {code} 止损抛售失败，将在此后循环继续尝试。")
 
     def check_pending_orders(self, code: str, side: str) -> bool:
         """
