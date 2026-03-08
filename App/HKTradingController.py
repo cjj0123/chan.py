@@ -9,6 +9,7 @@
 
 import os
 import sys
+import time
 import json
 import logging
 from datetime import datetime, timedelta
@@ -50,6 +51,9 @@ from Monitoring.PerformanceMonitor import get_performance_monitor
 # 导入ML信号验证器
 from ML.SignalValidator import SignalValidator
 
+# 导入 DiscordBot
+from App.DiscordBot import DiscordBot
+
 # 配置日志
 logger = logging.getLogger(__name__)
 
@@ -75,15 +79,9 @@ class HKTradingController(QObject):
                  parent=None):
         """
         初始化港股交易控制器。
-
-        Args:
-            hk_watchlist_group: 自选股组名
-            min_visual_score: 最小视觉评分阈值
-            max_position_ratio: 单票最大仓位比例
-            dry_run: 是否为模拟盘模式
-            parent: 父 QObject (用于 Qt 内存管理)
         """
         super().__init__(parent)
+        self.log_message.emit("🚀 正在初始化交易控制器...")
         self.hk_watchlist_group = hk_watchlist_group or TRADING_CONFIG['hk_watchlist_group']
         self.min_visual_score = min_visual_score or TRADING_CONFIG['min_visual_score']
         self.max_position_ratio = max_position_ratio or TRADING_CONFIG['max_position_ratio']
@@ -97,6 +95,9 @@ class HKTradingController(QObject):
         self.quote_ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
         self.trd_ctx = OpenHKTradeContext(host='127.0.0.1', port=11111)
         self.trd_env = TrdEnv.SIMULATE if self.dry_run else TrdEnv.REAL
+
+        # 初始化 Discord Bot (将在启动扫描时真正启动)
+        self.discord_bot = None
 
         # 缠论配置
         self.chan_config = CChanConfig(CHAN_CONFIG)
@@ -122,8 +123,9 @@ class HKTradingController(QObject):
         # 性能监控器
         self.performance_monitor = get_performance_monitor()
 
-        # 用于停止扫描的标志
+        # 用于停止和暂停扫描的标志
         self._is_running = False
+        self._is_paused = False
 
         # 视觉评分缓存 (code_time_type -> score_dict)
         self.visual_score_cache = {}
@@ -179,6 +181,11 @@ class HKTradingController(QObject):
     def stop(self):
         """停止当前的扫描和交易流程"""
         self._is_running = False
+        if self.discord_bot:
+            try:
+                self.discord_bot.stop()
+            except:
+                pass
         self.log_message.emit("🛑 收到停止信号，正在安全退出...")
 
     def get_watchlist_codes(self) -> List[str]:
@@ -580,6 +587,41 @@ class HKTradingController(QObject):
         except Exception as e:
             logger.error(f"清理旧图表失败: {e}")
 
+    def is_trading_time(self) -> bool:
+        """
+        检查当前是否在港股交易时间内。
+        港股交易时间：
+        上午：09:30 - 12:00
+        下午：13:00 - 16:10 (包含收市竞价)
+        周六日不交易。
+        """
+        now = datetime.now()
+        # 1. 检查是否是周末
+        if now.weekday() >= 5:  # 5 是周六，6 是周日
+            return False
+            
+        current_time = now.time()
+        
+        # 2. 定义交易时段
+        morning_start = datetime.strptime("09:30", "%H:%M").time()
+        morning_end = datetime.strptime("12:00", "%H:%M").time()
+        afternoon_start = datetime.strptime("13:00", "%H:%M").time()
+        afternoon_end = datetime.strptime("16:10", "%H:%M").time()
+        
+        # 3. 检查当前时间是否在时段内
+        if morning_start <= current_time <= morning_end:
+            return True
+        if afternoon_start <= current_time <= afternoon_end:
+            return True
+            
+        return False
+
+    def toggle_pause(self, paused: bool):
+        """切换暂停状态"""
+        self._is_paused = paused
+        status_msg = "暂停" if paused else "恢复"
+        self.log_message.emit(f"🔄 自动化扫描已{status_msg} (通过 Discord 指令)")
+
     def run_scan_and_trade(self):
         """
         执行循环扫描和交易流程。
@@ -587,6 +629,21 @@ class HKTradingController(QObject):
         - 慢速策略扫描 (Slow Scan, ~30m): 基于 30 分钟 K 线边界触发完整缠论分析。
         """
         self._is_running = True
+        
+        # 真正启动 Discord Bot (这样日志才能被 GUI 接收到)
+        if self.discord_bot is None and TRADING_CONFIG.get('discord') and TRADING_CONFIG['discord'].get('token'):
+            try:
+                self.discord_bot = DiscordBot(
+                    token=TRADING_CONFIG['discord']['token'],
+                    channel_id=TRADING_CONFIG['discord']['channel_id'],
+                    allowed_user_ids=TRADING_CONFIG['discord']['allowed_user_ids'],
+                    controller=self
+                )
+                self.discord_bot.start()
+                self.log_message.emit("🤖 Discord 机器人已启动")
+            except Exception as e:
+                self.log_message.emit(f"⚠️ Discord 机器人启动失败: {e}")
+
         self.log_message.emit("🚀 启动港股双速自动化监控进程 (60s 风险监测 / 30m 策略扫描)...")
         
         # 初始化扫描时间为当前 Bar，避免启动时立即触发不完整的 Bar 分析
@@ -598,11 +655,19 @@ class HKTradingController(QObject):
                 # 0. 基础维护
                 self._cleanup_old_charts(hours=24)
                 
+                # 检查是否暂停
+                if self._is_paused:
+                    self.log_message.emit("⏸️ 自动化扫描已由远程指令暂停...")
+                    for _ in range(60):
+                        if not self._is_running or not self._is_paused: break
+                        time.sleep(1)
+                    continue
+
                 # 检查是否在交易时间内
                 if not self.is_trading_time():
                     self.log_message.emit("💤 非交易时间，等待 60 秒后重试...")
                     for _ in range(60):
-                        if not self._is_running: break
+                        if not self._is_running or self._is_paused: break
                         time.sleep(1)
                     continue
                 
@@ -1024,7 +1089,7 @@ class HKTradingController(QObject):
                     
                     # 通知风控记录盈亏
                     # 如果有记录买入均价更好，这里近似计算 pnl 或者留给后端对齐 
-                    self.risk_manager.record_trade(code, 'SELL', qty, current_price, score=0, pnl=0)
+                    self.risk_manager.record_trade(code, 'SELL', qty, current_price, signal_score=0, pnl=0)
                 else:
                     self.log_message.emit(f"❌ {code} 止损抛售失败，将在此后循环继续尝试。")
 
@@ -1205,12 +1270,40 @@ class HKTradingController(QObject):
             action = visual_result.get('action', 'WAIT')
             analysis = visual_result.get('analysis', '')
             
-            self.log_message.emit(f"{code} 视觉评分: {score}/100, 建议: {action}")
+            # Assuming bsp_type_display is available from signal processing
+            bsp_type_display = f"{'b' if signal['is_buy'] else 's'}{bsp_type}"
+            
+            self.log_message.emit(f"✅ {code} {bsp_type_display} 评分完成: {score}")
             
             # 添加评分结果到信号数据
             scored_signal = signal.copy()
             scored_signal['score'] = score
             scored_signal['visual_result'] = visual_result
+            # Assuming chart_path refers to the primary chart for notification,
+            # taking the first one if chart_paths is a list.
+            scored_signal['chart_path'] = chart_paths[0] if chart_paths else None
+
+            # --- Discord 推送 ---
+            if self.discord_bot and score >= self.min_visual_score:
+                msg = (
+                    f"🎯 **发现港股交易信号**\n"
+                    f"股票: {code}\n"
+                    f"信号: {bsp_type_display}\n"
+                    f"价格: {signal['current_price']}\n"
+                    f"评分: {score}\n"
+                    f"时间: {datetime.now().strftime('%H:%M:%S')}"
+                )
+                # Use asyncio.run_coroutine_threadsafe for sending from a thread to the bot's event loop
+                if scored_signal['chart_path']:
+                    asyncio.run_coroutine_threadsafe(
+                        self.discord_bot.send_notification(msg, scored_signal['chart_path']),
+                        self.discord_bot.loop
+                    )
+                else:
+                    asyncio.run_coroutine_threadsafe(
+                        self.discord_bot.send_notification(msg),
+                        self.discord_bot.loop
+                    )
             
             self.log_message.emit(f"✅ {code} 评分已完成 (评分: {score})")
             return scored_signal
@@ -1617,7 +1710,7 @@ class HKTradingController(QObject):
                     self.log_message.emit(f"✅ {code} 清仓成功")
                     success_count += 1
                     # 记录风险管理日志
-                    self.risk_manager.record_trade(code, 'SELL', qty, current_price, score=0, pnl=0)
+                    self.risk_manager.record_trade(code, 'SELL', qty, current_price, signal_score=0, pnl=0)
                 else:
                     self.log_message.emit(f"❌ {code} 清仓失败")
             

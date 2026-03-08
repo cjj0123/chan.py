@@ -6,6 +6,10 @@
 
 import os
 from typing import Dict, Any
+from dotenv import load_dotenv
+
+# 加载 .env 文件中的环境变量
+load_dotenv()
 
 # 交易系统配置
 TRADING_CONFIG = {
@@ -23,6 +27,13 @@ TRADING_CONFIG = {
     
     # 信号时间过滤
     'max_signal_age_hours': int(os.getenv('MAX_SIGNAL_AGE_HOURS', '4')),
+    
+    # Discord 配置
+    'discord': {
+        'token': os.getenv('DISCORD_BOT_TOKEN', ''),
+        'channel_id': os.getenv('DISCORD_CHANNEL_ID', ''),
+        'allowed_user_ids': os.getenv('DISCORD_ALLOWED_USER_IDS', '').split(',') if os.getenv('DISCORD_ALLOWED_USER_IDS') else [],
+    }
 }
 
 # 缠论配置
