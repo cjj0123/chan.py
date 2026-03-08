@@ -136,6 +136,17 @@ class HKStockBroker(BacktestBroker):
         
         return total_cost, cost_detail
     
+    def get_available_position_quantity(self, code: str) -> int:
+        """获取当前可卖出的持仓数量 (T+1)"""
+        return self.positions.get(code, {}).get('available_qty', 0)
+        
+    def update_t1_status(self):
+        """每日更新 T+1 状态，将昨日所有持仓转为今日可卖状态"""
+        for code, pos in self.positions.items():
+            if pos['qty'] > pos['available_qty']:
+                logger.debug(f"T+1 释放 {code}: {pos['qty'] - pos['available_qty']} 股变为可卖出状态")
+            pos['available_qty'] = pos['qty']
+
     def execute_trade(self, code: str, action: str, quantity: int, 
                       price: float, timestamp: pd.Timestamp) -> bool:
         """
@@ -181,7 +192,7 @@ class HKStockBroker(BacktestBroker):
             
             # 更新持仓
             if code not in self.positions:
-                self.positions[code] = {'qty': 0, 'avg_price': 0.0}
+                self.positions[code] = {'qty': 0, 'available_qty': 0, 'avg_price': 0.0}
             
             old_qty = self.positions[code]['qty']
             new_qty = old_qty + quantity
@@ -220,8 +231,9 @@ class HKStockBroker(BacktestBroker):
             return True
             
         elif action_upper == 'SELL':
-            if self.get_position_quantity(code) < quantity:
-                logger.warning(f"SELL {code}: 持仓不足 {quantity} 股，当前持仓 {self.get_position_quantity(code)}")
+            available_qty = self.get_available_position_quantity(code)
+            if available_qty < quantity:
+                logger.warning(f"SELL {code}: 可卖持仓不足 {quantity} 股. 总持仓 {self.get_position_quantity(code)}, 可卖 {available_qty}")
                 return False
             
             # 卖出收入减去成本
@@ -230,6 +242,7 @@ class HKStockBroker(BacktestBroker):
             
             # 更新持仓
             self.positions[code]['qty'] -= quantity
+            self.positions[code]['available_qty'] -= quantity
             if self.positions[code]['qty'] == 0:
                 del self.positions[code]
                 # 清除止损状态
@@ -851,9 +864,18 @@ class EnhancedBacktestEngine:
         
         self.logger.info(f"✅ 数据加载完成，共 {data_iterator.max_index} 个时间点")
         
+        # 跟踪当前日期以支持 T+1 释放
+        previous_date = None
+        
         # 主循环
         for current_time, snapshot in data_iterator:
             trade_signals = []
+            
+            # 每日 T+1 额度释放
+            current_date = current_time.date()
+            if previous_date is None or current_date != previous_date:
+                broker.update_t1_status()
+                previous_date = current_date
             
             # ================================================================
             # Step 1: 更新追踪止损 + 检查止损 (优先于任何信号处理)

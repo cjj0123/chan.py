@@ -47,6 +47,9 @@ from Trade.LocalScorer import get_local_scorer
 # 导入性能监控
 from Monitoring.PerformanceMonitor import get_performance_monitor
 
+# 导入ML信号验证器
+from ML.SignalValidator import SignalValidator
+
 # 配置日志
 logger = logging.getLogger(__name__)
 
@@ -125,6 +128,13 @@ class HKTradingController(QObject):
         # 视觉评分缓存 (code_time_type -> score_dict)
         self.visual_score_cache = {}
 
+        self.last_login_time = None
+        
+        # --- ML Validation ---
+        self.signal_validator = SignalValidator()
+        self.ml_threshold = 0.60
+        
+        # --- UI Callbacks ---
         self.log_message.emit("✅ 港股交易控制器初始化完成")
 
     def _load_executed_signals(self) -> Dict:
@@ -613,6 +623,23 @@ class HKTradingController(QObject):
                 is_buy = chan_result.get('is_buy_signal', False)
                 bsp_time_str = chan_result.get('bsp_datetime_str', '')
                 bsp_type_display = f"{'b' if is_buy else 's'}{bsp_type}"
+                
+                # ML 增加过滤 (仅对买点严格校验)
+                ml_passed = True
+                if is_buy and hasattr(chan_result.get('chan_analysis', {}), 'get_bsp'):
+                    chan_env = chan_result['chan_analysis']
+                    bsp_list = chan_env.get_bsp()
+                    if bsp_list:
+                        last_bsp = bsp_list[-1]
+                        ml_res = self.signal_validator.validate_signal(chan_env, last_bsp, threshold=self.ml_threshold)
+                        if not ml_res['is_valid']:
+                            self.log_message.emit(f"🤖 {code} {bsp_type_display} 触发 ML 过滤: {ml_res['msg']} (Prob: {ml_res['prob']:.2f})")
+                            ml_passed = False
+                        else:
+                            self.log_message.emit(f"✨ {code} {bsp_type_display} ML 校验通过 (Prob: {ml_res['prob']:.2f})")
+                            
+                if not ml_passed:
+                    continue
                 
                 # 信号去重逻辑
                 last_executed_time = self.executed_signals.get(code, "")

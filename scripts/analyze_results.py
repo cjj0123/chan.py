@@ -91,9 +91,8 @@ class BacktestAnalyzer:
     def plot_equity_curve(self, output_file: str = "equity_curve.png"):
         """绘制资金曲线"""
         try:
-            import matplotlib
-            matplotlib.use('Agg')
-            import matplotlib.pyplot as plt
+            from matplotlib.figure import Figure
+            from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
             
             # 获取权益曲线数据
             equity_curve = self.results.get('equity_curve', [])
@@ -108,9 +107,20 @@ class BacktestAnalyzer:
             df = df.drop_duplicates(subset=['time'], keep='last')
             df = df.reset_index(drop=True)
             
-            # 创建图表
-            fig, axes = plt.subplots(2, 1, figsize=(14, 8), 
-                                     gridspec_kw={'height_ratios': [3, 1]})
+            # 创建图表 (Object-Oriented API)
+            fig = Figure(figsize=(14, 8))
+            
+            # 设置中文字体
+            import platform
+            from matplotlib import rcParams
+            if platform.system() == "Darwin":
+                rcParams['font.sans-serif'] = ['Arial Unicode MS']
+            elif platform.system() == "Windows":
+                rcParams['font.sans-serif'] = ['SimHei']
+            rcParams['axes.unicode_minus'] = False
+            
+            canvas = FigureCanvas(fig)
+            axes = fig.subplots(2, 1, gridspec_kw={'height_ratios': [3, 1]})
             
             # 资金曲线
             ax1 = axes[0]
@@ -124,7 +134,8 @@ class BacktestAnalyzer:
             ax1.legend()
             
             # 格式化 y 轴
-            ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:,.0f}'))
+            from matplotlib.ticker import FuncFormatter
+            ax1.yaxis.set_major_formatter(FuncFormatter(lambda x, p: f'{x:,.0f}'))
             
             # 回撤曲线
             ax2 = axes[1]
@@ -139,11 +150,10 @@ class BacktestAnalyzer:
             ax2.legend()
             
             # 格式化 y 轴
-            ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x*100:.1f}%'))
+            ax2.yaxis.set_major_formatter(FuncFormatter(lambda x, p: f'{x*100:.1f}%'))
             
-            plt.tight_layout()
-            plt.savefig(output_file, dpi=150, bbox_inches='tight')
-            plt.close()
+            fig.tight_layout()
+            fig.savefig(output_file, dpi=150, bbox_inches='tight')
             
             logger.info(f"✅ 资金曲线已保存：{output_file}")
             
@@ -155,9 +165,8 @@ class BacktestAnalyzer:
     def plot_trade_distribution(self, output_file: str = "trade_distribution.png"):
         """绘制交易分布图"""
         try:
-            import matplotlib
-            matplotlib.use('Agg')
-            import matplotlib.pyplot as plt
+            from matplotlib.figure import Figure
+            from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
             
             # 获取交易记录
             trades = self.results.get('trade_log', [])
@@ -171,7 +180,20 @@ class BacktestAnalyzer:
             # 按股票统计
             stock_trades = df.groupby('code').size().sort_values(ascending=False)
             
-            fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+            # 创建图表 (Object-Oriented API)
+            fig = Figure(figsize=(14, 5))
+            
+            # 设置中文字体
+            import platform
+            from matplotlib import rcParams
+            if platform.system() == "Darwin":
+                rcParams['font.sans-serif'] = ['Arial Unicode MS']
+            elif platform.system() == "Windows":
+                rcParams['font.sans-serif'] = ['SimHei']
+            rcParams['axes.unicode_minus'] = False
+            
+            canvas = FigureCanvas(fig)
+            axes = fig.subplots(1, 2)
             
             # 股票交易次数
             ax1 = axes[0]
@@ -190,9 +212,8 @@ class BacktestAnalyzer:
                    autopct='%1.1f%%', colors=['red', 'green'])
             ax2.set_title('买卖分布', fontsize=14)
             
-            plt.tight_layout()
-            plt.savefig(output_file, dpi=150, bbox_inches='tight')
-            plt.close()
+            fig.tight_layout()
+            fig.savefig(output_file, dpi=150, bbox_inches='tight')
             
             logger.info(f"✅ 交易分布图已保存：{output_file}")
             

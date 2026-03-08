@@ -81,6 +81,9 @@ try:
     from App.HKTradingController import HKTradingController
 except ImportError:
     HKTradingController = None
+
+from App.BacktestTab import BacktestTab
+
 class TraderGUI(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -98,6 +101,11 @@ class TraderGUI(QMainWindow):
 
         # --- Create Tabs ---
         self.create_scanner_tab()
+        
+        # --- Create Backtest Tab ---
+        self.backtest_tab = BacktestTab(self)
+        self.tabs.addTab(self.backtest_tab, "🔬 策略回测分析")
+        
         self.create_settings_tab()
 
         # --- Initialize threads ---

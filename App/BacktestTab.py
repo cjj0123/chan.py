@@ -8,10 +8,10 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel, QLineEdit,
     QPushButton, QTextEdit, QComboBox, QSplitter, QScrollArea, QFrame,
-    QDateTimeEdit, QMessageBox
+    QDateTimeEdit, QMessageBox, QStyledItemDelegate
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from PyQt6.QtGui import QPixmap
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QEvent
+from PyQt6.QtGui import QPixmap, QStandardItemModel, QPalette, QStandardItem
 
 # 解决跨级导入问题
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -19,6 +19,80 @@ from backtesting.enhanced_backtester import EnhancedBacktestEngine
 from scripts.analyze_results import BacktestAnalyzer
 
 logger = logging.getLogger(__name__)
+
+
+class CheckableComboBox(QComboBox):
+    """支持多选的下拉框"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setEditable(True)
+        self.lineEdit().setReadOnly(True)
+        self.lineEdit().setPlaceholderText("请选择股票 (最多5只)")
+        
+        # 允许多行文本显示
+        palette = self.lineEdit().palette()
+        palette.setColor(QPalette.ColorRole.Base, palette.color(QPalette.ColorRole.Window))
+        self.lineEdit().setPalette(palette)
+        
+        self.model = QStandardItemModel(self)
+        self.setModel(self.model)
+        self.view().pressed.connect(self.handleItemPressed)
+        self.item_checked_changed = pyqtSignal()
+        self._max_selections = 5
+        self._internal_updating = False
+
+    def handleItemPressed(self, index):
+        item = self.model.itemFromIndex(index)
+        if item.flags() & Qt.ItemFlag.ItemIsEnabled == 0:
+            return
+            
+        if item.checkState() == Qt.CheckState.Checked:
+            item.setCheckState(Qt.CheckState.Unchecked)
+        else:
+            # 检查是否超过最大限制
+            checked_count = len(self.get_checked_items())
+            if checked_count >= self._max_selections:
+                QMessageBox.warning(self, "警告", f"最多只能选择 {self._max_selections} 只股票！")
+                return
+            item.setCheckState(Qt.CheckState.Checked)
+            
+        self.update_text()
+        self.item_checked_changed.emit()
+
+    def update_text(self):
+        checked_items = self.get_checked_items()
+        if checked_items:
+            self.lineEdit().setText(", ".join(checked_items))
+        else:
+            self.lineEdit().setText("")
+
+    def addItems(self, texts, checked_texts=None):
+        if checked_texts is None:
+            checked_texts = []
+            
+        self._internal_updating = True
+        for text in texts:
+            self.addItem(text, text in checked_texts)
+        self._internal_updating = False
+        self.update_text()
+
+    def addItem(self, text, checked=False):
+        item = QStandardItem(text)
+        item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+        item.setData(Qt.CheckState.Checked if checked else Qt.CheckState.Unchecked, Qt.ItemDataRole.CheckStateRole)
+        self.model.appendRow(item)
+
+    def get_checked_items(self):
+        checked_items = []
+        for i in range(self.model.rowCount()):
+            item = self.model.item(i)
+            if item.checkState() == Qt.CheckState.Checked:
+                checked_items.append(item.text())
+        return checked_items
+        
+    def clear(self):
+        self.model.clear()
+        self.update_text()
 
 
 class BacktestRunnerThread(QThread):
@@ -58,6 +132,7 @@ class BacktestRunnerThread(QThread):
             
             # 由于 engine.run() 返回的字典已包含 equity_curve 和 trade_log，直接序列化保存
             import json
+            import subprocess
             
             def _json_serializer(obj):
                 """处理不可序列化的对象"""
@@ -70,13 +145,27 @@ class BacktestRunnerThread(QThread):
             with open(json_file, 'w', encoding='utf-8') as f:
                 json.dump(results, f, default=_json_serializer, indent=2, ensure_ascii=False)
             
-            # 生成图表
-            analyzer = BacktestAnalyzer(json_file)
+            # 生成图表 (通过独立进程，避免 macOS 上的 Matplotlib 线程冲突)
+            script_path = os.path.join(str(Path(__file__).resolve().parent.parent), "scripts", "analyze_results.py")
+            cmd = [sys.executable, script_path, json_file, "--output-dir", output_dir]
+            
+            subprocess.run(cmd, check=True, capture_output=True)
+            
+            # CLI 生成的是固定文件名，根据时间戳重命名
+            generated_equity = os.path.join(output_dir, "equity_curve.png")
+            generated_dist = os.path.join(output_dir, "trade_distribution.png")
+            generated_report = os.path.join(output_dir, "analysis_report.md")
+            
             equity_curve_path = os.path.join(output_dir, f"equity_curve_{timestamp}.png")
             trade_dist_path = os.path.join(output_dir, f"trade_distribution_{timestamp}.png")
+            report_path = os.path.join(output_dir, f"report_{timestamp}.md")
             
-            analyzer.plot_equity_curve(equity_curve_path)
-            analyzer.plot_trade_distribution(trade_dist_path)
+            if os.path.exists(generated_equity):
+                os.rename(generated_equity, equity_curve_path)
+            if os.path.exists(generated_dist):
+                os.rename(generated_dist, trade_dist_path)
+            if os.path.exists(generated_report):
+                os.rename(generated_report, report_path)
             
             results['equity_curve_path'] = equity_curve_path
             results['trade_dist_path'] = trade_dist_path
@@ -131,12 +220,31 @@ class BacktestTab(QWidget):
         h2.addWidget(self.end_date_input)
         config_layout.addLayout(h2)
         
-        # 股票列表
+        # 选择自选股分组以加载股票
+        h_group = QHBoxLayout()
+        h_group.addWidget(QLabel("从分组加载:"))
+        self.watchlist_group_combo = QComboBox()
+        self.watchlist_group_combo.addItem("加载中...")
+        self.watchlist_group_combo.currentTextChanged.connect(self.on_watchlist_group_changed)
+        h_group.addWidget(self.watchlist_group_combo)
+        
+        self.refresh_group_btn = QPushButton("刷新分组")
+        self.refresh_group_btn.clicked.connect(self.load_futu_groups)
+        self.refresh_group_btn.setMaximumWidth(80)
+        h_group.addWidget(self.refresh_group_btn)
+        config_layout.addLayout(h_group)
+        
+        # 多选股票列表
         h3 = QHBoxLayout()
-        h3.addWidget(QLabel("回测股票 (逗号分隔):"))
-        self.watchlist_input = QLineEdit("HK.00700,HK.00836,HK.02688")
-        h3.addWidget(self.watchlist_input)
+        h3.addWidget(QLabel("回测股票 (限1-5只):"))
+        self.stocks_combo = CheckableComboBox()
+        self.stocks_combo.setMinimumWidth(250)
+        h3.addWidget(self.stocks_combo)
         config_layout.addLayout(h3)
+        
+        # 并发初始化加载分组
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(100, self.load_futu_groups)
         
         # 策略选择 (为下一步 ML 增强预留)
         h4 = QHBoxLayout()
@@ -228,6 +336,67 @@ class BacktestTab(QWidget):
         time_str = datetime.now().strftime("%H:%M:%S")
         self.log_text.append(f"[{time_str}] {msg}")
 
+    def load_futu_groups(self):
+        """加载富途自选股分组列表 (类似于 TraderGUI)"""
+        try:
+            from futu import OpenQuoteContext, RET_OK
+            import os
+            self.watchlist_group_combo.clear()
+            self.watchlist_group_combo.addItem("正在连接富途...")
+            
+            FUTU_OPEND_ADDRESS = os.getenv('FUTU_OPEND_ADDRESS', '127.0.0.1')
+            quote_ctx = OpenQuoteContext(host=FUTU_OPEND_ADDRESS, port=11111)
+            
+            ret, data = quote_ctx.get_user_security_group()
+            if ret == RET_OK:
+                groups = data.to_dict('records')
+                group_names = [group['group_name'] for group in groups if group['group_name'].strip()]
+                
+                self.watchlist_group_combo.clear()
+                self.watchlist_group_combo.addItems(["--请选择分组--"] + group_names)
+                self.log("✅ 成功加载富途自选股分组")
+            else:
+                self.watchlist_group_combo.clear()
+                self.watchlist_group_combo.addItem("--富途连接失败--")
+                self.log(f"❌ 获取自选股分组失败: {data}")
+            quote_ctx.close()
+            
+        except ImportError:
+            self.watchlist_group_combo.clear()
+            self.watchlist_group_combo.addItem("--未检测到futu-api--")
+            self.log("⚠️ 未检测到 futu-api 模块，无法提供自选股分组此功能。")
+        except Exception as e:
+            self.watchlist_group_combo.clear()
+            self.watchlist_group_combo.addItem("--出错--")
+            self.log(f"❌ 加载分组出错: {str(e)}")
+
+    def on_watchlist_group_changed(self, group_name):
+        """当自选股分组切换时，加载该分组下的股票"""
+        if group_name in ["", "加载中...", "正在连接富途...", "--请选择分组--", "--富途连接失败--", "--未检测到futu-api--", "--出错--"]:
+            self.stocks_combo.clear()
+            return
+            
+        try:
+            from futu import OpenQuoteContext, RET_OK
+            import os
+            FUTU_OPEND_ADDRESS = os.getenv('FUTU_OPEND_ADDRESS', '127.0.0.1')
+            quote_ctx = OpenQuoteContext(host=FUTU_OPEND_ADDRESS, port=11111)
+            
+            ret, data = quote_ctx.get_user_security(group_name)
+            self.stocks_combo.clear()
+            
+            if ret == RET_OK and not data.empty:
+                codes = data['code'].tolist()
+                # 默认勾选前3个作为演示
+                self.stocks_combo.addItems(codes, checked_texts=codes[:3])
+                self.log(f"✅ 从 '{group_name}' 加载了 {len(codes)} 只股票")
+            else:
+                self.log(f"⚠️ 分组为空或获取失败: {data}")
+                
+            quote_ctx.close()
+        except Exception as e:
+            self.log(f"❌ 加载分组股票失败: {str(e)}")
+
     def update_metrics(self, results: dict):
         total_ret = results.get('total_return_pct', 0) * 100
         ann_ret = results.get('annualized_return', 0) * 100
@@ -306,11 +475,13 @@ class BacktestTab(QWidget):
         start_date = self.start_date_input.date().toString("yyyy-MM-dd")
         end_date = self.end_date_input.date().toString("yyyy-MM-dd")
         
-        watchlist_raw = self.watchlist_input.text().strip()
-        if not watchlist_raw:
-            QMessageBox.critical(self, "错误", "必须输入至少一只股票代码！")
+        watchlist = self.stocks_combo.get_checked_items()
+        if not watchlist:
+            QMessageBox.critical(self, "错误", "必须选择至少一只股票代码！")
             return
-        watchlist = [code.strip() for code in watchlist_raw.split(',')]
+        if len(watchlist) > 5:
+            QMessageBox.critical(self, "错误", "最多只能选择 5 只股票代码！")
+            return
         
         config = {
             'initial_funds': initial_funds,
