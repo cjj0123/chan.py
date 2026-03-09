@@ -188,6 +188,11 @@ class HKTradingController(QObject):
                 pass
         self.log_message.emit("🛑 收到停止信号，正在安全退出...")
 
+    def force_scan(self):
+        """外部触发：强制立即执行一轮完整策略扫描"""
+        self._force_scan = True
+        self.log_message.emit("⚡ 收到强制扫描指令，将在下一次心跳时触发完整扫描")
+
     def get_watchlist_codes(self) -> List[str]:
         """
         获取富途自选股列表中的港股代码。
@@ -738,13 +743,21 @@ class HKTradingController(QObject):
                 # 2. 慢速策略扫描触发逻辑
                 # 规则：如果当前 Bar 时间与上次不同，且已经过了 Bar 开始后 2 分钟（等待数据稳定）
                 should_scan_strategy = False
-                if last_strategy_scan_time != current_bar_time:
+                
+                if self._force_scan:
+                    should_scan_strategy = True
+                    self._force_scan = False  # 重置标志
+                elif last_strategy_scan_time != current_bar_time:
                     # 额外等待 1 分钟让 30M 棒线在富途后端稳定
                     if now.minute % 30 >= 1: 
                         should_scan_strategy = True
                 
                 if should_scan_strategy:
-                    self.log_message.emit(f"🔍 [策略扫描] 捕获到新的 30M 周期 ({current_bar_time.strftime('%H:%M')})，启动完整缠论分析...")
+                    if last_strategy_scan_time == current_bar_time:
+                        self.log_message.emit(f"🔍 [策略扫描] 捕获到手动强制扫描指令，启动完整缠论分析...")
+                    else:
+                        self.log_message.emit(f"🔍 [策略扫描] 捕获到新的 30M 周期 ({current_bar_time.strftime('%H:%M')})，启动完整缠论分析...")
+                    
                     # 执行原有的完整扫描逻辑
                     self._perform_full_strategy_scan(watchlist_codes)
                     last_strategy_scan_time = current_bar_time
@@ -989,10 +1002,15 @@ class HKTradingController(QObject):
                     chan_analysis = chan_res.get('chan_analysis', {})
                     # 尝试从30M或其它可用级别计算 ATR
                     chan_30m = chan_analysis.get('chan_30m')
-                    if chan_30m:
-                        kl_list = [kl for kl in chan_30m[0].klu_iter()]
-                        atr_value = self._calculate_atr(kl_list, period=14)
-                        self.log_message.emit(f"{code} 波动率诊断: ATR={atr_value:.3f}")
+                    if chan_30m and isinstance(chan_30m, list) and len(chan_30m) > 0:
+                        try:
+                            kl_list = [kl for kl in chan_30m[0].klu_iter()]
+                            atr_value = self._calculate_atr(kl_list, period=14)
+                            self.log_message.emit(f"{code} 波动率诊断: ATR={atr_value:.3f}")
+                        except Exception as e:
+                            self.log_message.emit(f"⚠️ {code} ATR 计算失败: {e}")
+                    else:
+                        self.log_message.emit(f"⚠️ {code} 无可用 chan_30m 数据用于计算 ATR，将使用默认仓位风险控制。")
                     
                     # 使用风险管理器计算动态仓位，通过 ATR 限额
                     buy_quantity = self.risk_manager.calculate_position_size(

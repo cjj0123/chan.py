@@ -201,6 +201,16 @@ class DiscordBot:
             except asyncio.TimeoutError:
                 await ctx.send("⏰ 超时取消，**未**执行卖出操作。")
 
+        @self.bot.command(name='scan')
+        async def scan(ctx):
+            """手动触发一次完整策略扫描: /scan"""
+            if not self._is_allowed(ctx): return
+            if not self.controller:
+                await ctx.send("❌ 未连接到交易控制器")
+                return
+            self.controller.force_scan()
+            await ctx.send("✅ 已通知系统在接下来的几秒内强制触发一次完整的策略扫描。请查看日志获取详细进度。")
+
     async def send_notification(self, message: str, chart_path: str = None):
         """推送通知和图表到指定频道"""
         if not self.token or not self.channel_id:
