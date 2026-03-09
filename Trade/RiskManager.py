@@ -77,8 +77,8 @@ class RiskManager:
         self.daily_pnl = 0.0
         self.total_positions = 0
         
-        # 线程安全锁
-        self._lock = threading.Lock()
+        # 线程安全锁 - 修改为 RLock 以避免同线程内方法互相调用导致的死锁
+        self._lock = threading.RLock()
         
         # 初始化今日交易记录
         self._init_daily_stats()
