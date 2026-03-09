@@ -176,7 +176,8 @@ class RiskManager:
     
     def calculate_position_size(self, code: str, available_funds: float, current_price: float, 
                              signal_score: int, risk_factor: float = 1.0, 
-                             atr: Optional[float] = None, atr_multiplier: float = 2.0) -> int:
+                             atr: Optional[float] = None, atr_multiplier: float = 2.0,
+                             total_assets: float = 0.0) -> int:
         """
         计算建议的仓位大小
         
@@ -188,6 +189,7 @@ class RiskManager:
             risk_factor: 风险因子（基于波动率等）
             atr: ATR (Average True Range) 的值，用于计算止损距离
             atr_multiplier: ATR止损倍数
+            total_assets: 总资产，用于计算整体仓位占比
         
         Returns:
             int: 建议的股数
@@ -207,29 +209,36 @@ class RiskManager:
             if signal_score < self.min_visual_score:
                 return 0  # 评分不足，不交易
             
-            # 使用 ATR 方式计算可买入数量
-            max_investment = available_funds * self.max_position_ratio * score_factor / risk_factor
+            # 基础额度使用总资产计算（如果未提供，退回到可用资金）
+            base_capital = total_assets if total_assets > 0 else available_funds
+            
+            # 计算最大投入金额 (如 20% * 100万元 = 20万)
+            max_investment = base_capital * self.max_position_ratio * score_factor / risk_factor
             
             lot_size = self._get_lot_size(code)
             
             if atr and atr > 0:
-                # 每笔交易最大可承受亏损额度 = 最大投入金额 * 单笔回撤容忍度(如5%)
-                # 假设单笔交易风险为总资金的一个比例，这里使用最大持仓的百分比作为损失限界
-                max_loss_amount = available_funds * 0.02 * score_factor # 2% total equity risk per trade
+                # 每笔交易最大可承受亏损额度 = 总资产 * 自定义的风险承受度 (如总资产2%)
+                max_loss_amount = base_capital * 0.02 * score_factor
                 stop_distance = atr * atr_multiplier
                 max_shares = int(max_loss_amount / stop_distance)
                 
-                # 不能超过可用资金允许的上限
                 max_shares_by_funds = int(max_investment / current_price)
                 max_shares = min(max_shares, max_shares_by_funds)
             else:
-                # 降级：如果没有ATR数据，直接使用资金占比分配
-                max_shares = int(max_investment / current_price)
+                # 降级：如果没有ATR数据，直接使用规定的20%仓位（不进行因子折扣）
+                fallback_investment = base_capital * self.max_position_ratio
+                max_shares = int(fallback_investment / current_price)
+            
+            # 无论如何，买入金额不能考虑超过可用现金
+            max_shares_by_cash = int(available_funds / current_price)
+            max_shares = min(max_shares, max_shares_by_cash)
                 
             shares = (max_shares // lot_size) * lot_size
             
-            logger.info(f"仓位计算 - {code}: 可用资金={available_funds:.2f}, 价格={current_price:.2f}, "
-                       f"评分={signal_score}, 风险因子={risk_factor:.2f}, 建议股数={shares}")
+            if shares > 0:
+                logger.info(f"仓位计算 - {code}: 基础资产={base_capital:.2f}, 可用现金={available_funds:.2f}, 价格={current_price:.2f}, "
+                           f"建议买入额度={shares * current_price:.2f}, 建议股数={shares}")
             
             return shares
     

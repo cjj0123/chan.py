@@ -296,6 +296,10 @@ def download_and_save_all_stocks_multi_timeframe(stock_codes, days=365, timefram
     # Filter valid timeframes
     valid_timeframes = [tf for tf in timeframes if tf in tf_map]
     
+    import time
+    api_request_count = 0
+    start_time = time.time()
+    
     for code in stock_codes:
         # Check if we should stop before processing each stock
         if stop_check and stop_check():
@@ -305,26 +309,45 @@ def download_and_save_all_stocks_multi_timeframe(stock_codes, days=365, timefram
             return
             
         for tf_name in valid_timeframes:
+            # ---> 限制请求频率: 每30秒最多60次，我们保守设置为50次 <---
+            api_request_count += 1
+            if api_request_count >= 45:
+                elapsed = time.time() - start_time
+                if elapsed < 31:
+                    sleep_time = 31 - elapsed
+                    msg = f"⏳ 为避免触发API频率限制(60次/30秒)，暂停 {sleep_time:.1f} 秒..."
+                    print(msg)
+                    if log_callback:
+                        log_callback(msg)
+                    time.sleep(sleep_time)
+                # 重置计数器和计时器
+                api_request_count = 0
+                start_time = time.time()
+            else:
+                # 即使没有达到上限，也稍微间隔一点点
+                time.sleep(0.1)
+                
             k_type, tf_days = tf_map[tf_name]
             table_name = f"kline_{tf_name}"
             
-            # Handle custom date range
+            # Handle custom date range with time support
             if start_date and end_date:
-                # Use custom date range
                 desired_begin_time = start_date
                 desired_end_time = end_date
             elif start_date:
-                # Use custom start date, end today
                 desired_begin_time = start_date
-                desired_end_time = datetime.now().strftime("%Y-%m-%d")
+                desired_end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             elif end_date:
-                # Use custom end date, calculate start from days
                 desired_end_time = end_date
-                desired_begin_time = (datetime.strptime(end_date, "%Y-%m-%d") - timedelta(days=tf_days)).strftime("%Y-%m-%d")
+                # If end_date has time, use it for subtraction
+                try:
+                    dt_end = datetime.strptime(end_date, "%Y-%m-%d %H:%M:%S") if ' ' in end_date else datetime.strptime(end_date, "%Y-%m-%d")
+                    desired_begin_time = (dt_end - timedelta(days=tf_days)).strftime("%Y-%m-%d %H:%M:%S")
+                except:
+                    desired_begin_time = (datetime.now() - timedelta(days=tf_days)).strftime("%Y-%m-%d")
             else:
-                # Use default range based on days parameter
-                desired_end_time = datetime.now().strftime("%Y-%m-%d")
-                desired_begin_time = (datetime.now() - timedelta(days=tf_days)).strftime("%Y-%m-%d")
+                desired_end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                desired_begin_time = (datetime.now() - timedelta(days=tf_days)).strftime("%Y-%m-%d %H:%M:%S")
             
             # Check existing data in database
             with sqlite3.connect(db.db_path) as conn:
@@ -338,22 +361,33 @@ def download_and_save_all_stocks_multi_timeframe(stock_codes, days=365, timefram
                 # 无论是默认范围还是自定义UI范围，都执行增量更新判断
                 if existing_max < desired_end_time:
                     # Need to download recent data
-                    begin_time = (datetime.strptime(existing_max.split(' ')[0], "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+                    if tf_name == 'day':
+                        begin_time = (datetime.strptime(existing_max.split(' ')[0], "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+                    else:
+                        # 对于分钟级别，从现有的最后一条开始下载（接口会自动排除或由于 INSERT OR REPLACE 覆盖）
+                        begin_time = existing_max
                     end_time = desired_end_time
-                    # 避免周末导致 begin > end
-                    if begin_time > end_time:
+                    
+                    if begin_time >= end_time and tf_name == 'day':
                         print(f"✅ {code} {tf_name} 最新数据已完整，跳过下载")
                         continue
                 else:
                     # Already have recent data, check if we need historical data
                     if existing_min > desired_begin_time:
                         begin_time = desired_begin_time
-                        end_time = (datetime.strptime(existing_min.split(' ')[0], "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
-                        if begin_time > end_time:
+                        if tf_name == 'day':
+                            end_time = (datetime.strptime(existing_min.split(' ')[0], "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+                        else:
+                            end_time = existing_min
+                            
+                        if begin_time >= end_time and tf_name == 'day':
                             print(f"✅ {code} {tf_name} 历史数据已完整，跳过下载")
                             continue
+                        msg_hist = f"ℹ️  {code} {tf_name} 尝试补充历史数据: {begin_time} 到 {end_time}"
+                        print(msg_hist)
+                        if log_callback:
+                            log_callback(msg_hist)
                     else:
-                        # Already have complete data range
                         print(f"✅ {code} {tf_name} 已包含请求的完整数据范围 ({desired_begin_time} 至 {desired_end_time})，跳过下载")
                         if log_callback:
                             log_callback(f"✅ {code} {tf_name} 增量数据已最新，跳过下载")
@@ -365,6 +399,12 @@ def download_and_save_all_stocks_multi_timeframe(stock_codes, days=365, timefram
             
             kl_data = None
             source_used = None
+            
+            # DEBUG: 打印时间范围
+            msg_debug = f"🔍  试图下载 {code} {tf_name}: {begin_time} 到 {end_time}"
+            print(msg_debug)
+            if log_callback:
+                log_callback(msg_debug)
             
             try:
                 # Use the same logic as day timeframe for all timeframes
@@ -390,36 +430,31 @@ def download_and_save_all_stocks_multi_timeframe(stock_codes, days=365, timefram
                         if not existing_df.empty and existing_df.iloc[0]['min_date'] is not None:
                             existing_min = existing_df.iloc[0]['min_date']
                             existing_max = existing_df.iloc[0]['max_date']
-                            if log_callback:
-                                log_callback(f"ℹ️  {code} {tf_name} 已有数据范围: {existing_min} 到 {existing_max}")
-                            else:
-                                print(f"ℹ️  {code} {tf_name} 已有数据范围: {existing_min} 到 {existing_max}")
                         
                         # Remove duplicates before inserting
                         df = df.drop_duplicates(subset=['date'], keep='last')
                         
                         # Handle unique constraint by using INSERT OR REPLACE
-                        # Convert DataFrame to list of tuples for bulk insert
                         records = df.to_records(index=False)
                         columns = df.columns.tolist()
                         
-                        # Create INSERT OR REPLACE statement
                         placeholders = ', '.join(['?' for _ in columns])
                         columns_str = ', '.join(columns)
                         sql = f"INSERT OR REPLACE INTO {table_name} ({columns_str}) VALUES ({placeholders})"
                         
-                        # Execute bulk insert
                         conn.executemany(sql, records)
                         conn.commit()
+                    
+                    msg_success = f"✅ 成功下载 {code} {tf_name} ({len(kl_data)} 条数据) - 数据源: {source_used}"
                     if log_callback:
-                        log_callback(f"✅ 成功下载 {code} {tf_name} ({len(kl_data)} 条数据) - 数据源: {source_used}")
+                        log_callback(msg_success)
                     else:
-                        print(f"✅ 成功下载 {code} {tf_name} ({len(kl_data)} 条数据) - 数据源: {source_used}")
+                        print(msg_success)
                 else:
+                    msg_empty = f"⚠️  {code} {tf_name} API 返回空数据 (Futu/Akshare 均无结果)"
+                    print(msg_empty)
                     if log_callback:
-                        log_callback(f"⚠️  {code} {tf_name} 无有效数据")
-                    else:
-                        print(f"⚠️  {code} {tf_name} 无有效数据")
+                        log_callback(msg_empty)
                         
             except Exception as e:
                 if log_callback:

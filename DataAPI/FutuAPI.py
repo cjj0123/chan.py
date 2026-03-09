@@ -99,6 +99,9 @@ class CFutuAPI(CCommonStockApi):
             else:
                 data = None
 
+            # DEBUG: 打印原始返回结果
+            print(f"📡 [FutuAPI] {stock_code} {f_ktype} 原始结果: ret={ret}, 数据集大小={len(data) if data is not None else 0}")
+
             if ret == RET_OK and data is not None and not data.empty:
                 # 3. 异常值过滤
                 data['price_change'] = data['close'].diff().abs()
@@ -132,6 +135,7 @@ class CFutuAPI(CCommonStockApi):
                 
         except Exception as e:
             print(f"🔥 [FutuAPI] Online Error: {e}")
+            raise e
         finally:
             quote_ctx.close()
 

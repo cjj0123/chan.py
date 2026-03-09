@@ -4,14 +4,26 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from Chan import CChan
 from ChanConfig import CChanConfig
+from config import TRADING_CONFIG
 from Common.CEnum import AUTYPE, DATA_SRC, KL_TYPE
 from Common.StockUtils import get_futu_stock_name
+from Common.TimeUtils import get_trading_duration_hours
 
 # 富途API相关
 try:
     from futu import RET_OK
 except ImportError:
     RET_OK = 0
+
+# 各级别默认分析/扫描数据天数
+# 确保在满足缠论结构分析的同时，最大限度提升响应速度
+# 日线250根≈365天, 30M≈90天, 5M≈15天, 1M≈5天
+LEVEL_DATA_DAYS = {
+    KL_TYPE.K_DAY: 365,
+    KL_TYPE.K_30M: 90,
+    KL_TYPE.K_5M: 15,
+    KL_TYPE.K_1M: 5,
+}
 
 
 class ScanThread(QThread):
@@ -39,11 +51,20 @@ class ScanThread(QThread):
         self.is_running = False
 
     def run(self):
-        begin_time = (datetime.now() - timedelta(days=self.days)).strftime("%Y-%m-%d")
-        end_time = datetime.now().strftime("%Y-%m-%d")
         total = len(self.stock_list)
         success_count = 0
         fail_count = 0
+
+        # 根据级别决定数据天数
+        scan_days = self.days
+        if self.kl_type != KL_TYPE.K_DAY:
+            scan_days = LEVEL_DATA_DAYS.get(self.kl_type, self.days)
+            self.log_signal.emit(f"⚙️ {self.kl_type.name} 扫描优化：使用最近 {scan_days} 天数据提升速度")
+        
+        begin_time = (datetime.now() - timedelta(days=scan_days)).strftime("%Y-%m-%d")
+        end_time = datetime.now().strftime("%Y-%m-%d")
+
+
 
         for idx, row in self.stock_list.iterrows():
             if not self.is_running:
@@ -89,16 +110,28 @@ class ScanThread(QThread):
 
                 # 检查是否有买卖点
                 bsp_list = chan.get_latest_bsp(number=0)
-                cutoff_date = datetime.now() - timedelta(days=3)
                 
-                buy_points = [
-                    bsp for bsp in bsp_list
-                    if bsp.is_buy and datetime(bsp.klu.time.year, bsp.klu.time.month, bsp.klu.time.day) >= cutoff_date
-                ]
-                sell_points = [
-                    bsp for bsp in bsp_list
-                    if not bsp.is_buy and datetime(bsp.klu.time.year, bsp.klu.time.month, bsp.klu.time.day) >= cutoff_date
-                ]
+                # 与自动交易保持一致：只显示最近 max_signal_age_hours 小时内的信号
+                max_age_hours = TRADING_CONFIG.get('max_signal_age_hours', 1)
+                now = datetime.now()
+                
+                buy_points = []
+                sell_points = []
+                for bsp in bsp_list:
+                    # 转换 Bsp 的 CTime 为 datetime
+                    b_time = bsp.klu.time
+                    bsp_dt = datetime(b_time.year, b_time.month, b_time.day, b_time.hour, b_time.minute, b_time.second)
+                    
+                    # 计算交易小时数
+                    trading_hours = get_trading_duration_hours(bsp_dt, now)
+                    
+                    # 过滤条件
+                    if trading_hours <= max_age_hours:
+                        if bsp.is_buy:
+                            buy_points.append(bsp)
+                        else:
+                            sell_points.append(bsp)
+                
 
                 if buy_points:
                     latest_buy = buy_points[0]
@@ -147,6 +180,7 @@ class ScanThread(QThread):
 class SingleAnalysisThread(QThread):
     """
     单只股票分析的后台线程
+    支持按级别设置不同的数据天数范围
     """
     finished = pyqtSignal(object)
     error = pyqtSignal(str)
@@ -157,18 +191,28 @@ class SingleAnalysisThread(QThread):
         self.code = code
         self.config = config
         self.kl_types = kl_types or [KL_TYPE.K_DAY, KL_TYPE.K_30M, KL_TYPE.K_5M, KL_TYPE.K_1M]
-        self.days = days
+        self.base_days = days  # 用户输入的天数，仅用于日线
         self.data_sources = data_sources or [DATA_SRC.FUTU, "custom:SQLiteAPI.SQLiteAPI"]
+
+    def _get_days_for_level(self, kl_type):
+        """根据级别返回合适的数据天数"""
+        if kl_type == KL_TYPE.K_DAY:
+            return self.base_days  # 日线使用用户输入值
+        return LEVEL_DATA_DAYS.get(kl_type, self.base_days)
 
     def run(self):
        try:
-           begin_time = (datetime.now() - timedelta(days=self.days)).strftime("%Y-%m-%d")
            end_time = datetime.now().strftime("%Y-%m-%d")
            
            self.log_signal.emit(f"🔍 开始分析 {self.code}...")
            
            results = {}
            for kl_type in self.kl_types:
+               # 每个级别使用不同的数据天数
+               level_days = self._get_days_for_level(kl_type)
+               begin_time = (datetime.now() - timedelta(days=level_days)).strftime("%Y-%m-%d")
+               self.log_signal.emit(f"📊 级别 {kl_type.name}: 加载最近 {level_days} 天数据")
+               
                chan = None
                for data_src in self.data_sources:
                    try:
@@ -217,6 +261,7 @@ class SingleAnalysisThread(QThread):
                self.error.emit("数据源错误，请检查数据库连接和表结构。")
            else:
                self.error.emit(str(e))
+
 
 
 class UpdateDatabaseThread(QThread):

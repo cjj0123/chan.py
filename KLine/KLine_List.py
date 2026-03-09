@@ -102,6 +102,8 @@ class CKLine_List:
         return len(self.lst)
 
     def cal_seg_and_zs(self):
+        if len(self.lst) == 0:
+            return
         if not self.step_calculation:
             self.bi_list.try_add_virtual_bi(self.lst[-1])
         self.last_sure_seg_start_bi_idx = cal_seg(self.bi_list, self.seg_list, self.last_sure_seg_start_bi_idx)

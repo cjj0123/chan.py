@@ -73,9 +73,9 @@ class CAkshare(CCommonStockApi):
         adjust = adjust_dict.get(self.autype, "qfq")
         period = self.__convert_type()
 
-        # 格式化日期
-        start_date = self.begin_date.replace("-", "") if self.begin_date else "19900101"
-        end_date = self.end_date.replace("-", "") if self.end_date else "20991231"
+        # 格式化日期 (API 仅支持日期部分)
+        start_date = self.begin_date.split(' ')[0].replace("-", "") if self.begin_date else "19900101"
+        end_date = self.end_date.split(' ')[0].replace("-", "") if self.end_date else "20991231"
 
         df = pd.DataFrame()
 
@@ -104,12 +104,17 @@ class CAkshare(CCommonStockApi):
                     df = ak.stock_zh_a_hist(symbol=symbol, period=period, start_date=start_date, end_date=end_date, adjust=adjust)
                 else:
                     # A股 分钟线 (1, 5, 15, 30, 60)
-                    # 注意：分钟线接口通常只返回最近一段时间的数据
                     df = ak.stock_zh_a_hist_min_em(symbol=symbol, period=period, adjust=adjust)
                     df['时间'] = pd.to_datetime(df['时间'])
-                    # 过滤用户指定的时间起点
-                    if self.begin_date:
-                        df = df[df['时间'] >= pd.to_datetime(self.begin_date)]
+
+            # 通用过滤逻辑：确保返回的数据严格在 [begin_date, end_date] 范围内
+            if not df.empty:
+                time_col = '时间' if '时间' in df.columns else '日期'
+                df[time_col] = pd.to_datetime(df[time_col])
+                if self.begin_date:
+                    df = df[df[time_col] >= pd.to_datetime(self.begin_date)]
+                if self.end_date:
+                    df = df[df[time_col] <= pd.to_datetime(self.end_date)]
 
         except Exception as e:
             print(f"[ERROR] 从 AKShare 获取数据失败: {e}")

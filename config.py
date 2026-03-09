@@ -26,7 +26,7 @@ TRADING_CONFIG = {
     'lunch_break_end': os.getenv('LUNCH_BREAK_END', '13:00'),
     
     # 信号时间过滤
-    'max_signal_age_hours': int(os.getenv('MAX_SIGNAL_AGE_HOURS', '4')),
+    'max_signal_age_hours': int(os.getenv('MAX_SIGNAL_AGE_HOURS', '1')),
     
     # Discord 配置
     'discord': {

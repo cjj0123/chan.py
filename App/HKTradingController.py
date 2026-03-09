@@ -41,6 +41,7 @@ import aiohttp
 
 # 导入风险管理
 from Trade.RiskManager import get_risk_manager
+from Common.TimeUtils import get_trading_duration_hours as calc_trading_duration
 
 # 导入本地评分
 from Trade.LocalScorer import get_local_scorer
@@ -290,7 +291,8 @@ class HKTradingController(QObject):
                     config=self.chan_config
                 )
             except Exception as e:
-                self.log_message.emit(f"获取K线数据异常 {code}: {e}")
+                import traceback
+                self.log_message.emit(f"获取K线数据异常 {code}: {e}\n{traceback.format_exc()}")
                 return None
             
             # 检查30M数据是否足够
@@ -542,12 +544,12 @@ class HKTradingController(QObject):
             self.log_message.emit(f"执行交易异常 {code}: {e}")
             return False
 
-    def get_available_funds(self) -> float:
+    def get_account_assets(self) -> Tuple[float, float]:
         """
-        获取可用资金 (模拟盘/实盘都实时查询)
+        获取可用资金和总资产 (模拟盘/实盘都实时查询)
 
         Returns:
-            可用资金金额
+            (可用资金金额, 总资产金额)
         """
         try:
             ret, data = self.trd_ctx.accinfo_query(trd_env=self.trd_env)
@@ -559,14 +561,15 @@ class HKTradingController(QObject):
                     available_funds = data.iloc[0]['avl_withdrawal_cash']
                 else:
                     available_funds = data.iloc[0].get('total_assets', 0.0)
-                self.log_message.emit(f"可用资金：{available_funds:,.2f} HKD")
-                return float(available_funds)
+                total_assets = data.iloc[0].get('total_assets', available_funds)
+                self.log_message.emit(f"可用资金：{available_funds:,.2f} HKD, 总资产: {total_assets:,.2f} HKD")
+                return float(available_funds), float(total_assets)
             else:
                 self.log_message.emit(f"获取账户信息失败：{data}")
-                return 0.0
+                return 0.0, 0.0
         except Exception as e:
             self.log_message.emit(f"获取资金信息异常：{e}")
-            return 0.0
+            return 0.0, 0.0
 
     def _cleanup_old_charts(self, hours: int = 24):
         """
@@ -832,8 +835,8 @@ class HKTradingController(QObject):
             if candidate_signals:
                 scored_signals = self._process_candidate_signals(candidate_signals)
                 if scored_signals:
-                    available_funds = self.get_available_funds()
-                    self._execute_trades(scored_signals, available_funds)
+                    available_funds, total_assets = self.get_account_assets()
+                    self._execute_trades(scored_signals, available_funds, total_assets)
 
             # 记录性能
             duration = time.time() - start_time
@@ -845,11 +848,23 @@ class HKTradingController(QObject):
     def _validate_and_filter_signal(self, code, chan_result, stock_info, is_force_scan: bool = False) -> bool:
         """封装原有的信号验证和过滤逻辑"""
         is_buy = chan_result.get('is_buy_signal', False)
-        bsp_time_str = chan_result.get('bsp_datetime_str', '')
         bsp_type = chan_result.get('bsp_type', '未知')
         bsp_type_display = f"{'b' if is_buy else 's'}{bsp_type}"
         
-        # 1. ML 过滤
+        # 1. 核心去重逻辑：按持仓及信号类型判断 (按用户要求去重)
+        # 成功买入且未卖出前的所有买点视为重复 -> 即持仓>0时不处理买点
+        # 否则视为不重复 -> 即持仓=0时可以处理买点
+        position_qty = self.get_position_quantity(code)
+        if is_buy and position_qty > 0: 
+            return False
+        if not is_buy and position_qty <= 0: 
+            return False
+
+        # 2. 挂单校验 (如果有相同方向正在进行中的订单，不要重复下单)
+        if self.check_pending_orders(code, 'BUY' if is_buy else 'SELL'):
+            return False
+
+        # 3. ML 过滤 (放到最后，避免浪费算力和日志刷屏)
         if is_buy:
             chan_env = chan_result.get('chan_analysis', {}).get('chan_30m')
             if chan_env:
@@ -857,26 +872,8 @@ class HKTradingController(QObject):
                 if bsp_list:
                     ml_res = self.signal_validator.validate_signal(chan_env, bsp_list[-1], threshold=self.ml_threshold)
                     if not ml_res['is_valid']:
-                        self.log_message.emit(f"🤖 {code} {bsp_type_display} ML 过滤: {ml_res['msg']}")
+                        self.log_message.debug(f"🤖 {code} {bsp_type_display} ML 过滤: {ml_res['msg']}")
                         return False
-
-        # 2. 重复执行校验
-        if self.executed_signals.get(code) == bsp_time_str:
-            return False
-            
-        # 如果不是强制扫描，且该信号已经被“发现”（但由于资金不足等原因未买入），则忽略。
-        # 强制扫描时，允许重新评估这些信号。
-        if not is_force_scan and self.discovered_signals.get(code) == bsp_time_str:
-            return False
-
-        # 3. 持仓方向校验
-        position_qty = self.get_position_quantity(code)
-        if is_buy and position_qty > 0: return False
-        if not is_buy and position_qty <= 0: return False
-
-        # 4. 挂单校验
-        if self.check_pending_orders(code, 'BUY' if is_buy else 'SELL'):
-            return False
 
         return True
 
@@ -900,7 +897,7 @@ class HKTradingController(QObject):
         # 使用 asyncio.run 来运行异步方法
         return asyncio.run(self._batch_score_signals_async(signals_with_charts))
 
-    def _execute_trades(self, all_signals: List[Dict], available_funds_at_start: float) -> Tuple[List[Dict], int, int, float]:
+    def _execute_trades(self, all_signals: List[Dict], available_funds_at_start: float, total_assets: float = 0.0) -> Tuple[List[Dict], int, int, float]:
         """
         执行交易 - 第四步
         """
@@ -973,13 +970,27 @@ class HKTradingController(QObject):
         if buy_signals:
             self.log_message.emit(f"\n>>> 开始执行买入操作（共{len(buy_signals)}个）")
             
-            max_stocks_to_buy = 5  # 最多买入5只股票
-            stocks_bought = 0  # 已买入股票数量
+            max_total_stocks = 5  # 账户最多同时持有5只股票
+            
+            # 查询当前实际持仓数量（从富途API实时获取，而非仅依赖本轮计数器）
+            current_position_count = 0
+            try:
+                ret, data = self.trd_ctx.position_list_query(trd_env=self.trd_env)
+                if ret == RET_OK and not data.empty:
+                    # 只计算持仓数量 > 0 的股票
+                    held = data[data['qty'].astype(float) > 0]
+                    current_position_count = len(held)
+                    self.log_message.emit(f"📊 当前实际持仓: {current_position_count}只股票")
+            except Exception as e:
+                self.log_message.emit(f"⚠️ 查询持仓数量异常: {e}，将使用保守限制")
+            
+            remaining_slots = max(0, max_total_stocks - current_position_count)
+            stocks_bought = 0  # 本轮已买入股票数量
             
             for i, signal in enumerate(buy_signals, 1):
                 # 检查是否已达到最大买入股票数量
-                if stocks_bought >= max_stocks_to_buy:
-                    self.log_message.emit(f"✅ 已达到最大买入股票数量限制({max_stocks_to_buy}只)，停止买入")
+                if stocks_bought >= remaining_slots:
+                    self.log_message.emit(f"✅ 已达到最大持仓数量限制（当前持仓{current_position_count}+本轮买入{stocks_bought}={current_position_count+stocks_bought}只，上限{max_total_stocks}只），停止买入")
                     break
                 
                 code = signal['code']
@@ -1007,15 +1018,16 @@ class HKTradingController(QObject):
                     chan_analysis = chan_res.get('chan_analysis', {})
                     # 尝试从30M或其它可用级别计算 ATR
                     chan_30m = chan_analysis.get('chan_30m')
-                    if chan_30m and isinstance(chan_30m, list) and len(chan_30m) > 0:
+                    if chan_30m is not None and len(chan_30m[0]) > 0:
                         try:
-                            kl_list = [kl for kl in chan_30m[0].klu_iter()]
+                            kl_list = list(chan_30m[0].klu_iter())
                             atr_value = self._calculate_atr(kl_list, period=14)
                             self.log_message.emit(f"{code} 波动率诊断: ATR={atr_value:.3f}")
                         except Exception as e:
-                            self.log_message.emit(f"⚠️ {code} ATR 计算失败: {e}")
+                            import traceback
+                            self.log_message.emit(f"⚠️ {code} ATR 计算失败: {e}\n{traceback.format_exc()}")
                     else:
-                        self.log_message.emit(f"⚠️ {code} 无可用 chan_30m 数据用于计算 ATR，将使用默认仓位风险控制。")
+                        self.log_message.emit(f"⚠️ {code} 无可用 chan_30m 数据用于计算 ATR，将使用固定20%仓位。")
                     
                     # 使用风险管理器计算动态仓位，通过 ATR 限额
                     buy_quantity = self.risk_manager.calculate_position_size(
@@ -1025,7 +1037,8 @@ class HKTradingController(QObject):
                         signal_score=score,
                         risk_factor=1.0,
                         atr=atr_value,
-                        atr_multiplier=atr_multiplier
+                        atr_multiplier=atr_multiplier,
+                        total_assets=total_assets
                     )
                     
                     if buy_quantity <= 0:
@@ -1067,7 +1080,7 @@ class HKTradingController(QObject):
                             }
                             self.log_message.emit(f"🛡️ {code} 已启动移动止损监控: 初始价={price:.3f}, ATR={atr_value:.3f}")
                             
-                        self.log_message.emit(f"✅ 买入成功 {code}, 剩余资金: {available_funds:.2f}, 已买入{stocks_bought}/{max_stocks_to_buy}只")
+                        self.log_message.emit(f"✅ 买入成功 {code}, 剩余资金: {available_funds:.2f}, 已买入{stocks_bought}/{remaining_slots}只(总持仓{current_position_count+stocks_bought}/{max_total_stocks})")
                     else:
                         self.log_message.emit(f"❌ 买入失败 {code}")
                 else:
@@ -1180,114 +1193,30 @@ class HKTradingController(QObject):
         try:
             ret, data = self.trd_ctx.order_list_query(trd_env=self.trd_env)
             if ret == RET_OK and not data.empty:
-                # 过滤出正在处理的订单
-                active_statuses = [OrderStatus.SUBMITTING, OrderStatus.SUBMITTED, OrderStatus.WAITING_SUBMIT]
-                data = data[data['status'].isin(active_statuses)]
-                futu_side = TrdSide.BUY if side.upper() == 'BUY' else TrdSide.SELL
-                # 过滤出对应代码和方向的活跃订单
-                pending = data[(data['code'] == code) & (data['trd_side'] == futu_side)]
-                if not pending.empty:
-                    self.log_message.emit(f"{code} 发现已有 {side} 待成交订单，订单ID: {pending.iloc[0]['order_id']}")
-                    return True
+                # 兼容 futu API 返回的字段名可能是 order_status 或 status
+                status_col = 'order_status' if 'order_status' in data.columns else 'status'
+                if status_col in data.columns:
+                    # 过滤出正在处理的订单
+                    active_statuses = [OrderStatus.SUBMITTING, OrderStatus.SUBMITTED, OrderStatus.WAITING_SUBMIT]
+                    data = data[data[status_col].isin(active_statuses)]
+                    futu_side = TrdSide.BUY if side.upper() == 'BUY' else TrdSide.SELL
+                    # 过滤出对应代码和方向的活跃订单
+                    pending = data[(data['code'] == code) & (data['trd_side'] == futu_side)]
+                    if not pending.empty:
+                        self.log_message.emit(f"{code} 发现已有 {side} 待成交订单，订单ID: {pending.iloc[0]['order_id']}")
+                        return True
             return False
         except Exception as e:
             self.log_message.emit(f"检查待成交订单异常 {code}: {e}")
             return False
 
     def calculate_trading_hours(self, start_time: datetime, end_time: datetime) -> float:
-        """
-        计算两个时间点之间的港股交易小时数（排除非交易时段）
-        
-        港股交易时间：
-        - 上午：09:30 - 12:00
-        - 下午：13:00 - 16:00
-        - 周末和节假日不交易
-        
-        Args:
-            start_time: 信号产生时间
-            end_time: 当前时间
-            
-        Returns:
-            交易小时数（浮点数）
-        """
+        """调用公共工具类计算交易时长"""
         try:
-            import pandas_market_calendars as mcal
-            
-            # 获取港股交易日历
-            hkex = mcal.get_calendar('XHKG')
-            
-            # 获取交易时间段
-            schedule = hkex.schedule(start_date=start_time.date(), end_date=end_time.date())
-            if schedule.empty:
-                return 0.0
-            
-            total_hours = 0.0
-            
-            # 遍历每个交易日
-            for index, row in schedule.iterrows():
-                market_open = row['market_open'].to_pydatetime().replace(tzinfo=None)
-                market_close = row['market_close'].to_pydatetime().replace(tzinfo=None)
-                
-                # 确定当天的计算范围
-                day_start = max(start_time, market_open)
-                day_end = min(end_time, market_close)
-                
-                if day_start < day_end:
-                    # 计算当天的交易时间
-                    day_hours = (day_end - day_start).total_seconds() / 3600
-                    total_hours += day_hours
-            
-            return total_hours
-        except ImportError:
-            self.log_message.emit("pandas_market_calendars 未安装，使用原始方法计算交易时间")
-            # 使用配置中的交易时间
-            from config import TRADING_CONFIG
-            trading_start_hour, trading_start_minute = map(int, TRADING_CONFIG['trading_hours_start'].split(':'))
-            trading_end_hour, trading_end_minute = map(int, TRADING_CONFIG['trading_hours_end'].split(':'))
-            lunch_start_hour, lunch_start_minute = map(int, TRADING_CONFIG['lunch_break_start'].split(':'))
-            lunch_end_hour, lunch_end_minute = map(int, TRADING_CONFIG['lunch_break_end'].split(':'))
-            
-            total_hours = 0.0
-            current = start_time
-            
-            while current < end_time:
-                # 检查是否是工作日（周一到周五）
-                if current.weekday() >= 5:  # 周六或周日
-                    current += timedelta(days=1)
-                    current = current.replace(hour=0, minute=0, second=0)
-                    continue
-                
-                # 获取当天的交易时段
-                morning_start = current.replace(hour=trading_start_hour, minute=trading_start_minute, second=0, microsecond=0)
-                morning_end = current.replace(hour=lunch_start_hour, minute=lunch_start_minute, second=0, microsecond=0)
-                afternoon_start = current.replace(hour=lunch_end_hour, minute=lunch_end_minute, second=0, microsecond=0)
-                afternoon_end = current.replace(hour=trading_end_hour, minute=trading_end_minute, second=0, microsecond=0)
-                day_end = current.replace(hour=23, minute=59, second=59)
-                
-                # 如果当前时间早于上午开盘，跳到开盘时间
-                if current < morning_start:
-                    current = morning_start
-                
-                # 计算上午交易时段
-                if morning_start <= current < morning_end:
-                    segment_end = min(morning_end, end_time)
-                    total_hours += (segment_end - current).total_seconds() / 3600
-                    current = segment_end
-                
-                # 计算下午交易时段
-                if afternoon_start <= current < afternoon_end:
-                    segment_end = min(afternoon_end, end_time)
-                    total_hours += (segment_end - current).total_seconds() / 3600
-                    current = segment_end
-                
-                # 如果已经过了下午收盘，进入下一天
-                if current >= afternoon_end:
-                    current = (current + timedelta(days=1)).replace(hour=0, minute=0, second=0)
-                elif morning_end <= current < afternoon_start:
-                    # 午休时间，跳到下午开盘
-                    current = afternoon_start
-            
-            return total_hours
+            return calc_trading_duration(start_time, end_time)
+        except Exception as e:
+            logger.error(f"Error in calculate_trading_hours: {e}")
+            return 0.0
 
     def get_position_quantity(self, code: str) -> int:
         """
@@ -1687,12 +1616,14 @@ class HKTradingController(QObject):
                 # 计算交易数量
                 if is_buy:
                     # 买入：使用风险管理器计算动态仓位
+                    available_funds, total_assets = self.get_account_assets()
                     buy_quantity = self.risk_manager.calculate_position_size(
                         code=code,
-                        available_funds=self.get_available_funds(),
+                        available_funds=available_funds,
                         current_price=current_price,
                         signal_score=score,
-                        risk_factor=1.0
+                        risk_factor=1.0,
+                        total_assets=total_assets
                     )
                     if buy_quantity <= 0:
                         self.log_message.emit(f"{code} 风险管理器建议不买入或资金不足")

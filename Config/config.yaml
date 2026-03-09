@@ -14,7 +14,7 @@ trading:
   lunch_break_end: "13:00"
   
   # 信号时间过滤
-  max_signal_age_hours: 4
+  max_signal_age_hours: 1
   
   # 风险管理配置
   circuit_breaker_enabled: true

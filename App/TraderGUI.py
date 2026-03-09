@@ -304,7 +304,12 @@ class TraderGUI(QMainWindow):
             
             self.tf_frames[tf] = tf_frame
             self.charts_tabs.addTab(tf_frame, tf)
-            
+        
+        # 延迟渲染状态
+        self._chan_results = {}       # 缓存分析结果 {kl_name: chan}
+        self._rendered_tabs = set()   # 已渲染的标签页名称
+        self.charts_tabs.currentChanged.connect(self._on_chart_tab_changed)
+        
         right_layout.addWidget(self.charts_tabs)
         
         self.analysis_detail_text = QTextEdit()
@@ -490,7 +495,7 @@ class TraderGUI(QMainWindow):
             # 临时创建一个控制器来获取资金
             temp_controller = HKTradingController()
             temp_controller.log_message.connect(self.append_auto_log)
-            funds = temp_controller.get_available_funds()
+            funds, total_assets = temp_controller.get_account_assets()
             
             # 同时查询持仓
             from futu import OpenHKTradeContext, TrdEnv, RET_OK
@@ -689,8 +694,8 @@ class TraderGUI(QMainWindow):
             self.log_text.append(f"⚠️ 天数输入格式不正确，使用默认值30天")
         
         # 获取日期范围
-        start_date = self.start_date_input.date().toString("yyyy-MM-dd")
-        end_date = self.end_date_input.date().toString("yyyy-MM-dd")
+        start_date = self.start_date_input.dateTime().toString("yyyy-MM-dd HH:mm:ss")
+        end_date = self.end_date_input.dateTime().toString("yyyy-MM-dd HH:mm:ss")
         
         # 从本地获取股票列表，根据自选股分组选择
         try:
@@ -1045,96 +1050,123 @@ class TraderGUI(QMainWindow):
         self.progress_bar.setVisible(False)
         self.statusBar().showMessage('扫描完成')
 
+    # ─── 级别名称映射 ───
+    KL_NAME_MAP = {
+        "K_DAY": "日线",
+        "K_30M": "30分钟",
+        "K_5M": "5分钟",
+        "K_1M": "1分钟",
+    }
+    TF_NAMES = ["日线", "30分钟", "5分钟", "1分钟"]
+
     def on_analysis_finished(self, chan_results):
-        """处理多级别图表分析完成"""
+        """处理多级别图表分析完成（延迟渲染：只渲染当前标签页）"""
         try:
             if not chan_results:
                 self.log_text.append("❌ 分析结果为空")
                 return
 
-            self.log_text.append(f"📊 获取到 {len(chan_results)} 个级别的图表，正在渲染...")
+            self.log_text.append(f"📊 获取到 {len(chan_results)} 个级别的数据，准备渲染...")
             import matplotlib.pyplot as plt
-            
+            plt.close('all')
+
+            # 缓存分析结果并清除已渲染标记
+            self._chan_results = chan_results
+            self._rendered_tabs = set()
+
+            # 生成汇总信息
             details_text = "缠论分析完成！\n\n"
             first_chan = list(chan_results.values())[0]
             details_text += f"股票: {first_chan.code}\n"
             details_text += f"时间范围: {first_chan.begin_time} - {first_chan.end_time}\n"
-            
-            # 各级别 x_range 设置
-            x_range_map = {
-                "日线": 350,
-                "30分钟": 350,
-                "5分钟": 350,
-                "1分钟": 350,
-            }
-            
-            kl_name_map = {
-                "K_DAY": "日线",
-                "K_30M": "30分钟",
-                "K_5M": "5分钟",
-                "K_1M": "1分钟"
-            }
-
-            plt.close('all')
-
             for kl_name, chan in chan_results.items():
-                tf_name = kl_name_map.get(kl_name)
-                if not tf_name or tf_name not in self.tf_frames:
-                    continue
-                
-                tf_frame = self.tf_frames[tf_name]
-                tf_layout = tf_frame.layout()
-                
+                tf_name = self.KL_NAME_MAP.get(kl_name, kl_name)
                 if len(chan.lv_list) == 0:
                     continue
-                    
                 first_lv = chan.lv_list[0]
                 kl_data = list(chan[first_lv])
-                
-                x_range = x_range_map.get(tf_name, 150)
-                
-                fig_width = max(5, tf_frame.width() / 100)
-                fig_height = max(3, tf_frame.height() / 100)
-                
-                plot_para = {
-                    "figure": {
-                        "x_range": x_range,
-                        "w": fig_width,
-                        "h": fig_height,
-                    }
-                }
-                plot_config = {
-                    "plot_kline": True, "plot_kline_combine": True,
-                    "plot_bi": True, "plot_seg": True, "plot_zs": True,
-                    "plot_macd": True, "plot_bsp": True,
-                }
-                plot_driver = CPlotDriver(chan, plot_config=plot_config, plot_para=plot_para)
-                
-                # 清理旧的canvas
-                while tf_layout.count() > 0:
-                    item = tf_layout.takeAt(0)
-                    if item.widget():
-                        item.widget().deleteLater()
-                
-                # 重新创建图表，避免重影和缩放问题
-                new_canvas = FigureCanvas(plot_driver.figure)
-                new_canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-                
-                tf_layout.addWidget(new_canvas)
-                
                 first_lv_data = chan[first_lv]
                 bi_count = len(list(first_lv_data.bi_list)) if hasattr(first_lv_data, 'bi_list') and first_lv_data.bi_list is not None else 0
                 seg_count = len(list(first_lv_data.seg_list)) if hasattr(first_lv_data, 'seg_list') and first_lv_data.seg_list is not None else 0
                 zs_count = len(list(first_lv_data.zs_list)) if hasattr(first_lv_data, 'zs_list') and first_lv_data.zs_list is not None else 0
                 details_text += f"[{tf_name}] 数据源: {chan.data_src} | K线: {len(kl_data)} | 笔: {bi_count} | 段: {seg_count} | 中枢: {zs_count}\n"
-                
             self.analysis_detail_text.setPlainText(details_text)
-            self.log_text.append("✅ 图表渲染完成")
-            
+
+            # 只渲染当前激活的标签页
+            current_idx = self.charts_tabs.currentIndex()
+            if 0 <= current_idx < len(self.TF_NAMES):
+                current_tf = self.TF_NAMES[current_idx]
+                self._render_tab_by_name(current_tf)
+
+            self.log_text.append("✅ 当前标签页图表渲染完成（其他级别将在切换时加载）")
+
         except Exception as e:
             self.log_text.append(f"❌ 渲染图表失败: {str(e)}")
             import traceback
             self.log_text.append(f"详细错误: {traceback.format_exc()}")
+
+    def _on_chart_tab_changed(self, index):
+        """标签页切换时按需渲染对应图表"""
+        if index < 0 or index >= len(self.TF_NAMES):
+            return
+        tf_name = self.TF_NAMES[index]
+        if tf_name not in self._rendered_tabs and self._chan_results:
+            self.log_text.append(f"📊 正在渲染 {tf_name} 图表...")
+            self._render_tab_by_name(tf_name)
+            self.log_text.append(f"✅ {tf_name} 渲染完成")
+
+    def _render_tab_by_name(self, tf_name):
+        """渲染指定标签页的图表"""
+        # 反查 kl_name
+        reverse_map = {v: k for k, v in self.KL_NAME_MAP.items()}
+        kl_name = reverse_map.get(tf_name)
+        if not kl_name or kl_name not in self._chan_results:
+            return
+
+        chan = self._chan_results[kl_name]
+        if tf_name not in self.tf_frames or len(chan.lv_list) == 0:
+            return
+
+        tf_frame = self.tf_frames[tf_name]
+        tf_layout = tf_frame.layout()
+
+        first_lv = chan.lv_list[0]
+
+        x_range_map = {"日线": 250, "30分钟": 630, "5分钟": 660, "1分钟": 1100}
+        x_range = x_range_map.get(tf_name, 150)
+
+        fig_width = max(5, tf_frame.width() / 100)
+        fig_height = max(3, tf_frame.height() / 100)
+
+        plot_para = {
+            "figure": {
+                "x_range": x_range,
+                "w": fig_width,
+                "h": fig_height,
+            }
+        }
+        plot_config = {
+            "plot_kline": True, "plot_kline_combine": True,
+            "plot_bi": True, "plot_seg": True, "plot_zs": True,
+            "plot_macd": True, "plot_bsp": True,
+        }
+
+        try:
+            plot_driver = CPlotDriver(chan, plot_config=plot_config, plot_para=plot_para)
+
+            # 清理旧的 canvas
+            while tf_layout.count() > 0:
+                item = tf_layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+
+            new_canvas = FigureCanvas(plot_driver.figure)
+            new_canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            tf_layout.addWidget(new_canvas)
+
+            self._rendered_tabs.add(tf_name)
+        except Exception as e:
+            self.log_text.append(f"❌ 渲染 {tf_name} 失败: {str(e)}")
 
     def on_analysis_error(self, error_msg):
         """处理分析错误"""

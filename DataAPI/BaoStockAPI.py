@@ -1,4 +1,5 @@
 import baostock as bs
+import datetime
 
 from Common.CEnum import AUTYPE, DATA_FIELD, KL_TYPE
 from Common.CTime import CTime
@@ -69,18 +70,40 @@ class CBaoStock(CCommonStockApi):
         else:
             fields = "date,open,high,low,close,volume,amount,turn"
         autype_dict = {AUTYPE.QFQ: "2", AUTYPE.HFQ: "1", AUTYPE.NONE: "3"}
+        # BaoStock 仅支持 YYYY-MM-DD 格式的日期字符串
+        start_date_str = self.begin_date.split(' ')[0] if self.begin_date else ""
+        end_date_str = self.end_date.split(' ')[0] if self.end_date else ""
+        
         rs = bs.query_history_k_data_plus(
             code=self.code,
             fields=fields,
-            start_date=self.begin_date,
-            end_date=self.end_date,
+            start_date=start_date_str,
+            end_date=end_date_str,
             frequency=self.__convert_type(),
             adjustflag=autype_dict[self.autype],
         )
         if rs.error_code != '0':
             raise Exception(rs.error_msg)
         while rs.error_code == '0' and rs.next():
-            yield CKLine_Unit(create_item_dict(rs.get_row_data(), GetColumnNameFromFieldList(fields)))
+            row_data = rs.get_row_data()
+            item_dict = create_item_dict(row_data, GetColumnNameFromFieldList(fields))
+            
+            # 手动执行精确的时间过滤（BaoStock API 仅支持按天过滤）
+            try:
+                dt_item = item_dict[DATA_FIELD.FIELD_TIME]
+                # CTime 转 datetime 以便比较
+                dt_obj = datetime.datetime(dt_item.year, dt_item.month, dt_item.day, dt_item.hour, dt_item.minute)
+                
+                if self.begin_date:
+                    dt_begin = datetime.datetime.strptime(self.begin_date, "%Y-%m-%d %H:%M:%S") if ' ' in self.begin_date else datetime.datetime.strptime(self.begin_date, "%Y-%m-%d")
+                    if dt_obj < dt_begin: continue
+                if self.end_date:
+                    dt_end = datetime.datetime.strptime(self.end_date, "%Y-%m-%d %H:%M:%S") if ' ' in self.end_date else datetime.datetime.strptime(self.end_date, "%Y-%m-%d")
+                    if dt_obj > dt_end: continue
+            except:
+                pass
+                
+            yield CKLine_Unit(item_dict)
 
     def SetBasciInfo(self):
         rs = bs.query_stock_basic(code=self.code)
