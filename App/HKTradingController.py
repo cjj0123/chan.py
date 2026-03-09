@@ -747,6 +747,7 @@ class HKTradingController(QObject):
                 
                 if self._force_scan:
                     should_scan_strategy = True
+                    is_force_scan = True
                     self._force_scan = False  # 重置标志
                 elif last_strategy_scan_time != current_bar_time:
                     # 额外等待 1 分钟让 30M 棒线在富途后端稳定
@@ -760,7 +761,7 @@ class HKTradingController(QObject):
                         self.log_message.emit(f"🔍 [策略扫描] 捕获到新的 30M 周期 ({current_bar_time.strftime('%H:%M')})，启动完整缠论分析...")
                     
                     # 执行原有的完整扫描逻辑
-                    self._perform_full_strategy_scan(watchlist_codes)
+                    self._perform_full_strategy_scan(watchlist_codes, is_force_scan=is_force_scan)
                     last_strategy_scan_time = current_bar_time
                     self.log_message.emit("✅ [策略扫描] 本轮分析完成。")
                 
@@ -779,7 +780,7 @@ class HKTradingController(QObject):
 
         self.log_message.emit("🔚 港股自动化监控进程已安全退出。")
 
-    def _perform_full_strategy_scan(self, watchlist_codes: List[str]):
+    def _perform_full_strategy_scan(self, watchlist_codes: List[str], is_force_scan: bool = False):
         """原有的完整缠论分析和交易决策逻辑"""
         try:
             start_time = time.time()
@@ -806,7 +807,7 @@ class HKTradingController(QObject):
                 current_price = stock_info['current_price']
                 
                 # ML / 重复 / 持仓 过滤逻辑 (保持原有逻辑)
-                if not self._validate_and_filter_signal(code, chan_result, stock_info):
+                if not self._validate_and_filter_signal(code, chan_result, stock_info, is_force_scan):
                     continue
                 
                 # 收集有效信号
@@ -841,7 +842,7 @@ class HKTradingController(QObject):
         except Exception as e:
             self.log_message.emit(f"⚠️ 策略扫描子流程错误: {e}")
 
-    def _validate_and_filter_signal(self, code, chan_result, stock_info) -> bool:
+    def _validate_and_filter_signal(self, code, chan_result, stock_info, is_force_scan: bool = False) -> bool:
         """封装原有的信号验证和过滤逻辑"""
         is_buy = chan_result.get('is_buy_signal', False)
         bsp_time_str = chan_result.get('bsp_datetime_str', '')
@@ -862,7 +863,10 @@ class HKTradingController(QObject):
         # 2. 重复执行校验
         if self.executed_signals.get(code) == bsp_time_str:
             return False
-        if self.discovered_signals.get(code) == bsp_time_str:
+            
+        # 如果不是强制扫描，且该信号已经被“发现”（但由于资金不足等原因未买入），则忽略。
+        # 强制扫描时，允许重新评估这些信号。
+        if not is_force_scan and self.discovered_signals.get(code) == bsp_time_str:
             return False
 
         # 3. 持仓方向校验
