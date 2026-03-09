@@ -220,20 +220,20 @@ def download_and_save_all_stocks(stock_codes, days=365, log_callback=None):
         try:
             # Determine market type and select appropriate data source
             if code.startswith("US."):
-                # 美股: 优先使用AKShare
-                kl_data, source_used = _download_us_stock_data(code, begin_time, end_time)
+                # 美股: 优先使用 Polygon/YFinance
+                kl_data, source_used = _download_us_stock_data(code, begin_time, end_time, log_callback)
                 
             elif code.startswith("HK."):
                 # 港股: 优先使用Futu，失败则使用AKShare
-                kl_data, source_used = _download_hk_stock_data(code, begin_time, end_time)
+                kl_data, source_used = _download_hk_stock_data_with_timeframe(code, begin_time, end_time, KL_TYPE.K_DAY, log_callback)
                 
             elif code.startswith("SZ.") or code.startswith("SH."):
                 # A股: 优先使用BaoStock，失败则使用AKShare
-                kl_data, source_used = _download_a_stock_data(code, begin_time, end_time)
+                kl_data, source_used = _download_a_stock_data_with_timeframe(code, begin_time, end_time, KL_TYPE.K_DAY, log_callback)
                 
             else:
                 # 默认使用AKShare
-                kl_data, source_used = _download_with_akshare(code, begin_time, end_time)
+                kl_data, source_used = _download_with_akshare_with_timeframe(code, begin_time, end_time, KL_TYPE.K_DAY, log_callback)
             
             if kl_data:
                 # Save to database
@@ -409,17 +409,17 @@ def download_and_save_all_stocks_multi_timeframe(stock_codes, days=365, timefram
             try:
                 # Use the same logic as day timeframe for all timeframes
                 if code.startswith("US."):
-                    # 美股: 优先使用AKShare（支持分钟级别）
-                    kl_data, source_used = _download_us_stock_data_with_timeframe(code, begin_time, end_time, k_type)
+                    # 美股: 优先使用 Polygon/YFinance
+                    kl_data, source_used = _download_us_stock_data_with_timeframe(code, begin_time, end_time, k_type, log_callback)
                 elif code.startswith("HK."):
-                    # 港股: 优先使用Futu，失败则使用AKShare（都支持分钟级别）
-                    kl_data, source_used = _download_hk_stock_data_with_timeframe(code, begin_time, end_time, k_type)
+                    # 港股: 优先使用Futu，失败则使用AKShare
+                    kl_data, source_used = _download_hk_stock_data_with_timeframe(code, begin_time, end_time, k_type, log_callback)
                 elif code.startswith("SZ.") or code.startswith("SH."):
-                    # A股: 优先使用BaoStock，失败则使用AKShare（都支持分钟级别）
-                    kl_data, source_used = _download_a_stock_data_with_timeframe(code, begin_time, end_time, k_type)
+                    # A股: 优先使用BaoStock，失败则使用AKShare
+                    kl_data, source_used = _download_a_stock_data_with_timeframe(code, begin_time, end_time, k_type, log_callback)
                 else:
                     # 默认使用AKShare
-                    kl_data, source_used = _download_with_akshare_with_timeframe(code, begin_time, end_time, k_type)
+                    kl_data, source_used = _download_with_akshare_with_timeframe(code, begin_time, end_time, k_type, log_callback)
                 
                 if kl_data:
                     # Save to database - incremental update (no deletion of existing data)
@@ -451,7 +451,7 @@ def download_and_save_all_stocks_multi_timeframe(stock_codes, days=365, timefram
                     else:
                         print(msg_success)
                 else:
-                    msg_empty = f"⚠️  {code} {tf_name} API 返回空数据 (Futu/Akshare 均无结果)"
+                    msg_empty = f"⚠️  {code} {tf_name} API 返回空数据 (所有可用数据源均无结果)"
                     print(msg_empty)
                     if log_callback:
                         log_callback(msg_empty)
@@ -463,104 +463,158 @@ def download_and_save_all_stocks_multi_timeframe(stock_codes, days=365, timefram
                     print(f"❌ 下载 {code} {tf_name} 失败: {e}")
                 continue
 
-def _download_us_stock_data(code, begin_time, end_time):
-    """下载美股数据 - 优先使用AKShare"""
-    from DataAPI.AkshareAPI import CAkshare
-    from Common.CEnum import AUTYPE, KL_TYPE
-    
-    try:
-        # 转换为AKShare格式
-        akshare_code = convert_stock_code_for_akshare(code)
-        api = CAkshare(akshare_code, k_type=KL_TYPE.K_DAY, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
-        return _extract_kl_data(api, code), "AKShare"
-    except Exception as e:
-        print(f"  ⚠️  AKShare下载美股 {code} 失败: {e}")
-        return None, "None"
+def _download_us_stock_data(code, begin_time, end_time, log_callback=None):
+    """下载美股数据 (日线) - 优先使用 Polygon/YFinance"""
+    return _download_us_stock_data_with_timeframe(code, begin_time, end_time, KL_TYPE.K_DAY, log_callback)
 
-def _download_us_stock_data_with_timeframe(code, begin_time, end_time, k_type):
-    """下载美股数据（支持多时间级别） - 优先使用Futu，失败则使用AKShare"""
+def _download_us_stock_data_with_timeframe(code, begin_time, end_time, k_type, log_callback=None):
+    """下载美股数据（支持多时间级别） - 优先使用 Polygon/YFinance"""
+    from DataAPI.PolygonAPI import CPolygonAPI
+    from DataAPI.YFinanceAPI import CYFinanceAPI
     from DataAPI.FutuAPI import CFutuAPI
     from DataAPI.AkshareAPI import CAkshare
     from Common.CEnum import AUTYPE, KL_TYPE
+    from config import API_CONFIG
     
-    # 首先尝试Futu
+    def _log(msg):
+        if log_callback:
+            log_callback(msg)
+        print(msg)
+
+    # 1. 优先尝试 Polygon (如果有 API Key)
+    if API_CONFIG.get('POLYGON_API_KEY'):
+        _log(f"  🔍  正在尝试 Polygon 下载 {code} {k_type}...")
+        try:
+            api = CPolygonAPI(code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
+            kl_data = _extract_kl_data(api, code)
+            if kl_data and len(kl_data) > 0:
+                return kl_data, "Polygon"
+            _log(f"  ℹ️  Polygon 无数据返回")
+        except Exception as e:
+            _log(f"  ⚠️  Polygon 下载失败: {e}")
+    else:
+        _log(f"  ℹ️  未检测到 Polygon API Key，跳过")
+
+    # 2. 尝试 Finnhub (如果有 API Key)
+    if API_CONFIG.get('FINNHUB_API_KEY'):
+        _log(f"  🔍  正在尝试 Finnhub 下载 {code} {k_type}...")
+        try:
+            from DataAPI.FinnhubAPI import CFinnhubAPI
+            api = CFinnhubAPI(code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
+            kl_data = _extract_kl_data(api, code)
+            if kl_data and len(kl_data) > 0:
+                return kl_data, "Finnhub"
+            _log(f"  ℹ️  Finnhub 无数据返回")
+        except Exception as e:
+            _log(f"  ⚠️  Finnhub 下载失败: {e}")
+    else:
+        _log(f"  ℹ️  未检测到 Finnhub API Key，跳过")
+
+    # 3. 尝试 YFinance
+    _log(f"  🔍  正在尝试 YFinance 下载 {code} {k_type}...")
+    try:
+        api = CYFinanceAPI(code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
+        kl_data = _extract_kl_data(api, code)
+        if kl_data and len(kl_data) > 0:
+            return kl_data, "YFinance"
+        _log(f"  ℹ️  YFinance 无数据返回")
+    except Exception as e:
+        _log(f"  ⚠️  YFinance 下载失败: {e}")
+        
+    # 3. 尝试 Futu
+    _log(f"  🔍  正在尝试 Futu 下载 {code} {k_type}...")
     try:
         api = CFutuAPI(code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
         kl_data = _extract_kl_data(api, code)
         if kl_data and len(kl_data) > 0:
             return kl_data, "Futu"
-        else:
-            print(f"  ℹ️  Futu下载美股 {code} {k_type} 无历史数据")
+        _log(f"  ℹ️  Futu 无数据返回")
     except Exception as e:
-        print(f"  ⚠️  Futu下载美股 {code} {k_type} 失败: {e}")
+        _log(f"  ⚠️  Futu 下载失败: {e}")
         
-    # Futu失败或无数据，尝试AKShare
-    # 注意：AKShare的美股接口 stock_us_daily 目前只支持日线级别
-    if k_type != KL_TYPE.K_DAY:
-        print(f"  ℹ️  AKShare的美股接口暂不支持分钟级别数据，跳过 {code} {k_type}")
-        return None, "None"
+    # 4. 尝试 AKShare (仅限日线)
+    if k_type == KL_TYPE.K_DAY:
+        _log(f"  🔍  正在尝试 AKShare 下载 {code} {k_type}...")
+        try:
+            akshare_code = convert_stock_code_for_akshare(code)
+            api = CAkshare(akshare_code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
+            kl_data = _extract_kl_data(api, code)
+            if kl_data and len(kl_data) > 0:
+                return kl_data, "AKShare"
+            _log(f"  ℹ️  AKShare 无数据返回")
+        except Exception as e:
+            _log(f"  ⚠️  AKShare 下载失败: {e}")
         
+    # 特殊提醒：如果是周末请求空数据，给出提示
+    from datetime import datetime
     try:
-        # 转换为AKShare格式
-        akshare_code = convert_stock_code_for_akshare(code)
-        api = CAkshare(akshare_code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
-        kl_data = _extract_kl_data(api, code)
-        if kl_data and len(kl_data) > 0:
-            return kl_data, "AKShare"
-        else:
-            print(f"  ℹ️  AKShare下载美股 {code} {k_type} 无历史数据")
-    except Exception as e:
-        print(f"  ⚠️  AKShare下载美股 {code} {k_type} 失败: {e}")
-        
+        dt_begin = datetime.strptime(begin_time.split(' ')[0], "%Y-%m-%d")
+        dt_end = datetime.strptime(end_time.split(' ')[0], "%Y-%m-%d")
+        if dt_begin.weekday() >= 5 and dt_end.weekday() >= 5:
+            _log(f"  💡  提示：您请求的时间段 ({begin_time} 到 {end_time}) 处于周末，交易所不营业，故无行情数据。")
+    except:
+        pass
+
     return None, "None"
 
-def _download_hk_stock_data_with_timeframe(code, begin_time, end_time, k_type):
+def _download_hk_stock_data_with_timeframe(code, begin_time, end_time, k_type, log_callback=None):
     """下载港股数据（支持多时间级别） - 优先使用Futu，失败则使用AKShare"""
     from DataAPI.FutuAPI import CFutuAPI
     from DataAPI.AkshareAPI import CAkshare
     from Common.CEnum import AUTYPE
     
+    def _log(msg):
+        if log_callback:
+            log_callback(msg)
+        print(msg)
+
     # 首先尝试Futu
     try:
+        _log(f"  🔍  正在尝试 Futu 下载 {code} {k_type}...")
         api = CFutuAPI(code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
         kl_data = _extract_kl_data(api, code)
         if kl_data and len(kl_data) > 0:
             return kl_data, "Futu"
-        else:
-            print(f"  ℹ️  Futu下载港股 {code} {k_type} 无历史数据")
+        _log(f"  ℹ️  Futu 下载港股 {code} 无历史数据")
     except Exception as e:
-        print(f"  ⚠️  Futu下载港股 {code} {k_type} 失败: {e}")
+        _log(f"  ⚠️  Futu 下载失败: {e}")
     
     # Futu失败或无数据，尝试AKShare
     try:
+        _log(f"  🔍  正在尝试 AKShare 下载 {code} {k_type}...")
         akshare_code = convert_stock_code_for_akshare(code)
         api = CAkshare(akshare_code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
         kl_data = _extract_kl_data(api, code)
         if kl_data and len(kl_data) > 0:
             return kl_data, "AKShare"
-        else:
-            print(f"  ℹ️  AKShare下载港股 {code} {k_type} 无历史数据")
+        _log(f"  ℹ️  AKShare 下载港股 {code} 无历史数据")
     except Exception as e:
-        print(f"  ⚠️  AKShare下载港股 {code} {k_type} 失败: {e}")
+        _log(f"  ⚠️  AKShare 下载失败: {e}")
     
-    # 所有方法都失败
-    print(f"  ℹ️  港股 {code} {k_type} 无可用历史数据")
     return None, "None"
 
-def _download_a_stock_data_with_timeframe(code, begin_time, end_time, k_type):
+def _download_a_stock_data_with_timeframe(code, begin_time, end_time, k_type, log_callback=None):
     """下载A股数据（支持多时间级别） - 优先使用Futu，失败则使用BaoStock，再失败则使用AKShare"""
     from DataAPI.FutuAPI import CFutuAPI
     from DataAPI.BaoStockAPI import CBaoStock
     from DataAPI.AkshareAPI import CAkshare
     from Common.CEnum import AUTYPE
     
+    def _log(msg):
+        if log_callback:
+            log_callback(msg)
+        print(msg)
+
     # 首先尝试Futu
     try:
         # Futu API可以直接使用 SH.600000 或 SZ.000001 格式
+        _log(f"  🔍  正在尝试 Futu 下载 {code} {k_type}...")
         api = CFutuAPI(code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
-        return _extract_kl_data(api, code), "Futu"
+        kl_data = _extract_kl_data(api, code)
+        if kl_data:
+            return kl_data, "Futu"
     except Exception as e:
-        print(f"  ⚠️  Futu下载A股 {code} {k_type} 失败: {e}")
+        _log(f"  ⚠️  Futu 下载失败: {e}")
     
     # Futu失败，尝试BaoStock
     try:
@@ -573,33 +627,45 @@ def _download_a_stock_data_with_timeframe(code, begin_time, end_time, k_type):
         else:
             raise ValueError(f"不支持的A股市场: {market}")
         
+        _log(f"  🔍  正在尝试 BaoStock 下载 {code} {k_type}...")
         # 确保BaoStock已初始化
         CBaoStock.do_init()
         api = CBaoStock(bao_code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
-        return _extract_kl_data(api, code), "BaoStock"
+        kl_data = _extract_kl_data(api, code)
+        if kl_data:
+            return kl_data, "BaoStock"
     except Exception as e:
-        print(f"  ⚠️  BaoStock下载A股 {code} {k_type} 失败: {e}")
+        _log(f"  ⚠️  BaoStock 下载失败: {e}")
     
     # BaoStock失败，尝试AKShare
     try:
+        _log(f"  🔍  正在尝试 AKShare 下载 {code} {k_type}...")
         akshare_code = convert_stock_code_for_akshare(code)
         api = CAkshare(akshare_code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
-        return _extract_kl_data(api, code), "AKShare"
+        kl_data = _extract_kl_data(api, code)
+        if kl_data:
+            return kl_data, "AKShare"
     except Exception as e:
-        print(f"  ⚠️  AKShare下载A股 {code} {k_type} 失败: {e}")
-        return None, "None"
+        _log(f"  ⚠️  AKShare 下载失败: {e}")
+    
+    return None, "None"
 
-def _download_with_akshare_with_timeframe(code, begin_time, end_time, k_type):
+def _download_with_akshare_with_timeframe(code, begin_time, end_time, k_type, log_callback=None):
     """使用AKShare下载数据（支持多时间级别）（通用方法）"""
     from DataAPI.AkshareAPI import CAkshare
     from Common.CEnum import AUTYPE
     
     try:
+        if log_callback:
+            log_callback(f"  🔍  正在尝试 AKShare 下载 {code} {k_type}...")
         akshare_code = convert_stock_code_for_akshare(code)
         api = CAkshare(akshare_code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
         return _extract_kl_data(api, code), "AKShare"
     except Exception as e:
-        print(f"  ⚠️  AKShare下载 {code} {k_type} 失败: {e}")
+        msg = f"  ⚠️  AKShare下载 {code} {k_type} 失败: {e}"
+        if log_callback:
+            log_callback(msg)
+        print(msg)
         return None, "None"
 
 def _download_hk_stock_data(code, begin_time, end_time):

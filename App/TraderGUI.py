@@ -79,6 +79,7 @@ from Common.StockUtils import get_futu_stock_name, get_futu_watchlist_stocks, ge
 from App.ScannerThreads import ScanThread, SingleAnalysisThread, UpdateDatabaseThread, RepairSingleStockThread
 try:
     from App.HKTradingController import HKTradingController
+    from App.MonitorController import MarketMonitorController
 except ImportError:
     HKTradingController = None
 
@@ -117,6 +118,7 @@ class TraderGUI(QMainWindow):
         # --- Managers ---
         self.futu_monitor = None
         self.hk_trading_controller = None
+        self.market_monitor_controller = None
         # 确保按钮在界面显示后是可见的
         self.ensure_buttons_visible()
         
@@ -263,12 +265,6 @@ class TraderGUI(QMainWindow):
         self.stock_code_input.setPlaceholderText("代码 (如 600000)")
         self.stock_code_input.setMaximumWidth(120)
         manual_layout.addWidget(self.stock_code_input)
-        
-        self.data_source_combo = QComboBox()
-        self.data_source_combo.addItems(["Futu优先", "SQLite数据库"])
-        manual_layout.addWidget(QLabel("数据源:"))
-        manual_layout.addWidget(self.data_source_combo)
-        
         self.load_chart_btn = QPushButton("加载全级别图表")
         self.load_chart_btn.clicked.connect(self.on_load_multi_chart_clicked)
         manual_layout.addWidget(self.load_chart_btn)
@@ -337,69 +333,135 @@ class TraderGUI(QMainWindow):
         self.bi_strict_cb = QCheckBox("笔严格模式")
         self.bi_strict_cb.setChecked(True)
         base_settings_layout.addWidget(self.bi_strict_cb)
-        self.data_source_label = QLabel("数据源: SQLite (离线)")
-        base_settings_layout.addWidget(self.data_source_label)
         base_settings_group.setLayout(base_settings_layout)
         layout.addWidget(base_settings_group)
 
-        # --- 自动化模块 ---
-        auto_group = QGroupBox("自动化模块")
-        auto_layout = QVBoxLayout()
+        # --- 港股自动交易模块 ---
+        hk_group = QGroupBox("🤖 港股自动交易")
+        hk_layout = QVBoxLayout()
         
-        # 富途监控控制
-        futu_layout = QHBoxLayout()
+        # 港股控制按钮行
+        hk_btns_layout = QHBoxLayout()
         self.futu_monitor_status = QLabel("Futu监控: [未启动]")
         self.futu_monitor_btn = QPushButton("启动监控")
         self.futu_monitor_btn.clicked.connect(self.toggle_futu_monitor)
-        futu_layout.addWidget(self.futu_monitor_status)
-        futu_layout.addWidget(self.futu_monitor_btn)
-        futu_layout.addStretch()
-        auto_layout.addLayout(futu_layout)
+        hk_btns_layout.addWidget(self.futu_monitor_status)
+        hk_btns_layout.addWidget(self.futu_monitor_btn)
         
-        # 港股自动交易控制
-        hk_auto_layout = QHBoxLayout()
-        self.hk_auto_status = QLabel("港股自动交易: [未启动]")
+        self.hk_auto_status = QLabel("自动交易: [未启动]")
         self.hk_auto_btn = QPushButton("启动自动交易")
         self.hk_auto_btn.clicked.connect(self.toggle_hk_trading)
-        hk_auto_layout.addWidget(self.hk_auto_status)
-        hk_auto_layout.addWidget(self.hk_auto_btn)
+        hk_btns_layout.addWidget(self.hk_auto_status)
+        hk_btns_layout.addWidget(self.hk_auto_btn)
         
-        # 手动强制扫描按钮
+        hk_btns_layout.addStretch()
+        hk_layout.addLayout(hk_btns_layout)
+        
+        # 港股功能按钮行
+        hk_func_layout = QHBoxLayout()
         self.hk_scan_btn = QPushButton("立刻执行扫描")
         self.hk_scan_btn.clicked.connect(self.on_force_scan_clicked)
-        hk_auto_layout.addWidget(self.hk_scan_btn)
+        hk_func_layout.addWidget(self.hk_scan_btn)
         
-        # 资金查询按钮
         self.query_funds_btn = QPushButton("刷新账户资金")
         self.query_funds_btn.clicked.connect(self.on_query_funds_clicked)
-        hk_auto_layout.addWidget(self.query_funds_btn)
+        hk_func_layout.addWidget(self.query_funds_btn)
         
-        # 一键清仓按钮
         self.liquidate_btn = QPushButton("一键清仓")
         self.liquidate_btn.clicked.connect(self.on_liquidate_clicked)
         self.liquidate_btn.setStyleSheet("background-color: #ff4d4f; color: white; font-weight: bold;")
-        hk_auto_layout.addWidget(self.liquidate_btn)
+        hk_func_layout.addWidget(self.liquidate_btn)
+        hk_func_layout.addStretch()
+        hk_layout.addLayout(hk_func_layout)
         
-        hk_auto_layout.addStretch()
-        auto_layout.addLayout(hk_auto_layout)
-        
-        # 自动化专属日志及信息显示
+        # 港股日志
         self.auto_log_text = QTextEdit()
         self.auto_log_text.setReadOnly(True)
-        self.auto_log_text.setPlaceholderText("自动化模块运行日志及账户信息将显示在此处...")
-        self.auto_log_text.setMinimumHeight(200)
-        auto_layout.addWidget(self.auto_log_text)
+        self.auto_log_text.setPlaceholderText("港股自动化日志将显示在此处...")
+        self.auto_log_text.setMinimumHeight(150)
+        hk_layout.addWidget(self.auto_log_text)
         
-        auto_group.setLayout(auto_layout)
-        layout.addWidget(auto_group)
+        hk_group.setLayout(hk_layout)
+        layout.addWidget(hk_group)
+
+        # --- 多市场监控模块 (A/US) ---
+        monitor_group = QGroupBox("🔍 多市场监控 (A股/美股)")
+        monitor_main_layout = QVBoxLayout()
+        
+        # 监控控制行
+        monitor_ctrl_layout = QHBoxLayout()
+        self.monitor_status = QLabel("监控状态: [未启动]")
+        self.monitor_btn = QPushButton("开启监控")
+        self.monitor_btn.clicked.connect(self.toggle_market_monitor)
+        monitor_ctrl_layout.addWidget(self.monitor_status)
+        monitor_ctrl_layout.addWidget(self.monitor_btn)
+        
+        self.monitor_watchlist_combo = QComboBox()
+        self.monitor_watchlist_combo.addItem("加载中...")
+        monitor_ctrl_layout.addWidget(QLabel("监控分组:"))
+        monitor_ctrl_layout.addWidget(self.monitor_watchlist_combo)
+        monitor_ctrl_layout.addStretch()
+        monitor_main_layout.addLayout(monitor_ctrl_layout)
+        
+        # 监控专属日志
+        self.monitor_log_text = QTextEdit()
+        self.monitor_log_text.setReadOnly(True)
+        self.monitor_log_text.setPlaceholderText("A股/美股监控日志及信号将显示在此处...")
+        self.monitor_log_text.setMinimumHeight(180)
+        monitor_main_layout.addWidget(self.monitor_log_text)
+        
+        monitor_group.setLayout(monitor_main_layout)
+        layout.addWidget(monitor_group)
 
         layout.addStretch()
         
     def append_auto_log(self, text):
-        """添加日志到自动化专属日志区域"""
+        """添加日志到港股自动化专属日志区域"""
         import datetime
         now = datetime.datetime.now().strftime("%H:%M:%S")
         self.auto_log_text.append(f"[{now}] {text}")
+
+    def append_monitor_log(self, text):
+        """添加日志到 A/US 监控专属日志区域"""
+        import datetime
+        now = datetime.datetime.now().strftime("%H:%M:%S")
+        self.monitor_log_text.append(f"[{now}] {text}")
+
+    def toggle_market_monitor(self):
+        """切换多市场监控状态"""
+        if self.market_monitor_controller is None:
+            try:
+                group_name = self.monitor_watchlist_combo.currentText()
+                if group_name == "加载中..." or group_name == "":
+                    self.append_monitor_log("❌ 启动监控失败: 未选择自选股分组")
+                    return
+                
+                if MarketMonitorController is None:
+                    self.append_monitor_log("❌ 无法导入 MarketMonitorController")
+                    return
+
+                self.market_monitor_controller = MarketMonitorController(watchlist_group=group_name)
+                self.market_monitor_controller.log_message.connect(self.append_monitor_log)
+                
+                import threading
+                def run_monitor():
+                    self.market_monitor_controller.run_monitor_loop()
+                    
+                self.monitor_thread = threading.Thread(target=run_monitor, daemon=True)
+                self.monitor_thread.start()
+                
+                self.monitor_status.setText(f"监控: [运行中 - {group_name}]")
+                self.monitor_btn.setText("停止监控")
+                self.append_monitor_log(f"✅ 多市场监控已启动，监听分组: {group_name} (避让逻辑已激活)。")
+            except Exception as e:
+                self.append_monitor_log(f"❌ 启动监控失败: {e}")
+                self.market_monitor_controller = None
+        else:
+            self.market_monitor_controller.stop()
+            self.market_monitor_controller = None
+            self.monitor_status.setText("监控状态: [已停止]")
+            self.monitor_btn.setText("开启监控")
+            self.append_monitor_log("ℹ️ 多市场监控已停止")
 
     def toggle_futu_monitor(self):
         """切换富途实时监控状态"""
@@ -987,11 +1049,8 @@ class TraderGUI(QMainWindow):
             except ValueError:
                 days = 30
             
-            selected_data_source = self.data_source_combo.currentText()
-            if selected_data_source == "Futu优先":
-                data_sources = [DATA_SRC.FUTU, "custom:SQLiteAPI.SQLiteAPI"]
-            else:
-                data_sources = ["custom:SQLiteAPI.SQLiteAPI", DATA_SRC.FUTU]
+            # 默认使用 Futu 优先
+            data_sources = [DATA_SRC.FUTU, "custom:SQLiteAPI.SQLiteAPI"]
             
             kl_types = [KL_TYPE.K_DAY, KL_TYPE.K_30M, KL_TYPE.K_5M, KL_TYPE.K_1M]
             
@@ -1192,6 +1251,10 @@ class TraderGUI(QMainWindow):
                 # 更新下拉菜单选项
                 self.watchlist_combo.clear()
                 self.watchlist_combo.addItems(group_names)
+                
+                if hasattr(self, 'monitor_watchlist_combo'):
+                    self.monitor_watchlist_combo.clear()
+                    self.monitor_watchlist_combo.addItems(group_names)
                 
                 # 安全地写入日志
                 if hasattr(self, 'log_text'):

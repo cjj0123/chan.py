@@ -101,6 +101,8 @@ CHART_PARA = {
 # API配置
 API_CONFIG = {
     'GOOGLE_API_KEY': os.getenv("GOOGLE_API_KEY"),
+    'POLYGON_API_KEY': os.getenv("POLYGON_API_KEY", ""),
+    'FINNHUB_API_KEY': os.getenv("FINNHUB_API_KEY", ""),
 }
 
 # 数据源配置

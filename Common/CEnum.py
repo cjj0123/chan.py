@@ -8,6 +8,9 @@ class DATA_SRC(Enum):
     CSV = auto()
     AKSHARE = auto()
     FUTU = auto()
+    POLYGON = auto()
+    YFINANCE = auto()
+    FINNHUB = auto()
 
 
 class KL_TYPE(Enum):

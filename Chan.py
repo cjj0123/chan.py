@@ -187,6 +187,15 @@ class CChan:
         elif self.data_src == DATA_SRC.FUTU:
             # 直接使用FutuAPI，不使用缓存版本
             return CFutuAPI
+        elif self.data_src == DATA_SRC.POLYGON:
+            from DataAPI.PolygonAPI import CPolygonAPI
+            return CPolygonAPI
+        elif self.data_src == DATA_SRC.YFINANCE:
+            from DataAPI.YFinanceAPI import CYFinanceAPI
+            return CYFinanceAPI
+        elif self.data_src == DATA_SRC.FINNHUB:
+            from DataAPI.FinnhubAPI import CFinnhubAPI
+            return CFinnhubAPI
         if self.data_src in _dict:
             return _dict[self.data_src]
         assert isinstance(self.data_src, str)

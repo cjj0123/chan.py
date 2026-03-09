@@ -118,12 +118,28 @@ class DataManager:
                      begin_date: str, 
                      end_date: str,
                      autype: AUTYPE) -> List[CKLine_Unit]:
-        """从Futu API获取数据"""
+        """从外部 API 获取数据 (支持多市场)"""
         try:
-            futu_api = CFutuAPI(code, k_type, begin_date, end_date, autype)
-            return list(futu_api.get_kl_data())
+            # 默认使用富途
+            api_cls = CFutuAPI
+            
+            # 美股特殊处理
+            if code.upper().startswith("US."):
+                from config import API_CONFIG
+                if API_CONFIG.get('POLYGON_API_KEY'):
+                    from DataAPI.PolygonAPI import CPolygonAPI
+                    api_cls = CPolygonAPI
+                elif API_CONFIG.get('FINNHUB_API_KEY'):
+                    from DataAPI.FinnhubAPI import CFinnhubAPI
+                    api_cls = CFinnhubAPI
+                else:
+                    from DataAPI.YFinanceAPI import CYFinanceAPI
+                    api_cls = CYFinanceAPI
+            
+            api_instance = api_cls(code, k_type, begin_date, end_date, autype)
+            return list(api_instance.get_kl_data())
         except Exception as e:
-            raise Exception(f"Futu API获取失败: {e}")
+            raise Exception(f"API获取失败 ({code}): {e}")
     
     def _needs_realtime_update(self, db_data: List[CKLine_Unit], end_date: str, k_type: KL_TYPE) -> bool:
         """判断是否需要从实时API更新数据"""
