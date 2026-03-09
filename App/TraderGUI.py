@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
     QSplitter, QFrame, QMessageBox, QProgressBar, QDateTimeEdit,
     QGridLayout, QHeaderView, QProgressDialog, QSizePolicy
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, pyqtSlot
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
@@ -423,6 +423,16 @@ class TraderGUI(QMainWindow):
             self.futu_monitor_btn.setText("启动监控")
             self.append_auto_log("ℹ️ 富途监控已停止")
 
+    @pyqtSlot(bool)
+    def reset_liquidate_btn(self, success: bool):
+        """恢复一键清仓按钮状态，由工作线程通过 invokeMethod 跨线程调用"""
+        self.liquidate_btn.setEnabled(True)
+        self.liquidate_btn.setText("一键清仓")
+        if success:
+            QMessageBox.information(self, "清仓结果", "✅ 一键清仓执行完成。")
+        else:
+            QMessageBox.warning(self, "清仓结果", "⚠️ 一键清仓执行部分失败或出现异常，请检查日志。")
+
     def toggle_hk_trading(self):
         """切换港股自动交易状态"""
         if self.hk_trading_controller is None:
@@ -526,10 +536,15 @@ class TraderGUI(QMainWindow):
                 
                 # 定义清仓后的收尾工作
                 def run_liquidate():
-                    success = controller.close_all_positions()
+                    try:
+                        success = controller.close_all_positions()
+                    except Exception as e:
+                        success = False
+                        self.append_auto_log(f"❌ 一键清仓遇到异常: {e}")
                     
-                    # 使用 QTimer.singleShot 回到主线程操作 UI
-                    from PyQt6.QtCore import QTimer
+                    # 回到主线程操作 UI
+                    from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
+                    
                     def on_finished():
                         self.liquidate_btn.setEnabled(True)
                         self.liquidate_btn.setText("一键清仓")
@@ -538,7 +553,7 @@ class TraderGUI(QMainWindow):
                         else:
                             QMessageBox.warning(self, "清仓结果", "⚠️ 一键清仓执行部分失败或出现异常，请检查日志。")
                     
-                    QTimer.singleShot(0, on_finished)
+                    QMetaObject.invokeMethod(self, "reset_liquidate_btn", Qt.ConnectionType.QueuedConnection, Q_ARG(bool, success))
                 
                 # 开启后台线程清仓
                 import threading
