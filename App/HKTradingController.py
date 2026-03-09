@@ -126,7 +126,8 @@ class HKTradingController(QObject):
         # 用于停止和暂停扫描的标志
         self._is_running = False
         self._is_paused = False
-
+        self._force_scan = False  # 标志是否需要强制执行下一次扫描
+        
         # 视觉评分缓存 (code_time_type -> score_dict)
         self.visual_score_cache = {}
 
