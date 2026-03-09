@@ -359,6 +359,11 @@ class TraderGUI(QMainWindow):
         hk_auto_layout.addWidget(self.hk_auto_status)
         hk_auto_layout.addWidget(self.hk_auto_btn)
         
+        # 手动强制扫描按钮
+        self.hk_scan_btn = QPushButton("立刻执行扫描")
+        self.hk_scan_btn.clicked.connect(self.on_force_scan_clicked)
+        hk_auto_layout.addWidget(self.hk_scan_btn)
+        
         # 资金查询按钮
         self.query_funds_btn = QPushButton("刷新账户资金")
         self.query_funds_btn.clicked.connect(self.on_query_funds_clicked)
@@ -464,6 +469,15 @@ class TraderGUI(QMainWindow):
             self.hk_auto_status.setText("港股自动交易: [已停止]")
             self.hk_auto_btn.setText("启动自动交易")
             self.append_auto_log("ℹ️ 港股自动交易已停止")
+            
+    def on_force_scan_clicked(self):
+        """手动触发一次缠论策略扫描"""
+        if self.hk_trading_controller is None or getattr(self.hk_trading_controller, '_is_running', False) == False:
+            self.append_auto_log("⚠️ 请先启动港股自动交易，然后再执行扫描。")
+            return
+        
+        self.hk_trading_controller.force_scan()
+        self.append_auto_log("⚡ 已下发强制扫描指令，策略将在接下来的几秒内心跳中触发执行，请留意日志刷新。")
             
     def on_query_funds_clicked(self):
         """刷新并打印账户持仓及资金到自动化日志"""
