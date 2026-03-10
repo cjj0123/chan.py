@@ -39,6 +39,9 @@ from futu import OpenQuoteContext, RET_OK
 # 导入 DiscordBot (复用现有逻辑)
 from App.DiscordBot import DiscordBot
 
+# 导入 视觉评分
+from visual_judge import VisualJudge
+
 logger = logging.getLogger(__name__)
 
 class MarketMonitorController(QObject):
@@ -61,6 +64,12 @@ class MarketMonitorController(QObject):
         # 信号历史记录，用于去重
         self.notified_signals_file = "monitor_notified_signals.json"
         self.notified_signals = self._load_notified_signals()
+        
+        # 视觉评分器
+        self.visual_judge = VisualJudge()
+        
+        # 视觉评分缓存 (code_time_type -> score_dict)
+        self.visual_score_cache = {}
 
     def _load_notified_signals(self) -> Dict:
         """加载已通知信号记录"""
@@ -269,30 +278,64 @@ class MarketMonitorController(QObject):
     def _notify_signal(self, code: str, bsp, chan, name: str = ""):
         """推送信号日志和 Discord 图表"""
         sig_type = "买点" if bsp.is_buy else "卖点"
-        msg = f"🌟 [A/US 监控信号] {code} ({name}) 发现 {sig_type} {bsp.type2str()} | 时间: {bsp.klu.time} | 价格: {bsp.klu.close:.2f}"
+        bsp_type_str = bsp.type2str()
+        msg_base = f"{code} ({name}) 发现 {sig_type} {bsp_type_str} | 时间: {bsp.klu.time} | 价格: {bsp.klu.close:.2f}"
         
-        self.log_message.emit(msg)
+        self.log_message.emit(f"🌟 [A/US 监控信号] {msg_base}")
         
         # 生成图表
         chart_path = os.path.abspath(os.path.join(self.charts_dir, f"{code.replace('.', '_')}_{datetime.now().strftime('%H%M%S')}.png"))
         try:
-            # 使用完整的图表配置和参数，确保 K线、笔、段、中枢和 MACD 全部显示
+            # 使用完整的图表配置和参数
             plot_driver = CPlotDriver(chan, plot_config=CHART_CONFIG, plot_para=CHART_PARA)
-            # 使用 tight 布局防止标签被裁剪，并设置高分辨率
             plt.savefig(chart_path, bbox_inches='tight', dpi=120, facecolor='white')
             plt.close('all')
             
-            # Discord 推送
+            # --- 视觉评分 ---
+            score = 0
+            analysis = ""
+            
+            # 构造缓存键: 股票_信号时间_买卖类型
+            cache_key = f"{code}_{str(bsp.klu.time)}_{bsp_type_str}"
+            
+            if cache_key in self.visual_score_cache:
+                cached = self.visual_score_cache[cache_key]
+                score = cached.get('score', 0)
+                analysis = cached.get('analysis', "已从缓存读取")
+                self.log_message.emit(f"💾 [监控] {code} 命中视觉评分缓存: {score}分")
+            else:
+                self.log_message.emit(f"🧠 [监控] 正在对 {code} 进行视觉评分...")
+                visual_result = self.visual_judge.judge(chart_path)
+                score = visual_result.get('score', 0)
+                analysis = visual_result.get('analysis', "")
+                # 存入缓存
+                self.visual_score_cache[cache_key] = {"score": score, "analysis": analysis}
+                self.log_message.emit(f"✅ [监控] {code} 评分完成: {score}分")
+
+            # Discord 推送 (仅限 60 分及以上)
             if self.discord_bot:
                 import asyncio
-                # 注意：DiscordBot.send_notification 是协程，需要通过 run_coroutine_threadsafe 在 bot 线程执行
                 if hasattr(self.discord_bot, 'loop') and self.discord_bot.loop:
-                    coro = self.discord_bot.send_notification(f"📈 **多市场预警**\n{msg}", chart_path)
+                    if score >= 60:
+                        full_msg = (
+                            f"📈 **多市场大模型预警 (A/US)**\n"
+                            f"股票: {code} ({name})\n"
+                            f"信号: {sig_type} {bsp_type_str}\n"
+                            f"价格: {bsp.klu.close:.2f}\n"
+                            f"评分: **{score}分**\n"
+                            f"分析: {analysis[:200]}..." # 截断分析内容
+                        )
+                        coro = self.discord_bot.send_notification(full_msg, chart_path)
+                    else:
+                        # 分数太低仅在控制台打印
+                        self.log_message.emit(f"⏭️ [监控] {code} 评分({score})低于推送阈值(60)，仅本地记录")
+                        return
+                    
                     asyncio.run_coroutine_threadsafe(coro, self.discord_bot.loop)
                 else:
                     self.log_message.emit("⚠️ [监控] Discord 机器人循环未绪，无法推送")
         except Exception as e:
-            self.log_message.emit(f"⚠️ [监控] 信号图表生成或推送失败: {e}")
+            self.log_message.emit(f"⚠️ [监控] 信号图表生成或视觉评分失败: {e}")
 
     def _cleanup_charts(self):
         """清理过期的图表图片"""

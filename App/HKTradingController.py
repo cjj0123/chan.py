@@ -635,13 +635,23 @@ class HKTradingController(QObject):
             # 1. 查询资金信息
             ret_acc, data_acc = self.trd_ctx.accinfo_query(trd_env=self.trd_env)
             if ret_acc == RET_OK and not data_acc.empty:
-                total_assets = data_acc.iloc[0]['total_assets']
-                power = data_acc.iloc[0]['power']
-                unrealized_pl = data_acc.iloc[0].get('unrealized_pl', 0)
+                row = data_acc.iloc[0]
+                # 尝试多个可能的字段名
+                total_assets = row.get('total_assets', row.get('total_asset', 0.0))
+                power = row.get('power', row.get('cash', row.get('avl_withdrawal_cash', 0.0)))
+                unrealized_pl = row.get('unrealized_pl', row.get('unrealized_pnl', 0.0))
+                
+                # 安全转换为 float
+                try: total_assets = float(total_assets)
+                except: total_assets = 0.0
+                try: power = float(power)
+                except: power = 0.0
+                try: unrealized_pl = float(unrealized_pl)
+                except: unrealized_pl = 0.0
             else:
-                total_assets = 0
-                power = 0
-                unrealized_pl = 0
+                total_assets = 0.0
+                power = 0.0
+                unrealized_pl = 0.0
 
             # 2. 查询持仓
             ret_pos, data_pos = self.trd_ctx.position_list_query(trd_env=self.trd_env)
