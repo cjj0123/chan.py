@@ -119,6 +119,7 @@ class TraderGUI(QMainWindow):
         self.futu_monitor = None
         self.hk_trading_controller = None
         self.market_monitor_controller = None
+        self.discord_bot = None
         # 确保按钮在界面显示后是可见的
         self.ensure_buttons_visible()
         
@@ -440,7 +441,11 @@ class TraderGUI(QMainWindow):
                     self.append_monitor_log("❌ 无法导入 MarketMonitorController")
                     return
 
-                self.market_monitor_controller = MarketMonitorController(watchlist_group=group_name)
+                # 共享 Discord Bot
+                from App.DiscordBot import DiscordBot
+                bot = self._get_shared_discord_bot(controller=None) # 监控暂不抢占控制权
+                
+                self.market_monitor_controller = MarketMonitorController(watchlist_group=group_name, discord_bot=bot)
                 self.market_monitor_controller.log_message.connect(self.append_monitor_log)
                 
                 import threading
@@ -457,6 +462,8 @@ class TraderGUI(QMainWindow):
                 self.append_monitor_log(f"❌ 启动监控失败: {e}")
                 self.market_monitor_controller = None
         else:
+            if self.discord_bot and self.discord_bot.controller == self.market_monitor_controller:
+                self.discord_bot.controller = None
             self.market_monitor_controller.stop()
             self.market_monitor_controller = None
             self.monitor_status.setText("监控状态: [已停止]")
@@ -513,12 +520,20 @@ class TraderGUI(QMainWindow):
                 return
             try:
                 group_name = self.watchlist_combo.currentText()
-                self.hk_trading_controller = HKTradingController(hk_watchlist_group=group_name)
+                
+                # 共享 Discord Bot
+                from App.DiscordBot import DiscordBot
+                bot = self._get_shared_discord_bot(controller=None) # 此处将在扫描线程内真正关联 controller
+
+                self.hk_trading_controller = HKTradingController(hk_watchlist_group=group_name, discord_bot=bot)
                 self.hk_trading_controller.log_message.connect(self.append_auto_log)
                 
                 # 在新线程中运行策略
                 import threading
                 def run_trade():
+                    # 关联 controller 到 bot
+                    if self.discord_bot:
+                        self.discord_bot.controller = self.hk_trading_controller
                     self.hk_trading_controller.run_scan_and_trade()
                     
                 self.hk_trade_thread = threading.Thread(target=run_trade, daemon=True)
@@ -526,17 +541,44 @@ class TraderGUI(QMainWindow):
                 
                 self.hk_auto_status.setText("港股自动交易: [运行中]")
                 self.hk_auto_btn.setText("停止自动交易")
-                self.append_auto_log("✅ 港股自动交易已启动。注意：此策略主要进行30M级别的突破和背驰判断，结合风险管理器控制仓位。")
+                self.append_auto_log("✅ 港股自动交易已启动。")
             except Exception as e:
                 self.append_auto_log(f"❌ 启动港股自动交易失败: {e}")
                 self.hk_trading_controller = None
         else:
+            if self.discord_bot and self.discord_bot.controller == self.hk_trading_controller:
+                self.discord_bot.controller = None
             self.hk_trading_controller.stop()
             self.hk_trading_controller = None
             self.hk_auto_status.setText("港股自动交易: [已停止]")
             self.hk_auto_btn.setText("启动自动交易")
             self.append_auto_log("ℹ️ 港股自动交易已停止")
             
+    def _get_shared_discord_bot(self, controller=None):
+        """获取或创建共享的 Discord Bot"""
+        if self.discord_bot is None:
+            from config import TRADING_CONFIG
+            from App.DiscordBot import DiscordBot
+            
+            discord_conf = TRADING_CONFIG.get('discord', {})
+            token = discord_conf.get('token')
+            if token:
+                try:
+                    self.discord_bot = DiscordBot(
+                        token=token,
+                        channel_id=discord_conf.get('channel_id'),
+                        allowed_user_ids=discord_conf.get('allowed_user_ids', []),
+                        controller=controller
+                    )
+                    self.discord_bot.start()
+                    self.append_auto_log("🤖 [共享] Discord 机器人已启动")
+                except Exception as e:
+                    self.append_auto_log(f"⚠️ Discord 机器人启动失败: {e}")
+        elif controller:
+            self.discord_bot.controller = controller
+            
+        return self.discord_bot
+
     def on_force_scan_clicked(self):
         """手动触发一次缠论策略扫描"""
         if self.hk_trading_controller is None or getattr(self.hk_trading_controller, '_is_running', False) == False:

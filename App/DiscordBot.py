@@ -60,10 +60,13 @@ class DiscordBot:
         async def status(ctx):
             if not self._is_allowed(ctx): return
             if self.controller:
-                # 简单状态获取，后续根据 controller 实际方法完善
-                await ctx.send("📊 **当前状态**: 正在运行\n(具体盈亏数据待集成)")
+                if hasattr(self.controller, 'get_status_summary'):
+                    summary = self.controller.get_status_summary()
+                    await ctx.send(summary)
+                else:
+                    await ctx.send("📊 **当前状态**: 正在运行\n(该控制器暂不支持详细状态汇总)")
             else:
-                await ctx.send("❌ 未连接到交易控制器")
+                await ctx.send("❌ 未连接到交易控制器 (当前由监控模块托管)")
 
         @self.bot.command(name='pause')
         async def pause(ctx):

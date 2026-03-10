@@ -129,15 +129,25 @@ class CFutuAPI(CCommonStockApi):
                         DATA_FIELD.FIELD_TURNRATE: float(row.get('turnover_rate', 0.0))
                     }
                     yield CKLine_Unit(item_dict)
-            else:
-                error_msg = data if ret != RET_OK else "Empty dataset"
+                if ret != RET_OK:
+                    error_msg = f"API Error (ret={ret}): {data}"
+                elif not all_data:
+                    error_msg = "Empty dataset (possibly no trades in the requested date range or frequency limit exceeded)"
+                else:
+                    error_msg = "Unknown error"
+                
                 raise ValueError(f"FutuAPI returned no data for {stock_code}. Reason: {error_msg}")
                 
         except Exception as e:
-            print(f"🔥 [FutuAPI] Online Error: {e}")
+            if "Frequency limit" in str(e) or (ret != RET_OK and "limit" in str(data).lower()):
+                 print(f"🚨 [FutuAPI] {stock_code} 疑似触发频率限制，建议在大循环中增加延时")
+            print(f"🔥 [FutuAPI] Online Error for {stock_code}: {e}")
             raise e
         finally:
-            quote_ctx.close()
+            try:
+                quote_ctx.close()
+            except:
+                pass
 
     def SetBasciInfo(self):
         self.name = self.code

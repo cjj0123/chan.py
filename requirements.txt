@@ -8,3 +8,6 @@ pandas_market_calendars
 aiohttp
 google-generativeai
 dashscope
+discord.py
+PyQt6
+pycryptodome

@@ -66,6 +66,16 @@ class ScanThread(QThread):
 
 
 
+        # 尝试创建一个临时的 Futu 连接以复用，加速名称获取
+        temp_quote_ctx = None
+        try:
+            from futu import OpenQuoteContext
+            import os
+            FUTU_OPEND_ADDRESS = os.getenv('FUTU_OPEND_ADDRESS', '127.0.0.1')
+            temp_quote_ctx = OpenQuoteContext(host=FUTU_OPEND_ADDRESS, port=11111)
+        except:
+            pass
+
         for idx, row in self.stock_list.iterrows():
             if not self.is_running:
                 break
@@ -73,8 +83,8 @@ class ScanThread(QThread):
             code = row['代码']
             name = row['名称']
             
-            # 从Futu获取准确的股票名称
-            accurate_name = get_futu_stock_name(code)
+            # 从Futu获取准确的股票名称 (传入 temp_quote_ctx 以复用连接)
+            accurate_name = get_futu_stock_name(code, quote_ctx=temp_quote_ctx)
             if accurate_name != code:
                 name = accurate_name
             

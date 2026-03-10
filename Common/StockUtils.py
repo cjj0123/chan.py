@@ -8,41 +8,46 @@ try:
 except ImportError:
     RET_OK = 0
 
-def get_futu_stock_name(code):
+def get_futu_stock_name(code, quote_ctx=None):
     """
     从富途API获取单个股票的准确名称
     
     Args:
         code: str, 股票代码 (如 SH.600000)
+        quote_ctx: OpenQuoteContext, 可选的现有连接对象，如不提供则创建新连接
     
     Returns:
         str: 股票名称，获取失败时返回原代码
     """
     try:
-        from futu import OpenQuoteContext, RET_OK, Market
+        from futu import OpenQuoteContext, RET_OK, Market, SecurityType
         import os
         
-        # 从环境变量或配置文件获取富途API地址
-        FUTU_OPEND_ADDRESS = os.getenv('FUTU_OPEND_ADDRESS', '127.0.0.1')
+        # 是否是外部传入的连接
+        is_external_ctx = quote_ctx is not None
         
-        # 创建富途API连接
-        quote_ctx = OpenQuoteContext(host=FUTU_OPEND_ADDRESS, port=11111)
+        if not is_external_ctx:
+            # 从环境变量或配置文件获取富途API地址
+            FUTU_OPEND_ADDRESS = os.getenv('FUTU_OPEND_ADDRESS', '127.0.0.1')
+            # 创建富途API连接
+            quote_ctx = OpenQuoteContext(host=FUTU_OPEND_ADDRESS, port=11111)
         
-        # 获取股票基本信息
-        ret, data = quote_ctx.get_stock_basicinfo(Market.HK, [code])
-        if ret != RET_OK:
+        # 获取股票基本信息 (修正参数传递：market, stock_type, code_list)
+        ret, data = quote_ctx.get_stock_basicinfo(Market.HK, SecurityType.STOCK, [code])
+        if ret != RET_OK or data.empty:
             # 尝试获取A股信息
             market = Market.SH if code.startswith('SH.') else Market.SZ if code.startswith('SZ.') else Market.HK
-            ret, data = quote_ctx.get_stock_basicinfo(market, [code])
+            ret, data = quote_ctx.get_stock_basicinfo(market, SecurityType.STOCK, [code])
         
-        quote_ctx.close()
+        if not is_external_ctx:
+            quote_ctx.close()
         
         if ret == RET_OK and not data.empty:
             return data.iloc[0]['stock_name']
         else:
             return code
     except Exception as e:
-        print(f"从富途获取股票名称失败 {code}: {e}")
+        # print(f"从富途获取股票名称失败 {code}: {e}")
         return code
 
 def get_futu_watchlist_stocks():

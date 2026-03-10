@@ -77,6 +77,7 @@ class HKTradingController(QObject):
                  min_visual_score: int = None,
                  max_position_ratio: float = None,
                  dry_run: bool = None,
+                 discord_bot: DiscordBot = None,
                  parent=None):
         """
         初始化港股交易控制器。
@@ -98,7 +99,7 @@ class HKTradingController(QObject):
         self.trd_env = TrdEnv.SIMULATE if self.dry_run else TrdEnv.REAL
 
         # 初始化 Discord Bot (将在启动扫描时真正启动)
-        self.discord_bot = None
+        self.discord_bot = discord_bot
 
         # 缠论配置
         self.chan_config = CChanConfig(CHAN_CONFIG)
@@ -195,26 +196,26 @@ class HKTradingController(QObject):
         self._force_scan = True
         self.log_message.emit("⚡ 收到强制扫描指令，将在下一次心跳时触发完整扫描")
 
-    def get_watchlist_codes(self) -> List[str]:
-        """
-        获取富途自选股列表中的港股代码。
-
-        Returns:
-            List[str]: 港股代码列表
-        """
+    def get_watchlist_data(self) -> Dict[str, str]:
+        """获取所选自选股分组的代码和名称清单"""
         try:
-            ret, data = self.quote_ctx.get_user_security(group_name=self.hk_watchlist_group)
+            # 如果是 "全部"，则获取所有自选股
+            group = self.hk_watchlist_group if self.hk_watchlist_group not in ["全部", "All", ""] else ""
+            ret, data = self.quote_ctx.get_user_security(group_name=group)
             if ret == RET_OK and not data.empty:
                 # 过滤出以 'HK.' 开头的代码
-                hk_codes = data[data['code'].str.startswith('HK.')]['code'].tolist()
-                self.log_message.emit(f"成功获取 {len(hk_codes)} 只港股自选股")
-                return hk_codes
+                hk_data = data[data['code'].str.startswith('HK.')]
+                # 返回 code -> name 的映射
+                name_col = 'name' if 'name' in hk_data.columns else 'stock_name'
+                watchlist = dict(zip(hk_data['code'].tolist(), hk_data[name_col].tolist()))
+                self.log_message.emit(f"成功获取 {len(watchlist)} 只港股自选股")
+                return watchlist
             else:
                 self.log_message.emit(f"获取自选股列表失败: {data}")
-                return []
+                return {}
         except Exception as e:
             self.log_message.emit(f"获取自选股列表异常: {e}")
-            return []
+            return {}
 
     def get_stock_info(self, code: str) -> Optional[Dict]:
         """
@@ -292,7 +293,8 @@ class HKTradingController(QObject):
                 )
             except Exception as e:
                 import traceback
-                self.log_message.emit(f"获取K线数据异常 {code}: {e}\n{traceback.format_exc()}")
+                self.log_message.emit(f"⚠️ 获取K线数据异常 {code}: {e}")
+                # logger.error(f"Futu Error for {code}: {traceback.format_exc()}")
                 return None
             
             # 检查30M数据是否足够
@@ -625,6 +627,50 @@ class HKTradingController(QObject):
             
         return False
 
+    def get_status_summary(self) -> str:
+        """
+        获取交易控制器的实时状态摘要，供 Discord 或 GUI 显示。
+        """
+        try:
+            # 1. 查询资金信息
+            ret_acc, data_acc = self.trd_ctx.accinfo_query(trd_env=self.trd_env)
+            if ret_acc == RET_OK and not data_acc.empty:
+                total_assets = data_acc.iloc[0]['total_assets']
+                power = data_acc.iloc[0]['power']
+                unrealized_pl = data_acc.iloc[0].get('unrealized_pl', 0)
+            else:
+                total_assets = 0
+                power = 0
+                unrealized_pl = 0
+
+            # 2. 查询持仓
+            ret_pos, data_pos = self.trd_ctx.position_list_query(trd_env=self.trd_env)
+            pos_count = len(data_pos) if ret_pos == RET_OK and not data_pos.empty else 0
+            
+            # 3. 运行状态
+            run_status = "🟢 正在运行" if self._is_running else "🛑 已停止"
+            if self._is_paused:
+                run_status = "⏸️ 已暂停"
+            
+            mode = "🧪 仿真 (Simulate)" if self.dry_run else "💰 生产 (Real)"
+            
+            summary = (
+                f"📊 **自动化交易状态摘要**\n"
+                f"----------------------------------\n"
+                f"▸ 运行状态: {run_status}\n"
+                f"▸ 交易模式: {mode}\n"
+                f"▸ 总 资 产: `{total_assets:,.2f} HKD`\n"
+                f"▸ 可用资金: `{power:,.2f} HKD`\n"
+                f"▸ 未实现盈亏: `{unrealized_pl:,.2f} HKD`\n"
+                f"▸ 当前持仓: `{pos_count} 只股票`\n"
+                f"▸ 监控分组: `{self.hk_watchlist_group}`\n"
+                f"▸ 时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            return summary
+        except Exception as e:
+            logger.error(f"Error getting status summary: {e}")
+            return f"❌ 获取状态摘要失败: {str(e)}"
+
     def toggle_pause(self, paused: bool):
         """切换暂停状态"""
         self._is_paused = paused
@@ -736,10 +782,12 @@ class HKTradingController(QObject):
                 
                 # 1. 快速风险监测 (每轮必跑)
                 self.log_message.emit(f"💓 [快速监测] 检查持仓风险与最新报价... ({now.strftime('%H:%M:%S')})")
-                watchlist_codes = self.get_watchlist_codes()
-                if not watchlist_codes:
+                watchlist = self.get_watchlist_data()
+                if not watchlist:
                     time.sleep(10)
                     continue
+                
+                watchlist_codes = list(watchlist.keys())
 
                 # 批量更新价格并检查止损
                 self._check_trailing_stops()
@@ -747,6 +795,7 @@ class HKTradingController(QObject):
                 # 2. 慢速策略扫描触发逻辑
                 # 规则：如果当前 Bar 时间与上次不同，且已经过了 Bar 开始后 2 分钟（等待数据稳定）
                 should_scan_strategy = False
+                is_force_scan = False
                 
                 if self._force_scan:
                     should_scan_strategy = True
@@ -764,7 +813,7 @@ class HKTradingController(QObject):
                         self.log_message.emit(f"🔍 [策略扫描] 捕获到新的 30M 周期 ({current_bar_time.strftime('%H:%M')})，启动完整缠论分析...")
                     
                     # 执行原有的完整扫描逻辑
-                    self._perform_full_strategy_scan(watchlist_codes, is_force_scan=is_force_scan)
+                    self._perform_full_strategy_scan(watchlist, is_force_scan=is_force_scan)
                     last_strategy_scan_time = current_bar_time
                     self.log_message.emit("✅ [策略扫描] 本轮分析完成。")
                 
@@ -783,17 +832,20 @@ class HKTradingController(QObject):
 
         self.log_message.emit("🔚 港股自动化监控进程已安全退出。")
 
-    def _perform_full_strategy_scan(self, watchlist_codes: List[str], is_force_scan: bool = False):
+    def _perform_full_strategy_scan(self, watchlist: Dict[str, str], is_force_scan: bool = False):
         """原有的完整缠论分析和交易决策逻辑"""
         try:
             start_time = time.time()
+            watchlist_codes = list(watchlist.keys())
             total_stocks = len(watchlist_codes)
             
             # 1. 收集候选信号
             candidate_signals = []
             for i, code in enumerate(watchlist_codes, 1):
                 if not self._is_running: break
-                self.scan_progress.emit(i, total_stocks, f"策略分析 {code}")
+                name = watchlist.get(code, "")
+                self.scan_progress.emit(i, total_stocks, f"策略分析 {code} {name}")
+                self.log_message.emit(f"🔍 [策略扫描] 正在分析 {code} {name} ({i}/{total_stocks})...")
                 
                 # 获取股票信息
                 stock_info = self.get_stock_info(code)
@@ -801,7 +853,13 @@ class HKTradingController(QObject):
                 
                 # 缠论分析 (30M 主信号)
                 chan_result = self.analyze_with_chan(code)
-                if not chan_result: continue
+                if not chan_result:
+                    # 如果失败，略作休息防止持续撞墙
+                    time.sleep(1.0)
+                    continue
+                
+                # 为后续请求预留一点 API 额度
+                time.sleep(1.0)
                 
                 # 提取信号基本属性
                 bsp_type = chan_result.get('bsp_type', '未知')
@@ -931,12 +989,13 @@ class HKTradingController(QObject):
             self.log_message.emit(f"\n>>> 开始执行卖出操作（共{len(sell_signals)}个）")
             for i, signal in enumerate(sell_signals, 1):
                 code = signal['code']
+                name = signal.get('name', '')
                 score = signal['score']
                 qty = signal['position_qty']
                 price = signal['current_price']
                 bsp_type = signal['bsp_type']
                 
-                self.log_message.emit(f"\n[{i}/{len(sell_signals)}] 卖出 {code} - {bsp_type} - 评分: {score}")
+                self.log_message.emit(f"\n[{i}/{len(sell_signals)}] 卖出 {code} ({name}) - {bsp_type} - 评分: {score}")
                 
                 # 检查是否可以执行交易
                 if not self.risk_manager.can_execute_trade(code, score):
@@ -960,11 +1019,11 @@ class HKTradingController(QObject):
                             self.executed_signals[code] = bsp_time_str
                             self._save_executed_signals()
                             
-                        self.log_message.emit(f"✅ 卖出成功 {code}, 释放资金: {released_funds:.2f}, 当前可用: {available_funds:.2f}")
+                        self.log_message.emit(f"✅ 卖出成功 {code} ({name}), 释放资金: {released_funds:.2f}, 当前可用: {available_funds:.2f}")
                     else:
-                        self.log_message.emit(f"❌ 卖出失败 {code}")
+                        self.log_message.emit(f"❌ 卖出失败 {code} ({name})")
                 else:
-                    self.log_message.emit(f"⏭️ 卖出信号 {code} 评分({score})低于阈值({self.min_visual_score})，仅通知不执行")
+                    self.log_message.emit(f"⏭️ 卖出信号 {code} ({name}) 评分({score})低于阈值({self.min_visual_score})，仅通知不执行")
         
         # 执行买点 - 使用风险管理器进行动态仓位控制
         if buy_signals:
@@ -994,6 +1053,7 @@ class HKTradingController(QObject):
                     break
                 
                 code = signal['code']
+                name = signal.get('name', '')
                 score = signal['score']
                 price = signal['current_price']
                 bsp_type = signal['bsp_type']
@@ -1001,7 +1061,7 @@ class HKTradingController(QObject):
                 
                 # 检查熔断和交易频率限制
                 if not self.risk_manager.can_execute_trade(code, score):
-                    self.log_message.emit(f"⚠️ 风险管理限制，跳过买入 {code}")
+                    self.log_message.emit(f"⚠️ 风险管理限制，跳过买入 {code} ({name})")
                     continue
                 
                 # 检查可用资金是否小于5万元，如果是则停止买入
@@ -1022,12 +1082,12 @@ class HKTradingController(QObject):
                         try:
                             kl_list = list(chan_30m[0].klu_iter())
                             atr_value = self._calculate_atr(kl_list, period=14)
-                            self.log_message.emit(f"{code} 波动率诊断: ATR={atr_value:.3f}")
+                            self.log_message.emit(f"{code} ({name}) 波动率诊断: ATR={atr_value:.3f}")
                         except Exception as e:
                             import traceback
-                            self.log_message.emit(f"⚠️ {code} ATR 计算失败: {e}\n{traceback.format_exc()}")
+                            self.log_message.emit(f"⚠️ {code} ({name}) ATR 计算失败: {e}\n{traceback.format_exc()}")
                     else:
-                        self.log_message.emit(f"⚠️ {code} 无可用 chan_30m 数据用于计算 ATR，将使用固定20%仓位。")
+                        self.log_message.emit(f"⚠️ {code} ({name}) 无可用 chan_30m 数据用于计算 ATR，将使用固定20%仓位。")
                     
                     # 使用风险管理器计算动态仓位，通过 ATR 限额
                     buy_quantity = self.risk_manager.calculate_position_size(
