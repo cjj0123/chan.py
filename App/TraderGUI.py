@@ -15,9 +15,10 @@ from PyQt6.QtWidgets import (
     QGroupBox, QHBoxLayout, QPushButton, QComboBox, QCheckBox,
     QTableWidget, QTableWidgetItem, QTextEdit, QLabel, QLineEdit,
     QSplitter, QFrame, QMessageBox, QProgressBar, QDateTimeEdit,
-    QGridLayout, QHeaderView, QProgressDialog, QSizePolicy
+    QGridLayout, QHeaderView, QProgressDialog, QSizePolicy, QInputDialog
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, pyqtSlot
+from PyQt6.QtGui import QTextCursor
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
 from matplotlib.figure import Figure
@@ -80,8 +81,11 @@ from App.ScannerThreads import ScanThread, SingleAnalysisThread, UpdateDatabaseT
 try:
     from App.HKTradingController import HKTradingController
     from App.MonitorController import MarketMonitorController
+    from App.USTradingController import USTradingController
 except ImportError:
     HKTradingController = None
+    MarketMonitorController = None
+    USTradingController = None
 
 from App.BacktestTab import BacktestTab
 
@@ -118,6 +122,7 @@ class TraderGUI(QMainWindow):
         # --- Managers ---
         self.futu_monitor = None
         self.hk_trading_controller = None
+        self.us_trading_controller = None
         self.market_monitor_controller = None
         self.discord_bot = None
         # 确保按钮在界面显示后是可见的
@@ -385,6 +390,64 @@ class TraderGUI(QMainWindow):
         hk_group.setLayout(hk_layout)
         layout.addWidget(hk_group)
 
+        # --- 美股自动交易模块 (IB) ---
+        us_group = QGroupBox("🤖 美股自动交易 (IB)")
+        us_layout = QVBoxLayout()
+        
+        # 美股控制按钮行
+        us_btns_layout = QHBoxLayout()
+        self.us_auto_status = QLabel("自动交易: [未启动]")
+        self.us_auto_btn = QPushButton("启动美股交易")
+        self.us_auto_btn.clicked.connect(self.toggle_us_trading)
+        us_btns_layout.addWidget(self.us_auto_status)
+        us_btns_layout.addWidget(self.us_auto_btn)
+        
+        # 添加美股专用自选股选择
+        us_btns_layout.addWidget(QLabel(" 📊 美股分组:"))
+        self.us_watchlist_combo = QComboBox()
+        # 复用已加载的分组
+        for i in range(self.watchlist_combo.count()):
+            self.us_watchlist_combo.addItem(self.watchlist_combo.itemText(i))
+        # 默认选中“美股” (如果存在)
+        idx = self.us_watchlist_combo.findText("美股")
+        if idx >= 0: self.us_watchlist_combo.setCurrentIndex(idx)
+        us_btns_layout.addWidget(self.us_watchlist_combo)
+
+        us_btns_layout.addStretch()
+        us_layout.addLayout(us_btns_layout)
+        
+        # 美股功能按钮行
+        us_func_layout = QHBoxLayout()
+        self.us_scan_btn = QPushButton("立刻执行扫描")
+        self.us_scan_btn.clicked.connect(self.on_us_force_scan_clicked)
+        us_func_layout.addWidget(self.us_scan_btn)
+        
+        self.us_query_funds_btn = QPushButton("刷新账户资金")
+        self.us_query_funds_btn.clicked.connect(self.on_us_query_funds_clicked)
+        us_func_layout.addWidget(self.us_query_funds_btn)
+        
+        self.us_liquidate_btn = QPushButton("一键清仓")
+        self.us_liquidate_btn.clicked.connect(self.on_us_liquidate_clicked)
+        self.us_liquidate_btn.setStyleSheet("background-color: #ff4d4f; color: white; font-weight: bold;")
+        us_func_layout.addWidget(self.us_liquidate_btn)
+
+        self.us_test_order_btn = QPushButton("🧪 下单测试")
+        self.us_test_order_btn.clicked.connect(self.on_us_test_order_clicked)
+        us_func_layout.addWidget(self.us_test_order_btn)
+
+        us_func_layout.addStretch()
+        us_layout.addLayout(us_func_layout)
+        
+        # 美股日志
+        self.us_auto_log_text = QTextEdit()
+        self.us_auto_log_text.setReadOnly(True)
+        self.us_auto_log_text.setPlaceholderText("美股自动化系统日志将显示在此处...")
+        self.us_auto_log_text.setMinimumHeight(150)
+        us_layout.addWidget(self.us_auto_log_text)
+        
+        us_group.setLayout(us_layout)
+        layout.addWidget(us_group)
+
         # --- 多市场监控模块 (A/US) ---
         monitor_group = QGroupBox("🔍 多市场监控 (A股/美股)")
         monitor_main_layout = QVBoxLayout()
@@ -401,6 +464,11 @@ class TraderGUI(QMainWindow):
         self.monitor_watchlist_combo.addItem("加载中...")
         monitor_ctrl_layout.addWidget(QLabel("监控分组:"))
         monitor_ctrl_layout.addWidget(self.monitor_watchlist_combo)
+        
+        self.monitor_scan_btn = QPushButton("立刻执行扫描")
+        self.monitor_scan_btn.clicked.connect(self.on_monitor_force_scan_clicked)
+        monitor_ctrl_layout.addWidget(self.monitor_scan_btn)
+        
         monitor_ctrl_layout.addStretch()
         monitor_main_layout.addLayout(monitor_ctrl_layout)
         
@@ -584,9 +652,129 @@ class TraderGUI(QMainWindow):
         if self.hk_trading_controller is None or getattr(self.hk_trading_controller, '_is_running', False) == False:
             self.append_auto_log("⚠️ 请先启动港股自动交易，然后再执行扫描。")
             return
+            
+        reply = QMessageBox.question(
+            self, '执行扫描',
+            "⚡ 确认要立即执行强制策略扫描吗？\n这将手动触发对全量自选股的完整缠论分析。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
         
-        self.hk_trading_controller.force_scan()
-        self.append_auto_log("⚡ 已下发强制扫描指令，策略将在接下来的几秒内心跳中触发执行，请留意日志刷新。")
+        if reply == QMessageBox.StandardButton.Yes:
+            self.hk_trading_controller.force_scan()
+            self.append_auto_log("⚡ 已下发强制扫描指令，策略将在接下来的几秒内心跳中触发执行，请留意日志刷新。")
+
+    def append_us_auto_log(self, text: str):
+        """添加美股自动交易日志"""
+        from datetime import datetime
+        now = datetime.now().strftime("%H:%M:%S")
+        self.us_auto_log_text.append(f"[{now}] {text}")
+        # 自动滚动到底部
+        self.us_auto_log_text.moveCursor(QTextCursor.MoveOperation.End)
+
+    def toggle_us_trading(self):
+        """切换美股自动交易状态 (IB)"""
+        if self.us_trading_controller is None:
+            if USTradingController is None:
+                self.append_us_auto_log("❌ 无法导入 USTradingController，可能缺少依赖")
+                return
+            try:
+                # 使用美股专用分组
+                group_name = self.us_watchlist_combo.currentText()
+                
+                # 共享 Discord Bot
+                bot = self._get_shared_discord_bot(controller=None)
+
+                self.us_trading_controller = USTradingController(us_watchlist_group=group_name, discord_bot=bot)
+                self.us_trading_controller.log_message.connect(self.append_us_auto_log)
+                self.us_trading_controller.funds_updated.connect(self.update_us_funds_display)
+                
+                import threading
+                def run_trade():
+                    # 关联 controller 到 bot
+                    if self.discord_bot:
+                        self.discord_bot.controller = self.us_trading_controller
+                    self.us_trading_controller.run_trading_loop()
+                    
+                self.us_trade_thread = threading.Thread(target=run_trade, daemon=True)
+                self.us_trade_thread.start()
+                
+                self.us_auto_status.setText("美股自动交易: [运行中]")
+                self.us_auto_btn.setText("停止美股交易")
+                self.append_us_auto_log(f"✅ 美股自动交易已启动 (IB, 分组: {group_name})")
+            except Exception as e:
+                self.append_us_auto_log(f"❌ 启动美股自动交易失败: {e}")
+                self.us_trading_controller = None
+        else:
+            if self.discord_bot and self.discord_bot.controller == self.us_trading_controller:
+                self.discord_bot.controller = None
+            self.us_trading_controller.stop()
+            self.us_trading_controller = None
+            self.us_auto_status.setText("美股自动交易: [已停止]")
+            self.us_auto_btn.setText("启动美股交易")
+            self.append_us_auto_log("ℹ️ 美股自动交易已停止")
+
+    def update_us_funds_display(self, available: float, total: float):
+        """更新美股资金显示 (由 Controller 信号触发)"""
+        self.append_us_auto_log(f"💰 [IB 账户] 可用资金: ${available:,.2f}, 总资产: ${total:,.2f}")
+
+    def on_us_force_scan_clicked(self):
+        """手动触发美股策略扫描"""
+        if self.us_trading_controller is None:
+            self.append_us_auto_log("⚠️ 请先启动美股自动交易。")
+            return
+        
+        reply = QMessageBox.question(self, '确认扫描', '确定要立即执行一次完整的美股策略扫描吗？',
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            self.us_trading_controller.force_scan()
+            self.append_us_auto_log("⚡ 已手动触发向 IB 发起的扫描指令。")
+
+    def on_us_query_funds_clicked(self):
+        """查询美股账户资金 (IB) - 改为异步请求"""
+        if self.us_trading_controller:
+            self.us_trading_controller.query_account_funds()
+        else:
+            self.append_us_auto_log("⚠️ 请先启动美股交易连接。")
+
+    def on_us_liquidate_clicked(self):
+        """美股一键清仓"""
+        if self.us_trading_controller is None:
+            self.append_us_auto_log("⚠️ 请先启动美股交易。")
+            return
+            
+        reply = QMessageBox.warning(self, '危险操作', '确定要一键卖出所有美股持仓吗？此操作不可撤销！',
+                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            self.append_us_auto_log("🔥 正在执行美股全量清仓...")
+            self.us_trading_controller.close_all_positions()
+
+    def on_us_test_order_clicked(self):
+        """美股下单测试"""
+        if self.us_trading_controller is None:
+            self.append_us_auto_log("⚠️ 请先启动美股交易。")
+            return
+            
+        code, ok = QInputDialog.getText(self, '下单测试', '请输入要测试的美股代码 (例如 US.AAPL):', text="US.AAPL")
+        if ok and code:
+            self.us_trading_controller.place_test_order(code)
+            
+    def on_monitor_force_scan_clicked(self):
+        """异步/定时监控：手动触发一次扫描"""
+        if self.market_monitor_controller is None or getattr(self.market_monitor_controller, '_is_running', False) == False:
+            self.append_monitor_log("⚠️ 请先启动多市场监控，然后再执行扫描。")
+            return
+            
+        reply = QMessageBox.question(
+            self, '执行扫描',
+            "⚡ 确认要立即对 A/US 监控分组执行强制扫描吗？\n这将手动触发一轮完整的缠论信号分析。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            self.market_monitor_controller.force_scan()
+            self.append_monitor_log("⚡ 已下发监控强制扫描指令，请留意监控日志。")
             
     def on_query_funds_clicked(self):
         """刷新并打印账户持仓及资金到自动化日志"""
@@ -1094,6 +1282,10 @@ class TraderGUI(QMainWindow):
             # 默认使用 Futu 优先
             data_sources = [DATA_SRC.FUTU, "custom:SQLiteAPI.SQLiteAPI"]
             
+            # 美股特殊处理：优先使用 IB
+            if normalized_code.startswith("US.") and os.getenv("IB_HOST"):
+                data_sources = [DATA_SRC.IB] + data_sources
+            
             kl_types = [KL_TYPE.K_DAY, KL_TYPE.K_30M, KL_TYPE.K_5M, KL_TYPE.K_1M]
             
             # 使用 SingleAnalysisThread 返回多个 timeframe
@@ -1297,6 +1489,13 @@ class TraderGUI(QMainWindow):
                 if hasattr(self, 'monitor_watchlist_combo'):
                     self.monitor_watchlist_combo.clear()
                     self.monitor_watchlist_combo.addItems(group_names)
+                
+                if hasattr(self, 'us_watchlist_combo'):
+                    self.us_watchlist_combo.clear()
+                    self.us_watchlist_combo.addItems(group_names)
+                    # 尝试再次默认选中“美股”
+                    idx = self.us_watchlist_combo.findText("美股")
+                    if idx >= 0: self.us_watchlist_combo.setCurrentIndex(idx)
                 
                 # 安全地写入日志
                 if hasattr(self, 'log_text'):

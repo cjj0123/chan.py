@@ -39,7 +39,9 @@ from futu import OpenQuoteContext, RET_OK
 # 导入 DiscordBot (复用现有逻辑)
 from App.DiscordBot import DiscordBot
 
-# 导入 视觉评分
+# 导入 机器学习验证器
+from ML.SignalValidator import SignalValidator
+# 导入 视觉评分器
 from visual_judge import VisualJudge
 
 logger = logging.getLogger(__name__)
@@ -70,6 +72,11 @@ class MarketMonitorController(QObject):
         
         # 视觉评分缓存 (code_time_type -> score_dict)
         self.visual_score_cache = {}
+        
+        # 机器学习验证器
+        self.ml_validator = SignalValidator()
+        
+        self._force_scan = False  # 强制扫描标志
 
     def _load_notified_signals(self) -> Dict:
         """加载已通知信号记录"""
@@ -98,6 +105,7 @@ class MarketMonitorController(QObject):
             
             self.notified_signals = cleaned_cache
             with open(self.notified_signals_file, 'w', encoding='utf-8') as f:
+                # 记录格式保持一致，但确保加载时能识别
                 json.dump(self.notified_signals, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error(f"保存监控信号记录失败: {e}")
@@ -134,6 +142,11 @@ class MarketMonitorController(QObject):
             self.quote_ctx.close()
             self.quote_ctx = None
         self.log_message.emit("🛑 [监控] 监控进程已停止")
+
+    def force_scan(self):
+        """外部触发：强制立即执行一次扫描"""
+        self._force_scan = True
+        self.log_message.emit("⚡ [监控] 收到强制扫描指令，将在下一次心跳时触发执行")
 
     def get_status_summary(self) -> str:
         """获取监控状态摘要"""
@@ -174,18 +187,25 @@ class MarketMonitorController(QObject):
         
         self.log_message.emit(f"🚀 [监控] 开始监控分组: {self.watchlist_group} (周期: 30m)")
         
-        last_scan_bar = None
+        # 初始化扫描标记为当前 Bar，避免启动时立即触发重复扫描
+        now = datetime.now()
+        last_scan_bar = now.replace(minute=(now.minute // 30) * 30, second=0, microsecond=0)
         
         while self._is_running:
             try:
                 now = datetime.now()
-                # 计算 30 分钟 Bar 的起始时间
+                # 计算 30 分钟 Bar 的起始时间 (例如 10:29 -> 10:00, 10:31 -> 10:30)
                 current_bar = now.replace(minute=(now.minute // 30) * 30, second=0, microsecond=0)
                 
-                # 如果是新的 Bar，且已经过了前 5 分钟 (避让港股交易峰值)
-                if last_scan_bar is None or current_bar > last_scan_bar:
-                    if now.minute % 30 >= 5: # 延迟 5 分钟扫描
-                        self.log_message.emit(f"🔍 [监控] 触发周期性扫描 ({current_bar.strftime('%H:%M')})...")
+                # 定时扫描逻辑：由新的 Bar 触发，并增加 5 分钟避让延迟
+                if self._force_scan:
+                    self.log_message.emit("🔍 [监控] 捕获到手动强制扫描指令，启动完整分析...")
+                    self._perform_scan()
+                    self._force_scan = False
+                    last_scan_bar = current_bar # 强制扫描后重置 Bar 时间，避免短时间内再次触发定时扫描
+                elif current_bar > last_scan_bar:
+                    if now.minute % 30 >= 5: # 延迟 5 分钟扫描，确保 K 线数据已结算且避让港股早盘高峰
+                        self.log_message.emit(f"🔍 [监控] 触发定时扫描 ({current_bar.strftime('%H:%M')})...")
                         self._perform_scan()
                         last_scan_bar = current_bar
                 
@@ -230,12 +250,13 @@ class MarketMonitorController(QObject):
         # 美股逻辑：识别 US. 前缀，切换到更高质量的数据源
         if code.upper().startswith("US."):
             from config import API_CONFIG
-            if API_CONFIG.get('POLYGON_API_KEY'):
+            # 优先使用 Interactive Brokers
+            if os.getenv("IB_HOST"):
+                data_src = DATA_SRC.IB
+            elif API_CONFIG.get('POLYGON_API_KEY'):
                 data_src = DATA_SRC.POLYGON
-                # self.log_message.emit(f"📡 [监控] {code} 使用 Polygon 数据源")
             else:
                 data_src = DATA_SRC.YFINANCE
-                # self.log_message.emit(f"📡 [监控] {code} 使用 YFinance 数据源")
 
         chan = CChan(
             code=code,
@@ -253,27 +274,53 @@ class MarketMonitorController(QObject):
         bsp_list = chan.get_latest_bsp(number=0)
         now = datetime.now()
         
-        # 信号时效性过滤 (1小时内)
+        # 信号时效性过滤 (扩大到24小时内，方便非交易时段测试)
         new_signals = []
         for bsp in bsp_list:
             b_time = bsp.klu.time
             bsp_dt = datetime(b_time.year, b_time.month, b_time.day, b_time.hour, b_time.minute, b_time.second)
-            # 简单时差判断 (A/US 通用，不涉及复杂的港股日历计算)
-            if (now - bsp_dt).total_seconds() <= 3600:
+            
+            diff_sec = (now - bsp_dt).total_seconds()
+            if diff_sec <= 86400: # 24小时内
                 new_signals.append(bsp)
+            else:
+                logger.debug(f"{code} signal {bsp.type2str()} too old: {diff_sec/3600:.1f}h")
 
         if new_signals:
             for sig in new_signals:
-                # 去重逻辑：代码 + 信号时间 + 类型
-                sig_key = f"{code}_{str(sig.klu.time)}_{sig.type2str()}"
-                if sig_key in self.notified_signals:
+                # 组合去重逻辑：
+                # 1. 严格去重 (代码 + 信号K线时间 + 类型) -> 防止同一根K线反复报
+                sig_key_strict = f"{code}_{str(sig.klu.time)}_{sig.type2str()}"
+                
+                # 2. 宽松去重 (代码 + 类型) -> 处理“漂移”或“迟到”的相同信号
+                # 如果 4 小时内已经报过同类型的信号，除非价格有巨大变化，否则不再重复骚扰
+                sig_key_loose = f"{code}_{sig.type2str()}"
+                
+                if sig_key_strict in self.notified_signals:
                     continue
                 
-                # 记录并保存
-                self.notified_signals[sig_key] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                if sig_key_loose in self.notified_signals:
+                    last_notify_info = self.notified_signals[sig_key_loose]
+                    if isinstance(last_notify_info, str):
+                        try:
+                            last_time = datetime.strptime(last_notify_info, "%Y-%m-%d %H:%M:%S")
+                            if (now - last_time).total_seconds() < 14400: # 4小时保护期
+                                continue
+                        except:
+                            pass
+                
+                # 记录并保存 (同时记录严格和宽松的键)
+                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                self.notified_signals[sig_key_strict] = now_str
+                self.notified_signals[sig_key_loose] = now_str
                 self._save_notified_signals()
                 
+                self.log_message.emit(f"🎯 [监控] {code} 发现信号: {sig.type2str()} @ {sig.klu.time}")
                 self._notify_signal(code, sig, chan, name=name)
+            
+        else:
+            latest_sig = bsp_list[-1].klu.time if bsp_list else "无"
+            logger.info(f"[监控] {code} 扫描中，未发现24h内新信号 (最近信号在: {latest_sig})")
 
     def _notify_signal(self, code: str, bsp, chan, name: str = ""):
         """推送信号日志和 Discord 图表"""
@@ -281,7 +328,17 @@ class MarketMonitorController(QObject):
         bsp_type_str = bsp.type2str()
         msg_base = f"{code} ({name}) 发现 {sig_type} {bsp_type_str} | 时间: {bsp.klu.time} | 价格: {bsp.klu.close:.2f}"
         
-        self.log_message.emit(f"🌟 [A/US 监控信号] {msg_base}")
+        # --- 机器学习验证 (仅对买点进行过滤) ---
+        ml_result = {"is_valid": True, "prob": None, "msg": "N/A (Skipped for Sell)"}
+        if bsp.is_buy:
+             ml_result = self.ml_validator.validate_signal(chan, bsp)
+             if not ml_result.get('is_valid', True):
+                 self.log_message.emit(f"🚫 [监控] {code} 信号被 ML 过滤: {ml_result.get('msg')}")
+                 # 依然记录到 notified_signals 防止重复扫描但不再继续后续通知
+                 return
+        
+        ml_info = f" | ML概率: {ml_result.get('prob', 0):.2f}" if (bsp.is_buy and ml_result.get('prob') is not None) else ""
+        self.log_message.emit(f"🌟 [A/US 监控信号] {msg_base}{ml_info}")
         
         # 生成图表
         chart_path = os.path.abspath(os.path.join(self.charts_dir, f"{code.replace('.', '_')}_{datetime.now().strftime('%H%M%S')}.png"))
@@ -305,30 +362,35 @@ class MarketMonitorController(QObject):
                 self.log_message.emit(f"💾 [监控] {code} 命中视觉评分缓存: {score}分")
             else:
                 self.log_message.emit(f"🧠 [监控] 正在对 {code} 进行视觉评分...")
-                visual_result = self.visual_judge.judge(chart_path)
+                visual_result = self.visual_judge.evaluate([chart_path], bsp_type_str)
                 score = visual_result.get('score', 0)
                 analysis = visual_result.get('analysis', "")
                 # 存入缓存
                 self.visual_score_cache[cache_key] = {"score": score, "analysis": analysis}
                 self.log_message.emit(f"✅ [监控] {code} 评分完成: {score}分")
 
-            # Discord 推送 (仅限 60 分及以上)
+            # Discord 推送 (使用配置中的阈值)
+            min_score = TRADING_CONFIG.get('min_visual_score', 70)
             if self.discord_bot:
                 import asyncio
                 if hasattr(self.discord_bot, 'loop') and self.discord_bot.loop:
-                    if score >= 60:
+                    if score >= min_score:
+                        ml_prob = ml_result.get('prob')
+                        ml_score_str = f"{ml_prob*100:.1f}分" if ml_prob is not None else "N/A"
+                        
                         full_msg = (
                             f"📈 **多市场大模型预警 (A/US)**\n"
                             f"股票: {code} ({name})\n"
                             f"信号: {sig_type} {bsp_type_str}\n"
                             f"价格: {bsp.klu.close:.2f}\n"
-                            f"评分: **{score}分**\n"
+                            f"ML评分: **{ml_score_str}**\n"
+                            f"视觉评分: **{score}分**\n"
                             f"分析: {analysis[:200]}..." # 截断分析内容
                         )
                         coro = self.discord_bot.send_notification(full_msg, chart_path)
                     else:
                         # 分数太低仅在控制台打印
-                        self.log_message.emit(f"⏭️ [监控] {code} 评分({score})低于推送阈值(60)，仅本地记录")
+                        self.log_message.emit(f"⏭️ [监控] {code} 评分({score})低于推送阈值({min_score})，仅本地记录")
                         return
                     
                     asyncio.run_coroutine_threadsafe(coro, self.discord_bot.loop)
