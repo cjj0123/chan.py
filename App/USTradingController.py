@@ -66,7 +66,7 @@ class USTradingController(QObject):
         # 指令队列，用于处理 GUI 线程发来的请求 (线程安全)
         self.cmd_queue = queue.Queue()
         
-        self.ib = IB()
+        self.ib = None
         self.host = os.getenv("IB_HOST", "127.0.0.1")
         self.port = int(os.getenv("IB_PORT", "4002"))
         self.client_id = int(os.getenv("IB_CLIENT_ID", "10"))
@@ -91,6 +91,9 @@ class USTradingController(QObject):
 
     def _connect_ib(self):
         """连接 IB"""
+        if self.ib is None:
+            self.ib = IB()
+            
         if not self.ib.isConnected():
             try:
                 self.ib.connect(self.host, self.port, clientId=self.client_id)
@@ -138,6 +141,7 @@ class USTradingController(QObject):
         asyncio.set_event_loop(loop)
         
         try:
+            self.ib = IB() # 在 IB 线程中实例化，确保 Event Loop 绑定正确
             self._connect_ib()
         except Exception as e:
             self.log_message.emit(f"❌ [美股] 初始化失败: {e}")
@@ -206,7 +210,7 @@ class USTradingController(QObject):
                     except: pass
 
         # 退出循环后断开连接
-        if self.ib.isConnected():
+        if self.ib and self.ib.isConnected():
             try:
                 self.ib.disconnect()
             except:
@@ -227,7 +231,7 @@ class USTradingController(QObject):
 
     def get_position_quantity(self, code: str) -> int:
         """获取指定代码的持仓数量"""
-        if not self.ib.isConnected(): return 0
+        if self.ib is None or not self.ib.isConnected(): return 0
         symbol = code.split('.')[-1]
         for p in self.ib.positions():
             if p.contract.symbol == symbol:
@@ -236,7 +240,7 @@ class USTradingController(QObject):
 
     def check_pending_orders(self, code: str, side: str) -> bool:
         """检查是否有相同方向的未成交订单"""
-        if not self.ib.isConnected(): return False
+        if self.ib is None or not self.ib.isConnected(): return False
         symbol = code.split('.')[-1]
         for trade in self.ib.openTrades():
             if trade.contract.symbol == symbol and trade.order.action == side.upper():
@@ -435,7 +439,7 @@ class USTradingController(QObject):
 
     def get_account_assets(self) -> Tuple[float, float, list]:
         """获取资金和持仓信息"""
-        if not self.ib.isConnected(): return 0.0, 0.0, []
+        if self.ib is None or not self.ib.isConnected(): return 0.0, 0.0, []
         try:
             available = 0.0
             total = 0.0
