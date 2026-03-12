@@ -336,16 +336,17 @@ class MarketMonitorController(QObject):
         bsp_type_str = bsp.type2str()
         msg_base = f"{code} ({name}) 发现 {sig_type} {bsp_type_str} | 时间: {bsp.klu.time} | 价格: {bsp.klu.close:.2f}"
         
-        # --- 机器学习验证 (仅对买点进行过滤) ---
-        ml_result = {"is_valid": True, "prob": None, "msg": "N/A (Skipped for Sell)"}
-        if bsp.is_buy:
-             ml_result = self.ml_validator.validate_signal(chan, bsp)
-             if not ml_result.get('is_valid', True):
-                 self.log_message.emit(f"🚫 [监控] {code} 信号被 ML 过滤: {ml_result.get('msg')}")
-                 # 依然记录到 notified_signals 防止重复扫描但不再继续后续通知
-                 return
+        # --- 机器学习验证 (对所有信号尝试获取评分) ---
+        ml_result = self.ml_validator.validate_signal(chan, bsp)
         
-        ml_info = f" | ML概率: {ml_result.get('prob', 0):.2f}" if (bsp.is_buy and ml_result.get('prob') is not None) else ""
+        # 即使 ML 验证不通过，监控模式也倾向于显示信号，除非是极其低分的拦截
+        # 但我们这里遵循原逻辑：如果买点被过滤则不通知
+        if bsp.is_buy and not ml_result.get('is_valid', True):
+            self.log_message.emit(f"🚫 [监控] {code} 信号被 ML 过滤: {ml_result.get('msg')}")
+            return
+            
+        prob = ml_result.get('prob')
+        ml_info = f" | ML概率: {prob:.2f}" if prob is not None else " | ML概率: N/A"
         self.log_message.emit(f"🌟 [A/US 监控信号] {msg_base}{ml_info}")
         
         # 生成图表

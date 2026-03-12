@@ -141,9 +141,8 @@ class SignalValidator:
         """
         通过多个模型的平均概率来验证信号。
         """
-        # 如果不是买点，默认不执行 ML 过滤
-        if not bsp.is_buy:
-            return {"is_valid": True, "prob": 1.0, "msg": "Not a Buy Signal"}
+        # 如果不是买点，默认不执行 ML 过滤（is_valid 始终为 True），但由于用户需求，我们依然计算评分并返回 prob
+        is_sell = not bsp.is_buy
             
         if not self.is_loaded:
             return {"is_valid": True, "prob": 1.0, "msg": "ML Models Unloaded"}
@@ -193,11 +192,17 @@ class SignalValidator:
                 valid_count = sum(1 for m, p in probs.items() if p >= self.thresholds.get(m, 0.5))
                 is_valid = valid_count >= (len(probs) / 2.0)
             
+            # --- 逻辑强制修正 ---
+            # 如果是卖点，评分仅作参考，不执行过滤逻辑
+            if is_sell:
+                is_valid = True
+
             # 4. 记录特征一致性日志
             self._log_online_features(chan.code, bsp.dt, features, avg_prob, probs)
 
             detail_str = ", ".join([f"{k}:{v:.2f}(>{self.thresholds.get(k,0.5):.2f})" for k, v in probs.items()])
-            msg = f"ML 集成[{self.policy}]验证 {'通过' if is_valid else '拦截'} (均值:{avg_prob:.2f} | 详情:[{detail_str}])"
+            prefix = "ML 卖点参考" if is_sell else f"ML 集成[{self.policy}]验证"
+            msg = f"{prefix} {'通过' if is_valid else '拦截'} (均值:{avg_prob:.2f} | 详情:[{detail_str}])"
             
             return {
                 "is_valid": bool(is_valid),

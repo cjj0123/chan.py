@@ -522,7 +522,7 @@ class HKTradingController(QObject):
                     order_price = round(price * (1 - buffer), 3)
                 
                 mode_str = "紧急(回退)" if urgent else "常规"
-                self.log_message.emit(f"📝 {code} 使用【增强限价单】({mode_str}) 执行 {action}: 价格={order_price}")
+                self.log_message.emit(f"📝 {code} 使用【增强限价单】({mode_str}) 执行 {action}: 数量={quantity}, 价格={order_price}")
                 
                 ret, data = self.trd_ctx.place_order(
                     price=order_price,
@@ -818,8 +818,8 @@ class HKTradingController(QObject):
                     is_force_scan = True
                     self._force_scan = False  # 重置标志
                 elif last_strategy_scan_time != current_bar_time:
-                    # 额外等待 1 分钟让 30M 棒线在富途后端稳定
-                    if now.minute % 30 >= 1: 
+                    # 额外等待 3 分钟让 30M 棒线在富途后端稳定
+                    if now.minute % 30 >= 3: 
                         should_scan_strategy = True
                 
                 if should_scan_strategy:
@@ -898,9 +898,14 @@ class HKTradingController(QObject):
                     'chan_result': chan_result
                 }
                 
-                # 记录已发现
+                # 记录已发现 (Phase 4: 使用双键系统去重)
                 if bsp_time_str:
-                    self.discovered_signals[code] = bsp_time_str
+                    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    sig_key_strict = f"STRICT_{code}_{bsp_time_str}_{bsp_type}"
+                    sig_key_loose = f"LOOSE_{code}_{bsp_type}"
+                    self.discovered_signals[sig_key_strict] = now_str
+                    self.discovered_signals[sig_key_loose] = now_str
+                    self.discovered_signals[code] = bsp_time_str # 保留旧格式供风险监控查阅
                     self._save_discovered_signals()
                 
                 candidate_signals.append(signal_data)
@@ -920,14 +925,13 @@ class HKTradingController(QObject):
             self.log_message.emit(f"⚠️ 策略扫描子流程错误: {e}")
 
     def _validate_and_filter_signal(self, code, chan_result, stock_info, is_force_scan: bool = False) -> bool:
-        """封装原有的信号验证和过滤逻辑"""
+        """封装原有的信号验证和过滤逻辑，并引入与 A 股一致的去重机制"""
         is_buy = chan_result.get('is_buy_signal', False)
         bsp_type = chan_result.get('bsp_type', '未知')
         bsp_type_display = f"{'b' if is_buy else 's'}{bsp_type}"
+        bsp_time_str = chan_result.get('bsp_datetime_str', '')
         
-        # 1. 核心去重逻辑：按持仓及信号类型判断 (按用户要求去重)
-        # 成功买入且未卖出前的所有买点视为重复 -> 即持仓>0时不处理买点
-        # 否则视为不重复 -> 即持仓=0时可以处理买点
+        # 1. 持仓方向校验
         position_qty = self.get_position_quantity(code)
         if is_buy and position_qty > 0: 
             self.log_message.emit(f"⏭️ {code} {bsp_type_display} 已有持仓({position_qty})，跳过买入信号")
@@ -936,12 +940,34 @@ class HKTradingController(QObject):
             self.log_message.emit(f"⏭️ {code} {bsp_type_display} 无持仓，跳过卖出信号")
             return False
 
-        # 2. 挂单校验 (如果有相同方向正在进行中的订单，不要重复下单)
+        # 2. 核心去重逻辑 (Phase 4 Alignment)
+        now = datetime.now()
+        # 2.1 严格去重 (代码 + 信号K线时间 + 类型) -> 防止同一根K线反复报
+        sig_key_strict = f"STRICT_{code}_{bsp_time_str}_{bsp_type}"
+        # 2.2 宽松去重 (代码 + 类型) -> 处理“漂移”或“重现”的同一信号 (4小时保护期)
+        sig_key_loose = f"LOOSE_{code}_{bsp_type}"
+        
+        if sig_key_strict in self.discovered_signals:
+            logger.debug(f"[去重] {code} 严格去重跳过: {sig_key_strict}")
+            return False
+            
+        if sig_key_loose in self.discovered_signals:
+            last_notify_info = self.discovered_signals[sig_key_loose]
+            try:
+                last_time = datetime.strptime(last_notify_info, "%Y-%m-%d %H:%M:%S")
+                diff_sec = (now - last_time).total_seconds()
+                if diff_sec < 14400: # 4小时保护期
+                    self.log_message.emit(f"⏭️ {code} {bsp_type_display} 宽松去重跳过 (4h保护期内)")
+                    return False
+            except Exception as e:
+                logger.error(f"解析信号记录时间报错: {e}")
+
+        # 3. 挂单校验 (如果有相同方向正在进行中的订单，不要重复下单)
         if self.check_pending_orders(code, 'BUY' if is_buy else 'SELL'):
             self.log_message.emit(f"⏭️ {code} {bsp_type_display} 已有相同方向挂单，跳过")
             return False
 
-        # 3. ML 过滤 (放到最后，避免浪费算力和日志刷屏)
+        # 4. ML 过滤
         if is_buy:
             chan_env = chan_result.get('chan_analysis', {}).get('chan_30m')
             if chan_env:
@@ -1051,7 +1077,8 @@ class HKTradingController(QObject):
         if buy_signals:
             self.log_message.emit(f"\n>>> 开始执行买入操作（共{len(buy_signals)}个）")
             
-            max_total_stocks = 5  # 账户最多同时持有5只股票
+            # 获取最大持仓限制
+            max_total_stocks = TRADING_CONFIG.get('max_total_positions', 10)  # 从配置获取，默认为 10
             
             # 查询当前实际持仓数量（从富途API实时获取，而非仅依赖本轮计数器）
             current_position_count = 0
@@ -1120,11 +1147,15 @@ class HKTradingController(QObject):
                         risk_factor=1.0,
                         atr=atr_value,
                         atr_multiplier=atr_multiplier,
-                        total_assets=total_assets
+                        total_assets=total_assets,
+                        lot_size=lot_size
                     )
                     
+                    # 二次校验与强制舍入（双重保险）
+                    buy_quantity = (buy_quantity // lot_size) * lot_size
+                    
                     if buy_quantity <= 0:
-                        self.log_message.emit(f"[{i}/{len(buy_signals)}] {code} 风险管理器建议不买入或资金不足")
+                        self.log_message.emit(f"[{i}/{len(buy_signals)}] {code} 风险管理器建议不买入或资金不足 (计算股数: {buy_quantity})")
                         continue
                     
                     required_funds = price * buy_quantity
@@ -1742,6 +1773,7 @@ class HKTradingController(QObject):
                 # 计算交易数量
                 if is_buy:
                     # 买入：使用风险管理器计算动态仓位
+                    lot_size = stock_info.get('lot_size', 100)
                     available_funds, total_assets = self.get_account_assets()
                     buy_quantity = self.risk_manager.calculate_position_size(
                         code=code,
@@ -1749,14 +1781,16 @@ class HKTradingController(QObject):
                         current_price=current_price,
                         signal_score=score,
                         risk_factor=1.0,
-                        total_assets=total_assets
+                        total_assets=total_assets,
+                        lot_size=lot_size
                     )
-                    if buy_quantity <= 0:
-                        self.log_message.emit(f"{code} 风险管理器建议不买入或资金不足")
-                        return False
                     
-                    lot_size = stock_info.get('lot_size', 100)
-                    buy_quantity = (buy_quantity // lot_size) * lot_size  # 确保是整手
+                    # 二次校验与强制舍入
+                    buy_quantity = (buy_quantity // lot_size) * lot_size
+                    
+                    if buy_quantity <= 0:
+                        self.log_message.emit(f"{code} 风险管理器建议不买入或资金不足 (计算股数: {buy_quantity})")
+                        return False
                     
                     if self.execute_trade(code, 'BUY', buy_quantity, current_price):
                         # 记录交易

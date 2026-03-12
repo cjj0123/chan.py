@@ -16,6 +16,7 @@ import pytz
 from typing import List, Dict, Optional, Tuple, Any
 from pathlib import Path
 import queue
+import nest_asyncio
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
@@ -97,7 +98,8 @@ class USTradingController(QObject):
         if not self.ib.isConnected():
             try:
                 self.ib.connect(self.host, self.port, clientId=self.client_id)
-                self.log_message.emit(f"🔌 [美股] 已连接 IB Gateway ({self.host}:{self.port})")
+                self.ib.reqAccountUpdates(True) # 强制订阅账户更新，确保市值实时同步
+                self.log_message.emit(f"🔌 [美股] 已连接 IB Gateway 并开启同步接口 ({self.host}:{self.port})")
             except Exception as e:
                 self.log_message.emit(f"❌ [美股] IB 连接失败: {e}")
                 raise e
@@ -130,101 +132,125 @@ class USTradingController(QObject):
         return start <= current_time <= end
 
     def run_trading_loop(self):
-        """主交易循环 - 运行在独立线程"""
+        """主交易循环 - 真正高频响应非阻塞版 (增强恢复能力)"""
+        print(f"\n[DEBUG] {datetime.now()} US Trading Thread START for group {self.watchlist_group}")
         self._is_running = True
         
-        import nest_asyncio
-        nest_asyncio.apply()
-        
-        # 确保在线程中建立正确的事件循环
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        try:
-            self.ib = IB() # 在 IB 线程中实例化，确保 Event Loop 绑定正确
-            self._connect_ib()
-        except Exception as e:
-            self.log_message.emit(f"❌ [美股] 初始化失败: {e}")
-            self._is_running = False
-            return
-
-        self.log_message.emit(f"🚀 [美股] 自动交易循环已启动 (分组: {self.watchlist_group})")
-        
-        # 初始化扫描时间为过去 (使用美东时间)，确保启动后在交易时段内能立即触发扫描
-        last_scan_bar = self.get_us_now() - timedelta(minutes=60)
-        
         while self._is_running:
+            loop = None
             try:
-                # 1. 核心睡眠：必须使用 ib.sleep() 才能驱动 asyncio 事件循环处理 Socket
-                self.ib.sleep(0.5)
+                self.log_message.emit(f"🚀 [美股] 正在初始化驱动环境...")
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                nest_asyncio.apply(loop) # 针对当前循环应用补丁
+                self.ib = IB()
                 
-                # 2. 处理 GUI 命令队列 (线程安全地在 IB 线程执行 IB 调用)
-                while not self.cmd_queue.empty():
-                    cmd_type, data = self.cmd_queue.get_nowait()
-                    self.log_message.emit(f"📥 [队列] 正在执行指令: {cmd_type}")
-                    self._handle_gui_command(cmd_type, data)
-
-                # Phase 4: 检查并热加载最新的优化的模型
-                self.ml_validator.check_and_reload()
-
-                if self._is_paused:
-                    continue
-
-                # 3. 交易时段判断与扫描逻辑
-                now_et = self.get_us_now()
-                if not self.is_trading_time():
-                    # 非交易时段，心跳变慢
-                    if now_et.second % 60 == 0:
-                        self.log_message.emit(f"💤 非交易时段 (NY: {now_et.strftime('%H:%M:%S')}), 等待 09:30 开盘...")
-                    self.ib.sleep(10)
-                    continue
+                last_reconnect_time = 0
+                last_scan_bar = self.get_us_now() - timedelta(minutes=60)
+                last_heartbeat_min = -1
+                _is_connecting = False
                 
-                # 使用纽约时间计算 30 分钟 K 线 Bar
-                current_bar_et = now_et.replace(minute=(now_et.minute // 30) * 30, second=0, microsecond=0)
-                
-                if current_bar_et > last_scan_bar:
-                    # 检查是否满足 2 分钟稳定延迟 (开盘前 2 分钟通常数据不全)
-                    wait_minutes = now_et.minute % 30
-                    if wait_minutes < 2:
-                        if now_et.second % 10 == 0:
-                            self.log_message.emit(f"⏳ 等待数据稳定 (NY: {now_et.strftime('%H:%M:%S')}, 已过 {wait_minutes}/2 分钟)...")
-                        self.ib.sleep(1)
+                while self._is_running:
+                    # 1. 优先级 A: GUI 指令队列 (绝对非阻塞，且每次循环必跑)
+                    while not self.cmd_queue.empty():
+                        try:
+                            cmd_type, data = self.cmd_queue.get_nowait()
+                            self.log_message.emit(f"📥 [指令] 正在执行: {cmd_type}")
+                            self._handle_gui_command(cmd_type, data)
+                        except Exception as ce:
+                            self.log_message.emit(f"⚠️ [指令] 响应失败: {ce}")
+
+                    if self._is_paused:
+                        self.log_message.emit("⏸️ [美股] 监控暂停中...")
+                        time.sleep(1.0)
                         continue
-                        
-                    self.log_message.emit(f"⚡ [美股] 触发新周期扫描 (Bar: {current_bar_et.strftime('%H:%M')})")
-                    self._perform_strategy_scan()
-                    last_scan_bar = current_bar_et
-                else:
-                    # 心跳日志，确认程序仍在运行
-                    if now_et.second % 60 == 0:
-                        next_scan = current_bar_et + timedelta(minutes=30, seconds=120)
-                        self.log_message.emit(f"💓 扫描心跳 (NY: {now_et.strftime('%H:%M')}), 下次扫描约在 {next_scan.strftime('%H:%M:%S')}")
-                        self.ib.sleep(1)
-                
-            except Exception as e:
-                self.log_message.emit(f"⚠️ [美股] 循环异常: {e}")
-                logger.error(f"Loop error: {e}", exc_info=True)
-                self.ib.sleep(10)
-                if not self.ib.isConnected():
-                    try: self._connect_ib()
-                    except: pass
 
-        # 退出循环后断开连接
-        if self.ib and self.ib.isConnected():
-            try:
-                self.ib.disconnect()
-            except:
-                pass
-        self.log_message.emit("🛑 [美股] 交易进程已安全停止")
+                    # 2. 优先级 B: 连接维护 (非阻塞触发)
+                    if not self.ib.isConnected():
+                        now_ts = time.time()
+                        if not _is_connecting and now_ts - last_reconnect_time > 15:
+                            last_reconnect_time = now_ts
+                            _is_connecting = True
+                            self.log_message.emit(f"🔄 [美股] 发起后台连接请求 ({self.host}:{self.port})...")
+                            loop.create_task(self.ib.connectAsync(self.host, self.port, clientId=self.client_id, timeout=10))
+                        
+                        try:
+                            loop.run_until_complete(asyncio.sleep(0.2))
+                        except Exception as e:
+                            if "closed" in str(e).lower(): break
+                            
+                        if self.ib.isConnected():
+                            self.log_message.emit("🔌 [美股] IB 连接成功，同步实时数据流")
+                            self.ib.reqAccountUpdates(True)
+                            _is_connecting = False
+                        continue
+
+                    # 3. 优先级 C: 正常交易驱动
+                    try:
+                        self.ib.sleep(0.5) # 驱动 asyncio 心跳 (加大间隔减少压力)
+                    except Exception as e:
+                        self.log_message.emit(f"⚠️ [驱动] 循环异常: {e}")
+                        if "closed" in str(e).lower(): 
+                            break # 跳出内循环
+                        time.sleep(1.0)
+                        continue
+
+                    # 交易逻辑
+                    now_et = self.get_us_now()
+                    if now_et.minute != last_heartbeat_min:
+                        if self.is_trading_time():
+                            self.log_message.emit(f"💖 监控心跳 (NY: {now_et.strftime('%H:%M')})")
+                        else:
+                            self.log_message.emit(f"💤 非交易时段 (NY: {now_et.strftime('%H:%M')})")
+                        last_heartbeat_min = now_et.minute
+
+                    if not self.is_trading_time():
+                        time.sleep(1.0) # 非交易时段增加休眠，防止 CPU 占用
+                        continue
+
+                    # 周期扫描
+                    current_bar_et = now_et.replace(minute=(now_et.minute // 30) * 30, second=0, microsecond=0)
+                    if current_bar_et > last_scan_bar:
+                        if now_et.minute % 30 >= 2:
+                            self.log_message.emit(f"⚡ [美股] 触发周期扫描")
+                            try:
+                                self._perform_strategy_scan()
+                            except Exception as e:
+                                self.log_message.emit(f"❌ [美股] 扫描中断: {e}")
+                                if "closed" in str(e).lower(): break
+                            last_scan_bar = current_bar_et
+
+            except Exception as outer_e:
+                print(f"[CRITICAL] US Thread Inner Crash: {outer_e}")
+                self.log_message.emit(f"🚨 [美股] 运行环境异常，5秒后重启: {outer_e}")
+                if not self._is_running: break
+                time.sleep(5)
+            finally:
+                if self.ib:
+                    try: self.ib.disconnect()
+                    except: pass
+                if loop and not loop.is_closed():
+                    try: loop.close()
+                    except: pass
+                    
+        self.log_message.emit("🛑 [美股] 交易驱动线程已正常终止")
+        print("[DEBUG] US Trading Thread EXIT.")
+
 
     def _handle_gui_command(self, cmd_type, data):
         """处理来自 GUI 的指令 (在 IB 线程执行)"""
         try:
+            self.log_message.emit(f"⚙️ [美股] 正在处理内部指令: {cmd_type}")
             if cmd_type == 'FORCE_SCAN':
                 self._perform_strategy_scan()
             elif cmd_type == 'QUERY_FUNDS':
+                self.log_message.emit("💰 [美股] 正在向 IB 请求资金与持仓数据...")
                 available, total, positions = self.get_account_assets()
                 self.funds_updated.emit(available, total, positions)
+                self.log_message.emit("✅ [美股] 资金查询完成")
+            elif cmd_type == 'CLOSE_ALL':
+                self.log_message.emit("🔥 [美股] 正在执行全账户清仓...")
+                self._close_all_positions()
         except Exception as e:
             self.log_message.emit(f"⚠️ [美股] 指令执行失败 ({cmd_type}): {e}")
 
@@ -250,45 +276,78 @@ class USTradingController(QObject):
         return False
 
     def _perform_strategy_scan(self):
-        """执行策略扫描"""
-        self.log_message.emit(f"🔍 [美股] 正在从自选股分组 '{self.watchlist_group}' 获取代码并执行扫描...")
+        """执行策略扫描 (自选股源自富途，数据源和执行源自 IB)"""
+        self.log_message.emit(f"🔍 [美股] 正在从自选股分组 '{self.watchlist_group}' 获取代码...")
+        us_codes_set = set()
+        
         try:
-            from Monitoring.FutuMonitor import FutuMonitor
-            monitor = FutuMonitor()
-            ret, data = monitor.quote_ctx.get_user_security(group_name=self.watchlist_group)
-            monitor.quote_ctx.close()
+            # 1. 从富途获取自选股清单 (用户偏好源)
+            from futu import OpenQuoteContext, RET_OK
+            try:
+                # 建立瞬时连接，用完即关
+                ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
+                ret, data = ctx.get_user_security(group_name=self.watchlist_group)
+                ctx.close()
+                if ret == RET_OK and not data.empty:
+                    futu_codes = [c for c in data['code'].tolist() if c.startswith("US.")]
+                    us_codes_set.update(futu_codes)
+                    self.log_message.emit(f"✅ [美股] 从富途获取了 {len(futu_codes)} 只自选股")
+            except Exception as fe:
+                self.log_message.emit(f"⚠️ [美股] 富途自选股获取异常: {fe}")
+
+            # 2. 强制合并 IB 实际持仓 (确保监控已有头寸)
+            if self.ib and self.ib.isConnected():
+                try:
+                    positions = self.ib.positions()
+                    if positions:
+                        ib_pos_codes = [f"US.{p.contract.symbol}" for p in positions if p.contract.secType == 'STK']
+                        us_codes_set.update(ib_pos_codes)
+                        self.log_message.emit(f"🔌 [美股] 已自动关联 {len(ib_pos_codes)} 只 IB 持仓股票进入监控")
+                except Exception as ie:
+                    self.log_message.emit(f"⚠️ [美股] IB 持仓同步异常: {ie}")
             
-            if ret != 0 or data.empty:
-                self.log_message.emit(f"⚠️ [美股] 未能在富途找到分组 '{self.watchlist_group}'。")
-                return
+            # 3. 如果依然为空，执行 Config 兜底
+            if not us_codes_set:
+                import yaml
+                cfg_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "Config", "database_config.yaml")
+                if os.path.exists(cfg_path):
+                    with open(cfg_path, 'r', encoding='utf-8') as f:
+                        cfg = yaml.safe_load(f)
+                        us_codes_set.update(cfg.get('default_stocks', {}).get('us', []))
                 
-            us_codes = [c for c in data['code'].tolist() if c.startswith("US.")]
-            if not us_codes:
-                self.log_message.emit(f"ℹ️ [美股] 分组中没有美股。")
-                return
-                
-            self.log_message.emit(f"📡 [美股] 开始扫描 {len(us_codes)} 只美股...")
+                if not us_codes_set:
+                    us_codes_set.update(['US.AAPL', 'US.TSLA', 'US.NVDA', 'US.MSFT', 'US.AMZN', 'US.GOOG', 'US.META'])
+                self.log_message.emit(f"📋 [美股] 使用兜底清单共 {len(us_codes_set)} 只股票")
+
+            us_codes = sorted(list(us_codes_set))
+            self.log_message.emit(f"📡 [美股] 扫描队列就绪 (共 {len(us_codes)} 只)，开始分析...")
             
             for i, code in enumerate(us_codes):
                 if not self._is_running: break
+                
+                # 检查事件循环状态，如果已关闭则抛出异常以触发外层重启
+                loop = asyncio.get_event_loop()
+                if loop.is_closed():
+                    raise Exception("Event loop is closed during scan")
                 try:
-                    self.log_message.emit(f"⏳ [{i+1}/{len(us_codes)}] 正在分析 {code}...")
-                    self._analyze_stock(code)
-                    # 每只股票之间由于 reqHistoricalData 等待，本身就会驱动 asyncio
-                    # 额外增加 ib.sleep 确保线程活跃
-                    self.ib.sleep(0.2)
+                    self._analyze_stock(code, i + 1, len(us_codes))
+                    self.ib.sleep(0.1)
                 except Exception as e:
                     self.log_message.emit(f"❌ [美股] 分析 {code} 报错: {e}")
+                    if "closed" in str(e).lower():
+                        raise e
             
-            self.log_message.emit("✅ [美股] 本轮扫描完成.")
+            self.log_message.emit("✅ [美股] 本轮策略扫描完成.")
         except Exception as e:
-            self.log_message.emit(f"❌ [美股] 扫描失败: {e}")
+            self.log_message.emit(f"❌ [美股] 扫描过程异常: {e}")
+            if "closed" in str(e).lower(): raise e
 
-    def _analyze_stock(self, code: str):
+    def _analyze_stock(self, code: str, index: int = 0, total: int = 0):
         """分析单只股票"""
         try:
-            # 内部使用 reqHistoricalData，会被 ib.sleep(0) 或 next bar 驱动
-            # 这里我们使用非异步封装的调用，ib-insync 会自动驱动 loop
+            prefix = f"[{index}/{total}] " if total > 0 else ""
+            self.log_message.emit(f"⏳ {prefix}正在获取 {code} 历史数据...")
+            
             symbol = code.split(".")[1] if "." in code else code
             contract = Stock(symbol, 'SMART', 'USD')
             self.ib.qualifyContracts(contract)
@@ -299,8 +358,10 @@ class USTradingController(QObject):
             )
             
             if not bars:
-                self.log_message.emit(f"ℹ️ [美股] {code} 无数据")
+                self.log_message.emit(f"ℹ️ {prefix}{code} 未能获取历史数据，跳过")
                 return
+            
+            self.log_message.emit(f"📊 {prefix}{code} 数据获取成功 ({len(bars)} 根K线)，执行缠论分析...")
 
             units = []
             for bar in bars:
@@ -367,6 +428,8 @@ class USTradingController(QObject):
 
         except Exception as e:
             logger.error(f"Analysis error {code}: {e}")
+            if "closed" in str(e).lower():
+                raise e
 
     def _handle_signal(self, code: str, bsp, chan_30m, chan_5m=None):
         """处理信号：验证 -> 评分 -> 下单"""
@@ -374,33 +437,46 @@ class USTradingController(QObject):
         bsp_type = bsp.type2str()
         bsp_display = f"{'b' if is_buy else 's'}{bsp_type}"
         
-        # 1. 持仓校验 (与港股逻辑一致)
-        # 买入信号：若已有持仓，则跳过
-        # 卖出信号：若无持仓，则跳过
-        pos_qty = self.get_position_quantity(code)
-        if is_buy and pos_qty > 0:
-            self.log_message.emit(f"⏭️ [美股] {code} {bsp_display} 已有持仓({pos_qty})，跳过买入信号")
-            return
-        if not is_buy and pos_qty <= 0:
-            self.log_message.emit(f"⏭️ [美股] {code} {bsp_display} 无持仓，跳过卖出信号")
-            return
+        if is_buy:
+            # 1. 持仓上限校验 (Phase 4 Logic)
+            max_positions = TRADING_CONFIG.get('max_total_positions', 10)
+            try:
+                all_positions = self.ib.positions()
+                current_total = len(set([p.contract.symbol for p in all_positions if p.contract.secType == 'STK']))
+                
+                if current_total >= max_positions and pos_qty <= 0:
+                    self.log_message.emit(f"⏭️ [美股] 已达最大持仓上限({max_positions})，跳过 {code} 买入信号")
+                    return
+            except Exception as pe:
+                logger.warning(f"Failed to check US total positions: {pe}")
 
-        # 2. 挂单校验 (防止重复下单)
+            # 2. 个股已有持仓校验
+            if pos_qty > 0:
+                self.log_message.emit(f"⏭️ [美股] {code} {bsp_display} 已有持仓({pos_qty})，跳过买入信号")
+                return
+        else:
+            # 卖出信号：若无持仓，则跳过
+            if pos_qty <= 0:
+                self.log_message.emit(f"⏭️ [美股] {code} {bsp_display} 无持仓，跳过卖出信号")
+                return
+
+        # 3. 挂单校验 (防止重复下单)
         if self.check_pending_orders(code, 'BUY' if is_buy else 'SELL'):
             self.log_message.emit(f"⏭️ [美股] {code} {bsp_display} 已有相同方向挂单，跳过")
             return
 
-        # 3. ML 验证
-        if is_buy:
-            ml_res = self.ml_validator.validate_signal(chan_30m, bsp)
-            ml_valid = ml_res.get('is_valid', True)
-            ml_msg = ml_res.get('msg', 'N/A')
-            ml_score = ml_res.get('score', 'N/A')
-            self.log_message.emit(f"🤖 [美股] {code} ML 验证结果: {'✅ 通过' if ml_valid else '❌ 拦截'}, 分数: {ml_score}, 原因: {ml_msg}")
-            if not ml_valid:
-                return
+        # 4. ML 验证 (Phase 4: Buy/Sell 均获取评分，但 Sell 不拦截)
+        ml_res = self.ml_validator.validate_signal(chan_30m, bsp)
+        ml_valid = ml_res.get('is_valid', True)
+        ml_prob = ml_res.get('prob', 0)
+        ml_msg = ml_res.get('msg', 'N/A')
+        
+        self.log_message.emit(f"🤖 [美股] {code} ML 评分: {ml_prob*100:.1f}%, 验证: {'✅ 通过' if ml_valid else '❌ 拦截'}, 原因: {ml_msg}")
+        
+        if not ml_valid:
+            return
 
-        # 4. 生成图表并进行视觉评分
+        # 5. 生成图表并进行视觉评分
         chart_paths = []
         
         # 30M 图表
@@ -425,7 +501,7 @@ class USTradingController(QObject):
         self.log_message.emit(f"🎯 [美股] {code} 最终评分: {score}")
         
         if self.discord_bot and score >= self.min_visual_score:
-            msg = f"🗽 **美股自动化预警**\n股票: {code}\n信号: {bsp.type2str()}\n评分: **{score}分**\nML验证: {ml_score if is_buy else 'N/A'}"
+            msg = f"🗽 **美股自动化预警**\n股票: {code}\n信号: {bsp.type2str()}\n评分: **{score}分**\nML概率: {ml_prob*100:.1f}%"
             # 发送到 Discord (目前只发送第一张 30m)
             asyncio.run_coroutine_threadsafe(self.discord_bot.send_notification(msg, path_30m), self.discord_bot.loop)
 
@@ -438,27 +514,32 @@ class USTradingController(QObject):
             self.log_message.emit(f"⏭️ [美股] {code} 评分({score}) 低于阈值({self.min_visual_score})，跳过")
 
     def get_account_assets(self) -> Tuple[float, float, list]:
-        """获取资金和持仓信息"""
+        """获取资金和持仓信息 (增加日志与超时预防)"""
         if self.ib is None or not self.ib.isConnected(): return 0.0, 0.0, []
         try:
             available = 0.0
             total = 0.0
             
-            for v in self.ib.accountValues():
-                if v.tag == 'AvailableFunds' and v.currency == 'USD':
+            # 1. 优先从 accountValues 提取 (最快且不产生网络请求)
+            vals = self.ib.accountValues()
+            for v in vals:
+                if v.tag == 'AvailableFunds' and (v.currency == 'USD' or v.currency == ''):
                     available = float(v.value)
-                if v.tag == 'NetLiquidation' and v.currency == 'USD':
+                if v.tag == 'NetLiquidation' and (v.currency == 'USD' or v.currency == ''):
                     total = float(v.value)
             
+            # 2. 如果数据未就绪，使用 accountSummary (可能会产生的网络往返)
             if total == 0:
+                self.log_message.emit("⏳ [美股] 即时数据未就绪，尝试请求账户摘要 (AccountSummary)...")
                 summary = self.ib.accountSummary()
                 for item in summary:
                     if item.tag == 'AvailableFunds': available = float(item.value)
                     elif item.tag == 'NetLiquidation': total = float(item.value)
             
-            # 获取持仓 (使用 Portfolio 包含市值)
+            # 3. 获取持仓 (使用 Portfolio 获取包含市值的最新视图)
             positions_data = []
-            for item in self.ib.portfolio():
+            portfolio = self.ib.portfolio()
+            for item in portfolio:
                 if item.position != 0:
                     positions_data.append({
                         'symbol': item.contract.symbol,
@@ -470,6 +551,7 @@ class USTradingController(QObject):
             return available, total, positions_data
         except Exception as e:
             logger.error(f"Account query error: {e}")
+            self.log_message.emit(f"❌ [美股] 资金查询异常: {e}")
             return 0.0, 0.0, []
 
     def _execute_trade(self, code: str, action: str, price: float):
@@ -498,3 +580,32 @@ class USTradingController(QObject):
             self.log_message.emit(f"🚀 [美股] 订单已提交: {symbol} {action} {qty}")
         except Exception as e:
             self.log_message.emit(f"❌ [美股] 交易失败: {e}")
+
+    def close_all_positions(self):
+        """一键清仓所有美股持仓"""
+        if self.ib is None or not self.ib.isConnected():
+            self.log_message.emit("⚠️ [美股] IB 未连接，无法清仓")
+            return
+            
+        try:
+            positions = self.ib.positions()
+            if not positions:
+                self.log_message.emit("ℹ️ [美股] 当前无持仓，无需清仓")
+                return
+                
+            self.log_message.emit(f"🔥 [美股] 开始清仓 {len(positions)} 个持仓...")
+            for p in positions:
+                contract = p.contract
+                qty = int(p.position)
+                if qty == 0: continue
+                
+                action = "SELL" if qty > 0 else "BUY"
+                abs_qty = abs(qty)
+                
+                order = MarketOrder(action, abs_qty)
+                self.ib.placeOrder(contract, order)
+                self.log_message.emit(f"🚀 [美股] 已提交清仓订单: {contract.symbol} {action} {abs_qty}")
+                
+            self.log_message.emit("✅ [美股] 所有清仓订单已提交")
+        except Exception as e:
+            self.log_message.emit(f"❌ [美股] 清仓操作失败: {e}")
