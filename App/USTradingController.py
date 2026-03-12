@@ -143,6 +143,7 @@ class USTradingController(QObject):
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 nest_asyncio.apply(loop) # 针对当前循环应用补丁
+                self.loop = loop  # 存储当前活动循环
                 self.ib = IB()
                 
                 last_reconnect_time = 0
@@ -232,6 +233,8 @@ class USTradingController(QObject):
                 if loop and not loop.is_closed():
                     try: loop.close()
                     except: pass
+                if hasattr(self, 'loop') and self.loop == loop:
+                    self.loop = None
                     
         self.log_message.emit("🛑 [美股] 交易驱动线程已正常终止")
         print("[DEBUG] US Trading Thread EXIT.")
@@ -338,9 +341,13 @@ class USTradingController(QObject):
                         raise e
             
             self.log_message.emit("✅ [美股] 本轮策略扫描完成.")
+        except asyncio.CancelledError:
+            self.log_message.emit("⚠️ [美股] 扫描任务被取消")
+            raise
         except Exception as e:
             self.log_message.emit(f"❌ [美股] 扫描过程异常: {e}")
-            if "closed" in str(e).lower(): raise e
+            if "closed" in str(e).lower() or "loop" in str(e).lower():
+                raise
 
     def _analyze_stock(self, code: str, index: int = 0, total: int = 0):
         """分析单只股票"""
@@ -502,8 +509,11 @@ class USTradingController(QObject):
         
         if self.discord_bot and score >= self.min_visual_score:
             msg = f"🗽 **美股自动化预警**\n股票: {code}\n信号: {bsp.type2str()}\n评分: **{score}分**\nML概率: {ml_prob*100:.1f}%"
-            # 发送到 Discord (目前只发送第一张 30m)
-            asyncio.run_coroutine_threadsafe(self.discord_bot.send_notification(msg, path_30m), self.discord_bot.loop)
+            # 发送到 Discord (确保 Discord 机器人的事件循环依然存活)
+            if self.discord_bot.loop and self.discord_bot.loop.is_running():
+                asyncio.run_coroutine_threadsafe(self.discord_bot.send_notification(msg, path_30m), self.discord_bot.loop)
+            else:
+                self.log_message.emit("⚠️ [美股] Discord 机器人循环未运行，无法发送通知")
 
         if score >= self.min_visual_score:
             if self.dry_run:

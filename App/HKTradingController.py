@@ -1151,8 +1151,12 @@ class HKTradingController(QObject):
                         lot_size=lot_size
                     )
                     
-                    # 二次校验与强制舍入（双重保险）
-                    buy_quantity = (buy_quantity // lot_size) * lot_size
+                    # 二次校验与强制舍入（双重保险，增加零值保护）
+                    if lot_size > 0:
+                        buy_quantity = (buy_quantity // lot_size) * lot_size
+                    else:
+                        self.log_message.emit(f"⚠️ {code} 手数信息异常(0)，无法买入")
+                        buy_quantity = 0
                     
                     if buy_quantity <= 0:
                         self.log_message.emit(f"[{i}/{len(buy_signals)}] {code} 风险管理器建议不买入或资金不足 (计算股数: {buy_quantity})")
