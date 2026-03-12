@@ -146,8 +146,8 @@ class USTradingController(QObject):
 
         self.log_message.emit(f"🚀 [美股] 自动交易循环已启动 (分组: {self.watchlist_group})")
         
-        # 初始化扫描时间为过去，确保启动后在交易时段内能立即触发扫描
-        last_scan_bar = datetime.now() - timedelta(minutes=31)
+        # 初始化扫描时间为过去 (使用美东时间)，确保启动后在交易时段内能立即触发扫描
+        last_scan_bar = self.get_us_now() - timedelta(minutes=60)
         
         while self._is_running:
             try:
@@ -309,14 +309,15 @@ class USTradingController(QObject):
                     DATA_FIELD.FIELD_VOLUME: float(bar.volume), DATA_FIELD.FIELD_TURNOVER: 0.0, DATA_FIELD.FIELD_TURNRATE: 0.0
                 }))
 
+            # 4. 缠论分析 (30M)
             local_chan_config = CHAN_CONFIG.copy()
             local_chan_config['trigger_step'] = True
-            chan = CChan(code=code, data_src=DATA_SRC.IB, lv_list=[KL_TYPE.K_30M], config=CChanConfig(local_chan_config), autype=AUTYPE.QFQ)
-            chan.trigger_load({KL_TYPE.K_30M: units})
+            chan_30m = CChan(code=code, data_src=DATA_SRC.IB, lv_list=[KL_TYPE.K_30M], config=CChanConfig(local_chan_config), autype=AUTYPE.QFQ)
+            chan_30m.trigger_load({KL_TYPE.K_30M: units})
             
-            if len(chan[0]) == 0: return
+            if len(chan_30m[0]) == 0: return
 
-            bsp_list = chan.get_latest_bsp(number=0)
+            bsp_list = chan_30m.get_latest_bsp(number=0)
             us_now = self.get_us_now()
             in_market = self.is_trading_time()
             window_sec = 3600 if in_market else 86400
@@ -331,7 +332,31 @@ class USTradingController(QObject):
                     found_any = True
                     self.notified_signals[sig_key] = us_now.strftime("%Y-%m-%d %H:%M:%S")
                     self.log_message.emit(f"🎯 [美股] {code} 发现信号: {bsp.type2str()} @ {bsp.klu.time}")
-                    self._handle_signal(code, bsp, chan)
+                    
+                    # 5. 为了视觉评分捕捉 5M 数据
+                    chan_5m = None
+                    try:
+                        bars_5m = self.ib.reqHistoricalData(
+                            contract, endDateTime='', durationStr='10 D',
+                            barSizeSetting='5 mins', whatToShow='TRADES', useRTH=True
+                        )
+                        if bars_5m:
+                            units_5m = []
+                            for bar in bars_5m:
+                                dt_5m = bar.date
+                                if not isinstance(dt_5m, datetime): dt_5m = datetime(dt_5m.year, dt_5m.month, dt_5m.day)
+                                units_5m.append(CKLine_Unit({
+                                    DATA_FIELD.FIELD_TIME: CTime(dt_5m.year, dt_5m.month, dt_5m.day, dt_5m.hour, dt_5m.minute),
+                                    DATA_FIELD.FIELD_OPEN: float(bar.open), DATA_FIELD.FIELD_HIGH: float(bar.high),
+                                    DATA_FIELD.FIELD_LOW: float(bar.low), DATA_FIELD.FIELD_CLOSE: float(bar.close),
+                                    DATA_FIELD.FIELD_VOLUME: float(bar.volume), DATA_FIELD.FIELD_TURNOVER: 0.0, DATA_FIELD.FIELD_TURNRATE: 0.0
+                                }))
+                            chan_5m = CChan(code=code, data_src=DATA_SRC.IB, lv_list=[KL_TYPE.K_5M], config=CChanConfig(local_chan_config), autype=AUTYPE.QFQ)
+                            chan_5m.trigger_load({KL_TYPE.K_5M: units_5m})
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch 5m data for {code}: {e}")
+
+                    self._handle_signal(code, bsp, chan_30m, chan_5m)
             
             if not found_any and bsp_list:
                  logger.debug(f"{code} no new signal, latest at {bsp_list[-1].klu.time}")
@@ -339,7 +364,7 @@ class USTradingController(QObject):
         except Exception as e:
             logger.error(f"Analysis error {code}: {e}")
 
-    def _handle_signal(self, code: str, bsp, chan):
+    def _handle_signal(self, code: str, bsp, chan_30m, chan_5m=None):
         """处理信号：验证 -> 评分 -> 下单"""
         is_buy = bsp.is_buy
         bsp_type = bsp.type2str()
@@ -363,25 +388,42 @@ class USTradingController(QObject):
 
         # 3. ML 验证
         if is_buy:
-            ml_res = self.ml_validator.validate_signal(chan, bsp)
-            if not ml_res.get('is_valid', True):
-                self.log_message.emit(f"🚫 [美股] {code} ML 过滤: {ml_res.get('msg')}")
+            ml_res = self.ml_validator.validate_signal(chan_30m, bsp)
+            ml_valid = ml_res.get('is_valid', True)
+            ml_msg = ml_res.get('msg', 'N/A')
+            ml_score = ml_res.get('score', 'N/A')
+            self.log_message.emit(f"🤖 [美股] {code} ML 验证结果: {'✅ 通过' if ml_valid else '❌ 拦截'}, 分数: {ml_score}, 原因: {ml_msg}")
+            if not ml_valid:
                 return
 
-        chart_path = os.path.abspath(os.path.join(self.charts_dir, f"{code.replace('.', '_')}.png"))
-        plot_driver = CPlotDriver(chan, plot_config=CHART_CONFIG, plot_para=CHART_PARA)
-        plt.savefig(chart_path, bbox_inches='tight', dpi=120)
-        plt.close('all')
+        # 4. 生成图表并进行视觉评分
+        chart_paths = []
         
-        self.log_message.emit(f"🧠 [美股] 视觉评分 {code}...")
-        visual_res = self.visual_judge.evaluate([chart_path], bsp.type2str())
+        # 30M 图表
+        path_30m = os.path.abspath(os.path.join(self.charts_dir, f"{code.replace('.', '_')}_30m.png"))
+        plot_30m = CPlotDriver(chan_30m, plot_config=CHART_CONFIG, plot_para=CHART_PARA)
+        plt.savefig(path_30m, bbox_inches='tight', dpi=120)
+        plt.close('all')
+        chart_paths.append(path_30m)
+
+        # 5M 图表 (如果有)
+        if chan_5m:
+            path_5m = os.path.abspath(os.path.join(self.charts_dir, f"{code.replace('.', '_')}_5m.png"))
+            plot_5m = CPlotDriver(chan_5m, plot_config=CHART_CONFIG, plot_para=CHART_PARA)
+            plt.savefig(path_5m, bbox_inches='tight', dpi=120)
+            plt.close('all')
+            chart_paths.append(path_5m)
+
+        self.log_message.emit(f"🧠 [美股] 发起视觉评分 {code} ({len(chart_paths)} 张图片)...")
+        visual_res = self.visual_judge.evaluate(chart_paths, bsp.type2str())
         score = visual_res.get('score', 0)
         
-        self.log_message.emit(f"🎯 [美股] {code} 信号: {bsp.type2str()}, 评分: {score}")
+        self.log_message.emit(f"🎯 [美股] {code} 最终评分: {score}")
         
         if self.discord_bot and score >= self.min_visual_score:
-            msg = f"🗽 **美股自动化预警**\n股票: {code}\n信号: {bsp.type2str()}\n评分: **{score}分**"
-            asyncio.run_coroutine_threadsafe(self.discord_bot.send_notification(msg, chart_path), self.discord_bot.loop)
+            msg = f"🗽 **美股自动化预警**\n股票: {code}\n信号: {bsp.type2str()}\n评分: **{score}分**\nML验证: {ml_score if is_buy else 'N/A'}"
+            # 发送到 Discord (目前只发送第一张 30m)
+            asyncio.run_coroutine_threadsafe(self.discord_bot.send_notification(msg, path_30m), self.discord_bot.loop)
 
         if score >= self.min_visual_score:
             if self.dry_run:
@@ -410,15 +452,15 @@ class USTradingController(QObject):
                     if item.tag == 'AvailableFunds': available = float(item.value)
                     elif item.tag == 'NetLiquidation': total = float(item.value)
             
-            # 获取持仓
+            # 获取持仓 (使用 Portfolio 包含市值)
             positions_data = []
-            for p in self.ib.positions():
-                if p.position != 0:
+            for item in self.ib.portfolio():
+                if item.position != 0:
                     positions_data.append({
-                        'symbol': p.contract.symbol,
-                        'qty': int(p.position),
-                        'mkt_value': round(p.marketValue, 2) if hasattr(p, 'marketValue') else 0.0,
-                        'avg_cost': round(p.avgCost, 2)
+                        'symbol': item.contract.symbol,
+                        'qty': int(item.position),
+                        'mkt_value': round(item.marketValue, 2),
+                        'avg_cost': round(item.averageCost, 2)
                     })
             
             return available, total, positions_data
