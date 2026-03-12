@@ -258,6 +258,11 @@ class USTradingController(QObject):
             elif cmd_type == 'CLOSE_ALL':
                 self.log_message.emit("🔥 [美股] 正在执行全账户清仓...")
                 self._close_all_positions()
+            elif cmd_type == 'EXECUTE_TRADE':
+                # 在主线程安全执行交易指令
+                c, a, p = data['code'], data['action'], data['price']
+                self.log_message.emit(f"🚀 [美股] 执行经过后台验证的指令: {c} {a}")
+                self._execute_trade(c, a, p)
         except Exception as e:
             self.log_message.emit(f"⚠️ [美股] 指令执行失败 ({cmd_type}): {e}")
 
@@ -485,6 +490,10 @@ class USTradingController(QObject):
                 self.log_message.emit(f"⏭️ [美股] {code} {bsp_display} 已有相同方向挂单，跳过")
                 return
 
+        except Exception as e:
+            self.log_message.emit(f"❌ [美股] 信号预校准异常: {e}")
+            return
+
         # 4. ML 验证 (Phase 4: Buy/Sell 均获取评分，但 Sell 不拦截)
         ml_res = self.ml_validator.validate_signal(chan_30m, bsp)
         ml_valid = ml_res.get('is_valid', True)
@@ -532,7 +541,14 @@ class USTradingController(QObject):
             if self.dry_run:
                 self.log_message.emit(f"📝 [美股-模拟] {code} 满足条件({score}分)，跳过实盘下单")
             else:
-                self._execute_trade(code, "BUY" if bsp.is_buy else "SELL", bsp.klu.close)
+                # 关键：不要在后台线程直接调用 _execute_trade (它包含非线程安全的 IB 操作)
+                # 将下单指令发送回主线程队列执行
+                self.cmd_queue.put(('EXECUTE_TRADE', {
+                    'code': code,
+                    'action': "BUY" if bsp.is_buy else "SELL",
+                    'price': bsp.klu.close
+                }))
+                self.log_message.emit(f"📩 [美股] 信号验证通过，下单指令已发送至主线程队列")
         else:
             self.log_message.emit(f"⏭️ [美股] {code} 评分({score}) 低于阈值({self.min_visual_score})，跳过")
 

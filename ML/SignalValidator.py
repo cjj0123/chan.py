@@ -150,28 +150,33 @@ class SignalValidator:
         try:
             # 1. 提取特征
             features = self.extractor.extract_bsp_features(chan, bsp)
-            row = self._prepare_feature_row(features)
+            
+            # 2. 转换特征为 DataFrame 以对齐特征名 (解决 XGBoost/LightGBM 报错)
+            feat_names = sorted(self.feature_meta.items(), key=lambda x: x[1])
+            feat_names = [f[0] for f in feat_names]
+            
+            # 创建单行 DataFrame，确保列名完全匹配 feature_meta
+            row_data = {name: float(features.get(name, 0.0)) for name in feat_names}
+            df_input = pd.DataFrame([row_data])
             
             probs = {}
             
-            # 2. 各模型分别预测
+            # 3. 各模型分别预测
             # XGBoost
             if 'XGB' in self.models:
-                dtest = xgb.DMatrix([row])
+                # DMatrix 包含列名
+                dtest = xgb.DMatrix(df_input)
                 probs['XGB'] = float(self.models['XGB'].predict(dtest)[0])
                 
             # LightGBM
             if 'LGB' in self.models:
-                probs['LGB'] = float(self.models['LGB'].predict([row])[0])
+                probs['LGB'] = float(self.models['LGB'].predict(df_input)[0])
                 
             # MLP
             if 'MLP' in self.models:
                 with torch.no_grad():
-                    # 特征标准化 (必须使用训练时的均值和标准差)
-                    x = np.array(row)
-                    feat_names = sorted(self.feature_meta.items(), key=lambda x: x[1])
-                    feat_names = [f[0] for f in feat_names]
-                    
+                    # 特征标准化
+                    x = df_input.values[0]
                     mean_vec = np.array([self.mlp_norm['mean'].get(name, 0) for name in feat_names])
                     std_vec = np.array([self.mlp_norm['std'].get(name, 1e-7) for name in feat_names])
                     x_norm = (x - mean_vec) / std_vec
