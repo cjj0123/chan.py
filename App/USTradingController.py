@@ -17,6 +17,7 @@ from typing import List, Dict, Optional, Tuple, Any
 from pathlib import Path
 import queue
 import nest_asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
@@ -83,6 +84,9 @@ class USTradingController(QObject):
         # 信号历史，用于去重
         self.notified_signals = {}
         self.visual_score_cache = {}
+        
+        # 线程池：用于执行耗时的 AI 评分和绘图任务，防止阻塞 IB 驱动循环
+        self.executor = ThreadPoolExecutor(max_workers=3)
 
         self.us_tz = pytz.timezone('America/New_York')
 
@@ -428,7 +432,20 @@ class USTradingController(QObject):
                     except Exception as e:
                         logger.warning(f"Failed to fetch 5m data for {code}: {e}")
 
-                    self._handle_signal(code, bsp, chan_30m, chan_5m)
+                    # 捕获当前环境状态（持仓、挂单等），确保线程池任务有最新的基准数据
+                    # 避免在子线程中直接访问非线程安全的 IB 对象
+                    pos_qty = self.get_position_quantity(code)
+                    has_pending = self.check_pending_orders(code, 'BUY' if bsp.is_buy else 'SELL')
+                    
+                    try:
+                        all_pos = self.ib.positions()
+                        current_total_pos = len(set([p.contract.symbol for p in all_pos if p.contract.secType == 'STK']))
+                    except:
+                        current_total_pos = 0
+
+                    # 将后续耗时的验证、绘图、AI评分、下单逻辑移至线程池执行
+                    self.executor.submit(self._handle_signal_sync, code, bsp, chan_30m, chan_5m, 
+                                        pos_qty=pos_qty, has_pending=has_pending, current_total_pos=current_total_pos)
             
             if not found_any and bsp_list:
                  logger.debug(f"{code} no new signal, latest at {bsp_list[-1].klu.time}")
@@ -438,39 +455,35 @@ class USTradingController(QObject):
             if "closed" in str(e).lower():
                 raise e
 
-    def _handle_signal(self, code: str, bsp, chan_30m, chan_5m=None):
-        """处理信号：验证 -> 评分 -> 下单"""
-        is_buy = bsp.is_buy
-        bsp_type = bsp.type2str()
-        bsp_display = f"{'b' if is_buy else 's'}{bsp_type}"
-        
-        if is_buy:
-            # 1. 持仓上限校验 (Phase 4 Logic)
-            max_positions = TRADING_CONFIG.get('max_total_positions', 10)
-            try:
-                all_positions = self.ib.positions()
-                current_total = len(set([p.contract.symbol for p in all_positions if p.contract.secType == 'STK']))
-                
-                if current_total >= max_positions and pos_qty <= 0:
+    def _handle_signal_sync(self, code: str, bsp, chan_30m, chan_5m=None, 
+                           pos_qty: int = 0, has_pending: bool = False, current_total_pos: int = 0):
+        """处理信号的同步入口（在线程池中运行）"""
+        try:
+            is_buy = bsp.is_buy
+            bsp_type = bsp.type2str()
+            bsp_display = f"{'b' if is_buy else 's'}{bsp_type}"
+            
+            if is_buy:
+                # 1. 持仓上限校验 (使用预捕获的状态)
+                max_positions = TRADING_CONFIG.get('max_total_positions', 10)
+                if current_total_pos >= max_positions and pos_qty <= 0:
                     self.log_message.emit(f"⏭️ [美股] 已达最大持仓上限({max_positions})，跳过 {code} 买入信号")
                     return
-            except Exception as pe:
-                logger.warning(f"Failed to check US total positions: {pe}")
 
-            # 2. 个股已有持仓校验
-            if pos_qty > 0:
-                self.log_message.emit(f"⏭️ [美股] {code} {bsp_display} 已有持仓({pos_qty})，跳过买入信号")
-                return
-        else:
-            # 卖出信号：若无持仓，则跳过
-            if pos_qty <= 0:
-                self.log_message.emit(f"⏭️ [美股] {code} {bsp_display} 无持仓，跳过卖出信号")
-                return
+                # 2. 个股已有持仓校验
+                if pos_qty > 0:
+                    self.log_message.emit(f"⏭️ [美股] {code} {bsp_display} 已有持仓({pos_qty})，跳过买入信号")
+                    return
+            else:
+                # 卖出信号：若无持仓，则跳过
+                if pos_qty <= 0:
+                    self.log_message.emit(f"⏭️ [美股] {code} {bsp_display} 无持仓，跳过卖出信号")
+                    return
 
-        # 3. 挂单校验 (防止重复下单)
-        if self.check_pending_orders(code, 'BUY' if is_buy else 'SELL'):
-            self.log_message.emit(f"⏭️ [美股] {code} {bsp_display} 已有相同方向挂单，跳过")
-            return
+            # 3. 挂单校验 (使用预捕获的状态)
+            if has_pending:
+                self.log_message.emit(f"⏭️ [美股] {code} {bsp_display} 已有相同方向挂单，跳过")
+                return
 
         # 4. ML 验证 (Phase 4: Buy/Sell 均获取评分，但 Sell 不拦截)
         ml_res = self.ml_validator.validate_signal(chan_30m, bsp)
@@ -522,6 +535,10 @@ class USTradingController(QObject):
                 self._execute_trade(code, "BUY" if bsp.is_buy else "SELL", bsp.klu.close)
         else:
             self.log_message.emit(f"⏭️ [美股] {code} 评分({score}) 低于阈值({self.min_visual_score})，跳过")
+
+    def _handle_signal(self, code: str, bsp, chan_30m, chan_5m=None):
+        """兼容性别名"""
+        self.executor.submit(self._handle_signal_sync, code, bsp, chan_30m, chan_5m)
 
     def get_account_assets(self) -> Tuple[float, float, list]:
         """获取资金和持仓信息 (增加日志与超时预防)"""

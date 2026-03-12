@@ -916,13 +916,45 @@ class TraderGUI(QMainWindow):
         if reply == QMessageBox.StandardButton.Yes:
             self.log_text.append("🔄 正在准备重启...")
             
-            # 安全终止活动线程
+            # 1. 停止所有的交易和监控控制器 (确保释放资源)
+            try:
+                if hasattr(self, 'hk_trading_controller') and self.hk_trading_controller:
+                    self.hk_trading_controller.stop()
+                if hasattr(self, 'us_trading_controller') and self.us_trading_controller:
+                    self.us_trading_controller.stop()
+                if hasattr(self, 'monitor_controller') and self.monitor_controller:
+                    self.monitor_controller.stop()
+            except Exception as e:
+                print(f"Error stopping controllers: {e}")
+
+            # 2. 安全终止活动线程
             if hasattr(self, 'update_db_thread') and self.update_db_thread and self.update_db_thread.isRunning():
                 self.update_db_thread.stop()
                 self.update_db_thread.wait(1000)
             
-            # 使用 os.execl 重生新进程
-            os.execl(sys.executable, sys.executable, *sys.argv)
+            # 3. 使用 os.execv 强制重启进程 (替换当前镜像)
+            import sys
+            import os
+            
+            self.log_text.append("🚀 正在重新实例化进程并重载代码...")
+            
+            try:
+                # 重新计算可执行路径和参数
+                executable = sys.executable
+                args = [executable] + sys.argv
+                
+                # 在 Unix 系统上使用 os.execv 完美替换进程
+                # 这会立即终止当前 Python 实例并启动新实例
+                os.execv(executable, args)
+            except Exception as e:
+                print(f"Restart failed with os.execv: {e}")
+                # 备选方案：如果 os.execv 失败，尝试 QProcess (虽然概率较低)
+                from PyQt6.QtCore import QProcess
+                if QProcess.startDetached(sys.executable, sys.argv):
+                    QApplication.quit()
+                    sys.exit(0)
+                else:
+                    QMessageBox.critical(self, "重启失败", f"无法自动重启: {e}\n请手动关闭并重新运行程序。")
 
     def get_chan_config(self):
         """获取缠论配置"""
@@ -1547,6 +1579,12 @@ class TraderGUI(QMainWindow):
         if hasattr(self, 'hk_trading_controller') and self.hk_trading_controller:
             try:
                 self.hk_trading_controller.stop()
+            except:
+                pass
+
+        if hasattr(self, 'us_trading_controller') and self.us_trading_controller:
+            try:
+                self.us_trading_controller.stop()
             except:
                 pass
                 
