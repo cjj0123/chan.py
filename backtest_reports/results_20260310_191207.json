@@ -1,0 +1,91 @@
+{
+  "initial_funds": 100000.0,
+  "final_cash": 104679.24615,
+  "final_portfolio_value": 104679.24615,
+  "total_return_pct": 0.04679246150000006,
+  "final_positions": {},
+  "trades_count": 4,
+  "total_buys": 2,
+  "total_sells": 2,
+  "total_profit_loss_no_cost": 4834.0,
+  "profit_factor": 0.09115079291966982,
+  "max_drawdown_pct": 0.0002237401404934793,
+  "equity_curve": [
+    {
+      "time": "2025-04-30 00:00:00",
+      "value": 100000.0
+    },
+    {
+      "time": "2025-04-30 00:00:00",
+      "value": 99949.23516
+    },
+    {
+      "time": "2025-06-13 00:00:00",
+      "value": 103701.036608
+    },
+    {
+      "time": "2025-08-01 00:00:00",
+      "value": 103677.8345235
+    },
+    {
+      "time": "2025-08-04 00:00:00",
+      "value": 104679.24615
+    }
+  ],
+  "trade_log": [
+    {
+      "time": "2025-04-30 00:00:00",
+      "code": "US.ADM",
+      "action": "BUY",
+      "qty": 800,
+      "price": 45.7,
+      "amount": 36560.0,
+      "cost": 50.76484,
+      "funds_after": 63389.23516
+    },
+    {
+      "time": "2025-06-13 00:00:00",
+      "code": "US.ADM",
+      "action": "SELL",
+      "qty": 800,
+      "price": 50.46,
+      "amount": 40368.0,
+      "cost": 56.198552,
+      "funds_after": 103701.036608
+    },
+    {
+      "time": "2025-08-01 00:00:00",
+      "code": "US.UEC",
+      "action": "BUY",
+      "qty": 1900,
+      "price": 8.67,
+      "amount": 16473.0,
+      "cost": 23.2020845,
+      "funds_after": 87204.8345235
+    },
+    {
+      "time": "2025-08-04 00:00:00",
+      "code": "US.UEC",
+      "action": "SELL",
+      "qty": 1900,
+      "price": 9.21,
+      "amount": 17499.0,
+      "cost": 24.5883735,
+      "funds_after": 104679.24615
+    }
+  ],
+  "cost_statistics": {
+    "total_cost": 154.75385,
+    "total_commission": 33.269999999999996,
+    "total_stamp_duty": 113,
+    "total_trading_fee": 6.2658499999999995,
+    "total_clearing_fee": 2.218
+  },
+  "win_rate": 1.0,
+  "avg_profit": 2417.0,
+  "avg_loss": 0,
+  "profit_loss_ratio": Infinity,
+  "annualized_return": 0.05532017017263691,
+  "trades_per_month": 0.3870967741935484,
+  "stop_loss_triggered": 0
+}

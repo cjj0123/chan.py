@@ -51,7 +51,7 @@ class USTradingController(QObject):
     """
     log_message = pyqtSignal(str)
     scan_finished = pyqtSignal(int, int, int, int)
-    funds_updated = pyqtSignal(float, float) # (available, total)
+    funds_updated = pyqtSignal(float, float, list) # (available, total, positions)
     
     def __init__(self, 
                  us_watchlist_group: str = "美股", 
@@ -77,7 +77,7 @@ class USTradingController(QObject):
         self.visual_judge = VisualJudge()
         self.ml_validator = SignalValidator()
         self.min_visual_score = TRADING_CONFIG.get('min_visual_score', 70)
-        self.dry_run = TRADING_CONFIG.get('dry_run', True)
+        self.dry_run = TRADING_CONFIG.get('us_dry_run', False)
         
         # 信号历史，用于去重
         self.notified_signals = {}
@@ -116,9 +116,6 @@ class USTradingController(QObject):
         self.cmd_queue.put(('QUERY_FUNDS', None))
         self.log_message.emit("💰 [美股] 已加入资金查询队列")
 
-    def place_test_order(self, code: str = "US.AAPL"):
-        self.cmd_queue.put(('TEST_ORDER', code))
-        self.log_message.emit(f"🧪 [美股] 已加入 {code} 下单测试队列")
 
     def is_trading_time(self) -> bool:
         """判断美股交易时间 (09:30 - 16:00 ET)"""
@@ -149,7 +146,8 @@ class USTradingController(QObject):
 
         self.log_message.emit(f"🚀 [美股] 自动交易循环已启动 (分组: {self.watchlist_group})")
         
-        last_scan_bar = datetime.now().replace(minute=(datetime.now().minute // 30) * 30, second=0, microsecond=0)
+        # 初始化扫描时间为过去，确保启动后在交易时段内能立即触发扫描
+        last_scan_bar = datetime.now() - timedelta(minutes=31)
         
         while self._is_running:
             try:
@@ -159,24 +157,45 @@ class USTradingController(QObject):
                 # 2. 处理 GUI 命令队列 (线程安全地在 IB 线程执行 IB 调用)
                 while not self.cmd_queue.empty():
                     cmd_type, data = self.cmd_queue.get_nowait()
+                    self.log_message.emit(f"📥 [队列] 正在执行指令: {cmd_type}")
                     self._handle_gui_command(cmd_type, data)
+
+                # Phase 4: 检查并热加载最新的优化的模型
+                self.ml_validator.check_and_reload()
 
                 if self._is_paused:
                     continue
 
                 # 3. 交易时段判断与扫描逻辑
+                now_et = self.get_us_now()
                 if not self.is_trading_time():
-                    # 非交易时段，心跳变慢，但不停止，以便处理 GUI 强制指令
-                    self.ib.sleep(5)
+                    # 非交易时段，心跳变慢
+                    if now_et.second % 60 == 0:
+                        self.log_message.emit(f"💤 非交易时段 (NY: {now_et.strftime('%H:%M:%S')}), 等待 09:30 开盘...")
+                    self.ib.sleep(10)
                     continue
                 
-                now = datetime.now()
-                current_bar = now.replace(minute=(now.minute // 30) * 30, second=0, microsecond=0)
+                # 使用纽约时间计算 30 分钟 K 线 Bar
+                current_bar_et = now_et.replace(minute=(now_et.minute // 30) * 30, second=0, microsecond=0)
                 
-                if current_bar > last_scan_bar:
-                    if now.minute % 30 >= 2: # 延迟2分钟等待数据稳定
-                        self._perform_strategy_scan()
-                        last_scan_bar = current_bar
+                if current_bar_et > last_scan_bar:
+                    # 检查是否满足 2 分钟稳定延迟 (开盘前 2 分钟通常数据不全)
+                    wait_minutes = now_et.minute % 30
+                    if wait_minutes < 2:
+                        if now_et.second % 10 == 0:
+                            self.log_message.emit(f"⏳ 等待数据稳定 (NY: {now_et.strftime('%H:%M:%S')}, 已过 {wait_minutes}/2 分钟)...")
+                        self.ib.sleep(1)
+                        continue
+                        
+                    self.log_message.emit(f"⚡ [美股] 触发新周期扫描 (Bar: {current_bar_et.strftime('%H:%M')})")
+                    self._perform_strategy_scan()
+                    last_scan_bar = current_bar_et
+                else:
+                    # 心跳日志，确认程序仍在运行
+                    if now_et.second % 60 == 0:
+                        next_scan = current_bar_et + timedelta(minutes=30, seconds=120)
+                        self.log_message.emit(f"💓 扫描心跳 (NY: {now_et.strftime('%H:%M')}), 下次扫描约在 {next_scan.strftime('%H:%M:%S')}")
+                        self.ib.sleep(1)
                 
             except Exception as e:
                 self.log_message.emit(f"⚠️ [美股] 循环异常: {e}")
@@ -200,28 +219,35 @@ class USTradingController(QObject):
             if cmd_type == 'FORCE_SCAN':
                 self._perform_strategy_scan()
             elif cmd_type == 'QUERY_FUNDS':
-                available, total = self.get_account_assets()
-                self.funds_updated.emit(available, total)
-            elif cmd_type == 'TEST_ORDER':
-                self._do_test_order(data)
+                available, total, positions = self.get_account_assets()
+                self.funds_updated.emit(available, total, positions)
         except Exception as e:
             self.log_message.emit(f"⚠️ [美股] 指令执行失败 ({cmd_type}): {e}")
 
-    def _do_test_order(self, code: str):
-        """执行测试下单"""
-        try:
-            symbol = code.split('.')[-1]
-            contract = Stock(symbol, 'SMART', 'USD')
-            self.ib.qualifyContracts(contract)
-            order = MarketOrder("BUY", 1)
-            self.ib.placeOrder(contract, order)
-            self.log_message.emit(f"🧪 [测试] 已提交 1 股 {symbol} 市价单。请检查 TWS/Gateway。")
-        except Exception as e:
-            self.log_message.emit(f"❌ [测试] 下单失败: {e}")
+
+    def get_position_quantity(self, code: str) -> int:
+        """获取指定代码的持仓数量"""
+        if not self.ib.isConnected(): return 0
+        symbol = code.split('.')[-1]
+        for p in self.ib.positions():
+            if p.contract.symbol == symbol:
+                return int(p.position)
+        return 0
+
+    def check_pending_orders(self, code: str, side: str) -> bool:
+        """检查是否有相同方向的未成交订单"""
+        if not self.ib.isConnected(): return False
+        symbol = code.split('.')[-1]
+        for trade in self.ib.openTrades():
+            if trade.contract.symbol == symbol and trade.order.action == side.upper():
+                # 状态包括已提交、待提交、预提交等
+                if trade.orderStatus.status in ('PendingSubmit', 'PreSubmitted', 'Submitted'):
+                    return True
+        return False
 
     def _perform_strategy_scan(self):
         """执行策略扫描"""
-        self.log_message.emit("🔍 [美股] 正在获取自选股并执行扫描...")
+        self.log_message.emit(f"🔍 [美股] 正在从自选股分组 '{self.watchlist_group}' 获取代码并执行扫描...")
         try:
             from Monitoring.FutuMonitor import FutuMonitor
             monitor = FutuMonitor()
@@ -315,7 +341,28 @@ class USTradingController(QObject):
 
     def _handle_signal(self, code: str, bsp, chan):
         """处理信号：验证 -> 评分 -> 下单"""
-        if bsp.is_buy:
+        is_buy = bsp.is_buy
+        bsp_type = bsp.type2str()
+        bsp_display = f"{'b' if is_buy else 's'}{bsp_type}"
+        
+        # 1. 持仓校验 (与港股逻辑一致)
+        # 买入信号：若已有持仓，则跳过
+        # 卖出信号：若无持仓，则跳过
+        pos_qty = self.get_position_quantity(code)
+        if is_buy and pos_qty > 0:
+            self.log_message.emit(f"⏭️ [美股] {code} {bsp_display} 已有持仓({pos_qty})，跳过买入信号")
+            return
+        if not is_buy and pos_qty <= 0:
+            self.log_message.emit(f"⏭️ [美股] {code} {bsp_display} 无持仓，跳过卖出信号")
+            return
+
+        # 2. 挂单校验 (防止重复下单)
+        if self.check_pending_orders(code, 'BUY' if is_buy else 'SELL'):
+            self.log_message.emit(f"⏭️ [美股] {code} {bsp_display} 已有相同方向挂单，跳过")
+            return
+
+        # 3. ML 验证
+        if is_buy:
             ml_res = self.ml_validator.validate_signal(chan, bsp)
             if not ml_res.get('is_valid', True):
                 self.log_message.emit(f"🚫 [美股] {code} ML 过滤: {ml_res.get('msg')}")
@@ -338,37 +385,46 @@ class USTradingController(QObject):
 
         if score >= self.min_visual_score:
             if self.dry_run:
-                self.log_message.emit(f"📝 [美股-模拟] {code} 跳过实盘下单")
+                self.log_message.emit(f"📝 [美股-模拟] {code} 满足条件({score}分)，跳过实盘下单")
             else:
                 self._execute_trade(code, "BUY" if bsp.is_buy else "SELL", bsp.klu.close)
+        else:
+            self.log_message.emit(f"⏭️ [美股] {code} 评分({score}) 低于阈值({self.min_visual_score})，跳过")
 
-    def get_account_assets(self) -> Tuple[float, float]:
-        """获取资金信息 - 此方法现在由 IB 线程调用"""
-        if not self.ib.isConnected(): return 0.0, 0.0
+    def get_account_assets(self) -> Tuple[float, float, list]:
+        """获取资金和持仓信息"""
+        if not self.ib.isConnected(): return 0.0, 0.0, []
         try:
-            # 1. 尝试从已更新的清单中找
             available = 0.0
             total = 0.0
             
-            # 使用同步阻塞但在 IB 线程中安全的 waitOnUpdate
-            # 或者直接读取 accountValues (ib-insync 会自动维护它)
             for v in self.ib.accountValues():
                 if v.tag == 'AvailableFunds' and v.currency == 'USD':
                     available = float(v.value)
                 if v.tag == 'NetLiquidation' and v.currency == 'USD':
                     total = float(v.value)
             
-            # 如果没拿到，重刷一次
             if total == 0:
                 summary = self.ib.accountSummary()
                 for item in summary:
                     if item.tag == 'AvailableFunds': available = float(item.value)
                     elif item.tag == 'NetLiquidation': total = float(item.value)
             
-            return available, total
+            # 获取持仓
+            positions_data = []
+            for p in self.ib.positions():
+                if p.position != 0:
+                    positions_data.append({
+                        'symbol': p.contract.symbol,
+                        'qty': int(p.position),
+                        'mkt_value': round(p.marketValue, 2) if hasattr(p, 'marketValue') else 0.0,
+                        'avg_cost': round(p.avgCost, 2)
+                    })
+            
+            return available, total, positions_data
         except Exception as e:
-            logger.error(f"Funds error: {e}")
-            return 0.0, 0.0
+            logger.error(f"Account query error: {e}")
+            return 0.0, 0.0, []
 
     def _execute_trade(self, code: str, action: str, price: float):
         """执行交易"""
@@ -376,18 +432,20 @@ class USTradingController(QObject):
             symbol = code.split('.')[-1]
             contract = Stock(symbol, 'SMART', 'USD')
             self.ib.qualifyContracts(contract)
-            qty = max(1, int(2000 / price))
+            # Phase 4 Update: 增加单只买入金额到 10,000 USD
+            qty = max(1, int(10000 / price))
             
             if action == "SELL":
                 # 获取持仓
-                curr_qty = 0
-                for p in self.ib.positions():
-                    if p.contract.symbol == symbol:
-                        curr_qty = p.position
-                        break
+                curr_qty = self.get_position_quantity(code)
                 if curr_qty < qty:
+                    old_qty = qty
                     qty = curr_qty
-                    if qty <= 0: return
+                    if qty <= 0:
+                        self.log_message.emit(f"⏭️ [美股] {symbol} {action} 无持仓，跳过执行")
+                        return
+                    else:
+                        self.log_message.emit(f"ℹ️ [美股] {symbol} {action} 持仓不足，由 {old_qty} 调整为 {qty}")
 
             order = MarketOrder(action, qty)
             self.ib.placeOrder(contract, order)

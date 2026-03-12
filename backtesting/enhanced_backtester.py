@@ -38,6 +38,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+try:
+    from ML.SignalValidator import SignalValidator
+    logger.info("✅ ML 验证模块加载成功")
+except ImportError as e:
+    logger.warning(f"⚠️ ML 验证模块加载失败: {e}，回测将仅使用标准策略。")
+    SignalValidator = None
+
 
 # ============================================================================
 # 港股精确交易成本计算
@@ -657,7 +664,8 @@ class EnhancedBacktestEngine:
                  end_date: str = "2025-12-31",
                  watchlist: List[str] = None,
                  lot_size_file: str = "stock_cache/lot_size_config.json",
-                 use_hk_costs: bool = True):
+                 use_hk_costs: bool = True,
+                 use_ml: bool = False):
         """
         初始化回测引擎
         
@@ -668,12 +676,14 @@ class EnhancedBacktestEngine:
             watchlist: 股票列表
             lot_size_file: 每手股数配置文件
             use_hk_costs: 是否使用港股精确成本
+            use_ml: 是否使用机器学习过滤信号
         """
         self.initial_funds = initial_funds
         self.start_date = start_date
         self.end_date = end_date
         self.watchlist = watchlist or ["HK.00700", "HK.00836", "HK.02688"]
         self.use_hk_costs = use_hk_costs
+        self.use_ml = use_ml
         
         # 加载每手股数配置
         self.lot_size_map = self._load_lot_size_map(lot_size_file)
@@ -683,6 +693,16 @@ class EnhancedBacktestEngine:
         self.chan_config = self._create_chan_config()
         
         self.logger = logging.getLogger(__name__)
+
+        # 初始化 ML 验证器
+        self.ml_validator = None
+        if self.use_ml and SignalValidator:
+            try:
+                self.ml_validator = SignalValidator()
+                self.logger.info("🤖 机器学习验证器已就绪")
+            except Exception as e:
+                self.logger.error(f"❌ 机器学习验证器初始化失败: {e}")
+                self.use_ml = False
     
     def _load_lot_size_map(self, lot_size_file: str) -> Dict[str, int]:
         """加载每手股数配置"""
@@ -748,14 +768,44 @@ class EnhancedBacktestEngine:
         对买点质量进行评分（0-100）
         
         评分纬度：
-        1. MACD 辅助确认（+40）: 最近一根 K 线 MACD DIF > DEA 或者 MACD bar 由负转正
-        2. 成交量确认（+30）: 信号 K 线成交量 >= 近 20 根均量 × 0.8
-        3. 买点类型加权（+30）: 1类买点 > 2类买点 > 3类买点
+        1. 机器学习校验 (权重最高): 如果启用 ML 且概率 > 40% 给高分
+        2. MACD 辅助确认（+40）: 最近一根 K 线 MACD DIF > DEA 或者 MACD bar 由负转正
+        3. 成交量确认（+30）: 信号 K 线成交量 >= 近 20 根均量 × 0.8
+        4. 买点类型加权（+30）: 1类买点 > 2类买点 > 3类买点
         
         分数 >= 50 = 有效信号
         """
         score = 0
         
+        # 如果启用了 ML，优先进行 ML 校验
+        if self.use_ml and self.ml_validator:
+            try:
+                chan_instance = signal.get('chan_analysis', {}).get('chan_multi_level', [None])[0]
+                bsp_instance = signal.get('chan_analysis', {}).get('bsp_instance')
+                if chan_instance and bsp_instance:
+                    # 验证信号
+                    val_res = self.ml_validator.validate_signal(chan_instance, bsp_instance)
+                    prob = val_res.get('prob')
+                    if prob is not None:
+                        # 将 0-1 的概率映射到 0-100 的分数
+                        ml_score = int(prob * 100)
+                        
+                        # 判定逻辑优化: 
+                        # 1. 极佳信号 (>= 50%): 新模型经过止损过滤，50% 以上已属难得
+                        if prob >= 0.50:
+                            self.logger.info(f"🤖 [ML 强校准] {signal['code']} 概率: {prob:.2%} -> 确认为优质信号")
+                            return 85
+                        # 2. 垃圾信号 (< 25%): 概率过低直接过滤
+                        if prob < 0.25:
+                            self.logger.info(f"🤖 [ML 弱校准] {signal['code']} 概率: {prob:.2%} -> 信号过弱，已拦截")
+                            return 15
+                        
+                        # 3. 中等信号: 作为基础分，依赖 MACD/成交量等辅助判断
+                        score = int(ml_score * 0.6)
+                        self.logger.debug(f"🤖 [ML 中性] {signal['code']} 概率: {prob:.2%} -> 基础评分: {score}")
+            except Exception as e:
+                self.logger.error(f"ML 校验异常: {e}")
+
         if not kline_list or len(kline_list) < 5:
             return 60  # 数据不足时默认放行
         
@@ -1068,7 +1118,8 @@ def run_backtest(config: Dict = None) -> Dict[str, Any]:
         start_date=config.get('start_date', '2024-01-01'),
         end_date=config.get('end_date', '2025-12-31'),
         watchlist=config.get('watchlist'),
-        use_hk_costs=config.get('use_hk_costs', True)
+        use_hk_costs=config.get('use_hk_costs', True),
+        use_ml=config.get('use_ml', False)
     )
     
     return engine.run()
@@ -1082,6 +1133,7 @@ def main():
     parser.add_argument('--end', type=str, default='2025-12-31', help='结束日期')
     parser.add_argument('--watchlist', type=str, nargs='+', default=None, help='股票列表')
     parser.add_argument('--no-hk-costs', action='store_true', help='不使用港股精确成本')
+    parser.add_argument('--use-ml', action='store_true', help='启用机器学习校验')
     parser.add_argument('--output-dir', type=str, default='backtest_reports', help='输出目录')
     
     args = parser.parse_args()
@@ -1091,7 +1143,8 @@ def main():
         start_date=args.start,
         end_date=args.end,
         watchlist=args.watchlist,
-        use_hk_costs=not args.no_hk_costs
+        use_hk_costs=not args.no_hk_costs,
+        use_ml=getattr(args, 'use_ml', False)
     )
     
     results = engine.run()

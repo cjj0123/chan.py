@@ -11,6 +11,7 @@ class DATA_SRC(Enum):
     POLYGON = auto()
     YFINANCE = auto()
     FINNHUB = auto()
+    IB = auto()
 
 
 class KL_TYPE(Enum):

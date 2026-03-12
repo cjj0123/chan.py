@@ -1,0 +1,270 @@
+{
+  "initial_funds": 100000.0,
+  "final_cash": 83930.58104850003,
+  "final_portfolio_value": 105775.58104850003,
+  "total_return_pct": 0.05775581048500026,
+  "final_positions": {
+    "US.UEC": {
+      "qty": 900,
+      "available_qty": 900,
+      "avg_price": 13.7
+    },
+    "US.UUUU": {
+      "qty": 500,
+      "available_qty": 0,
+      "avg_price": 19.03
+    }
+  },
+  "trades_count": 16,
+  "total_buys": 9,
+  "total_sells": 7,
+  "total_profit_loss_no_cost": -15837.0,
+  "profit_factor": 0.5463967023497389,
+  "max_drawdown_pct": 0.013659240712322164,
+  "equity_curve": [
+    {
+      "time": "2025-07-09 00:00:00",
+      "value": 100000.0
+    },
+    {
+      "time": "2025-07-09 00:00:00",
+      "value": 99975.536248
+    },
+    {
+      "time": "2025-07-15 00:00:00",
+      "value": 103020.915135
+    },
+    {
+      "time": "2025-08-20 00:00:00",
+      "value": 102999.25859900001
+    },
+    {
+      "time": "2025-08-26 00:00:00",
+      "value": 105070.812919
+    },
+    {
+      "time": "2025-10-27 00:00:00",
+      "value": 105061.374574
+    },
+    {
+      "time": "2025-11-03 00:00:00",
+      "value": 104661.96606400001
+    },
+    {
+      "time": "2025-11-03 00:00:00",
+      "value": 104652.55755400001
+    },
+    {
+      "time": "2025-11-05 00:00:00",
+      "value": 104167.18553450001
+    },
+    {
+      "time": "2025-11-05 00:00:00",
+      "value": 104156.68950850001
+    },
+    {
+      "time": "2025-11-17 00:00:00",
+      "value": 103647.23173250002
+    },
+    {
+      "time": "2025-11-20 00:00:00",
+      "value": 103635.62539350001
+    },
+    {
+      "time": "2025-12-04 00:00:00",
+      "value": 105487.87630550002
+    },
+    {
+      "time": "2026-02-05 00:00:00",
+      "value": 105478.42671500001
+    },
+    {
+      "time": "2026-02-13 00:00:00",
+      "value": 105806.95119100001
+    },
+    {
+      "time": "2026-03-05 00:00:00",
+      "value": 105789.30894600002
+    },
+    {
+      "time": "2026-03-06 00:00:00",
+      "value": 105775.58104850003
+    }
+  ],
+  "trade_log": [
+    {
+      "time": "2025-07-09 00:00:00",
+      "code": "US.UEC",
+      "action": "BUY",
+      "qty": 2900,
+      "price": 5.92,
+      "amount": 17168.0,
+      "cost": 24.463752,
+      "funds_after": 82807.536248
+    },
+    {
+      "time": "2025-07-15 00:00:00",
+      "code": "US.UEC",
+      "action": "SELL",
+      "qty": 2900,
+      "price": 6.98,
+      "amount": 20242.0,
+      "cost": 28.621113,
+      "funds_after": 103020.915135
+    },
+    {
+      "time": "2025-08-20 00:00:00",
+      "code": "US.UEC",
+      "action": "BUY",
+      "qty": 1600,
+      "price": 9.39,
+      "amount": 15024.0,
+      "cost": 21.656536,
+      "funds_after": 87975.25859900001
+    },
+    {
+      "time": "2025-08-26 00:00:00",
+      "code": "US.UEC",
+      "action": "SELL",
+      "qty": 1600,
+      "price": 10.7,
+      "amount": 17120.0,
+      "cost": 24.44568,
+      "funds_after": 105070.812919
+    },
+    {
+      "time": "2025-10-27 00:00:00",
+      "code": "US.UUUU",
+      "action": "BUY",
+      "qty": 300,
+      "price": 19.1,
+      "amount": 5730.0,
+      "cost": 9.438345,
+      "funds_after": 99331.374574
+    },
+    {
+      "time": "2025-11-03 00:00:00",
+      "code": "US.UUUU",
+      "action": "SELL",
+      "qty": 300,
+      "price": 17.8,
+      "amount": 5340.0,
+      "cost": 9.40851,
+      "funds_after": 104661.96606400001
+    },
+    {
+      "time": "2025-11-03 00:00:00",
+      "code": "US.UUUU",
+      "action": "BUY",
+      "qty": 300,
+      "price": 17.8,
+      "amount": 5340.0,
+      "cost": 9.40851,
+      "funds_after": 99312.55755400001
+    },
+    {
+      "time": "2025-11-05 00:00:00",
+      "code": "US.UUUU",
+      "action": "SELL",
+      "qty": 300,
+      "price": 16.21,
+      "amount": 4863.0,
+      "cost": 8.3720195,
+      "funds_after": 104167.18553450001
+    },
+    {
+      "time": "2025-11-05 00:00:00",
+      "code": "US.UUUU",
+      "action": "BUY",
+      "qty": 400,
+      "price": 16.21,
+      "amount": 6484.0,
+      "cost": 10.496026,
+      "funds_after": 97672.68950850001
+    },
+    {
+      "time": "2025-11-17 00:00:00",
+      "code": "US.UUUU",
+      "action": "SELL",
+      "qty": 400,
+      "price": 14.96,
+      "amount": 5984.0,
+      "cost": 9.457776,
+      "funds_after": 103647.23173250002
+    },
+    {
+      "time": "2025-11-20 00:00:00",
+      "code": "US.UUUU",
+      "action": "BUY",
+      "qty": 600,
+      "price": 13.21,
+      "amount": 7926.000000000001,
+      "cost": 11.606339,
+      "funds_after": 95709.62539350001
+    },
+    {
+      "time": "2025-12-04 00:00:00",
+      "code": "US.UUUU",
+      "action": "SELL",
+      "qty": 600,
+      "price": 16.32,
+      "amount": 9792.0,
+      "cost": 13.749088,
+      "funds_after": 105487.87630550002
+    },
+    {
+      "time": "2026-02-05 00:00:00",
+      "code": "US.UUUU",
+      "action": "BUY",
+      "qty": 300,
+      "price": 19.59,
+      "amount": 5877.0,
+      "cost": 9.4495905,
+      "funds_after": 99601.42671500001
+    },
+    {
+      "time": "2026-02-13 00:00:00",
+      "code": "US.UUUU",
+      "action": "SELL",
+      "qty": 300,
+      "price": 20.72,
+      "amount": 6216.0,
+      "cost": 10.475524,
+      "funds_after": 105806.95119100001
+    },
+    {
+      "time": "2026-03-05 00:00:00",
+      "code": "US.UEC",
+      "action": "BUY",
+      "qty": 900,
+      "price": 13.7,
+      "amount": 12330.0,
+      "cost": 17.642245,
+      "funds_after": 93459.30894600002
+    },
+    {
+      "time": "2026-03-06 00:00:00",
+      "code": "US.UUUU",
+      "action": "BUY",
+      "qty": 500,
+      "price": 19.03,
+      "amount": 9515.0,
+      "cost": 13.727897500000001,
+      "funds_after": 83930.58104850003
+    }
+  ],
+  "cost_statistics": {
+    "total_cost": 232.4189515,
+    "total_commission": 57.5652,
+    "total_stamp_duty": 163,
+    "total_trading_fee": 8.7547315,
+    "total_clearing_fee": 3.0990200000000003
+  },
+  "win_rate": 0.42857142857142855,
+  "avg_profit": 1912.333333333333,
+  "avg_loss": 578.8333333333337,
+  "profit_loss_ratio": 3.303771955082059,
+  "annualized_return": 0.08914614615540883,
+  "trades_per_month": 2.0,
+  "stop_loss_triggered": 4
+}

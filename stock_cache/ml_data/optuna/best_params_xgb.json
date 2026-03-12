@@ -1,0 +1,12 @@
+{
+    "best_params": {
+        "max_depth": 3,
+        "eta": 0.04359558046229067,
+        "subsample": 0.6815224113395332,
+        "colsample_bytree": 0.890553214984303,
+        "min_child_weight": 1,
+        "gamma": 0.8180650126019583,
+        "threshold": 0.7244912083437205
+    },
+    "best_score": 0.08444757213230122
+}

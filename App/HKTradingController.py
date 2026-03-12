@@ -23,7 +23,7 @@ from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 # 导入配置和核心库
-from config import TRADING_CONFIG, CHAN_CONFIG
+from config import TRADING_CONFIG, CHAN_CONFIG, CHART_PARA
 from Chan import CChan
 from ChanConfig import CChanConfig
 from Common.CEnum import KL_TYPE, DATA_SRC
@@ -87,7 +87,7 @@ class HKTradingController(QObject):
         self.hk_watchlist_group = hk_watchlist_group or TRADING_CONFIG['hk_watchlist_group']
         self.min_visual_score = min_visual_score or TRADING_CONFIG['min_visual_score']
         self.max_position_ratio = max_position_ratio or TRADING_CONFIG['max_position_ratio']
-        self.dry_run = dry_run if dry_run is not None else TRADING_CONFIG['dry_run']
+        self.dry_run = dry_run if dry_run is not None else TRADING_CONFIG.get('hk_dry_run', True)
 
         # 创建图表目录
         self.charts_dir = "charts"
@@ -141,6 +141,9 @@ class HKTradingController(QObject):
         # --- ML Validation ---
         self.signal_validator = SignalValidator()
         self.ml_threshold = 0.60
+        
+        # 记录最近分析过的信号日志时间，防止重复刷屏: { 'HK.09959_2s': timestamp }
+        self.last_analysis_log_time = {}
         
         # --- UI Callbacks ---
         self.log_message.emit("✅ 港股交易控制器初始化完成")
@@ -280,14 +283,19 @@ class HKTradingController(QObject):
             start_time_5m = end_time - timedelta(days=7)
             start_time_5m_str = start_time_5m.strftime("%Y-%m-%d")
             
-            # 顺序获取30M数据（5M数据延迟到发现信号后再获取，以节省API调用）
+            # 顺序获取30M数据
             try:
+                # 默认数据源
+                data_src = DATA_SRC.FUTU
+                if code.upper().startswith("US.") and os.getenv("IB_HOST"):
+                    data_src = DATA_SRC.IB
+                
                 # 获取30M数据
                 chan_30m = CChan(
                     code=code,
                     begin_time=start_time_30m_str,
                     end_time=end_time_str,
-                    data_src=DATA_SRC.FUTU,
+                    data_src=data_src,
                     lv_list=[KL_TYPE.K_30M],
                     config=self.chan_config
                 )
@@ -357,11 +365,11 @@ class HKTradingController(QObject):
             trading_hours = self.calculate_trading_hours(bsp_time, now)
             
             if trading_hours > TRADING_CONFIG['max_signal_age_hours']:
-                self.log_message.emit(f"{code} {bsp_type} 信号产生于 {bsp_time.strftime('%Y-%m-%d %H:%M')}，"
+                self.log_message.emit(f"{code} {bsp_type} {'买入' if is_buy else '卖出'}信号产生于 {bsp_time.strftime('%Y-%m-%d %H:%M')}，"
                                    f"距今 {trading_hours:.1f} 个交易小时，超过{TRADING_CONFIG['max_signal_age_hours']}小时窗口，跳过")
                 return None
             
-            self.log_message.emit(f"{code} {bsp_type} 信号在{TRADING_CONFIG['max_signal_age_hours']}小时窗口内（{trading_hours:.1f}个交易小时前），继续分析")
+            self.log_message.emit(f"{code} {bsp_type} {'买入' if is_buy else '卖出'}信号在{TRADING_CONFIG['max_signal_age_hours']}小时窗口内（{trading_hours:.1f}个交易小时前），继续分析")
             
             result = {
                 'code': code,
@@ -376,7 +384,12 @@ class HKTradingController(QObject):
                 }
             }
             
-            self.log_message.emit(f"{code} 缠论分析: {bsp_type} 信号, 价格: {price}")
+            # 仅在日志中打印一次（1小时内不重复打印相同代码和类型的分析日志）
+            log_key = f"{code}_{bsp_type}"
+            if log_key not in self.last_analysis_log_time or (now - self.last_analysis_log_time[log_key]).total_seconds() > 3600:
+                self.log_message.emit(f"{code} 缠论分析: {bsp_type} {'买入' if is_buy else '卖出'}信号, 价格: {price}")
+                self.last_analysis_log_time[log_key] = now
+                
             return result
             
         except Exception as e:
@@ -413,14 +426,7 @@ class HKTradingController(QObject):
                             "plot_kline": True, "plot_bi": True, "plot_seg": True,
                             "plot_zs": True, "plot_bsp": True, "plot_macd": True
                         },
-                        plot_para={
-                            "figure": {"w": 16, "h": 12, "macd_h": 0.25, "grid": None},
-                            "bi": {"show_num": False},
-                            "seg": {"color": "#9932CC", "width": 5},  # 紫色线段
-                            "zs": {"linewidth": 2},
-                            "bsp": {"fontsize": 12, "buy_color": "#C71585", "sell_color": "#C71585"},  # 品红色买卖点
-                            "macd": {"width": 0.6}
-                        }
+                        plot_para=CHART_PARA
                     )
                     
                     chart_path_30m = f"{self.charts_dir}/{safe_code}_{timestamp}_30M.png"
@@ -438,14 +444,7 @@ class HKTradingController(QObject):
                             "plot_kline": True, "plot_bi": True, "plot_seg": True,
                             "plot_zs": True, "plot_bsp": True, "plot_macd": True
                         },
-                        plot_para={
-                            "figure": {"w": 16, "h": 12, "macd_h": 0.25, "grid": None},
-                            "bi": {"show_num": False},
-                            "seg": {"color": "#9932CC", "width": 5},  # 紫色线段
-                            "zs": {"linewidth": 2},
-                            "bsp": {"fontsize": 12, "buy_color": "#C71585", "sell_color": "#C71585"},  # 品红色买卖点
-                            "macd": {"width": 0.6}
-                        }
+                        plot_para=CHART_PARA
                     )
                     
                     chart_path_5m = f"{self.charts_dir}/{safe_code}_{timestamp}_5M.png"
@@ -763,12 +762,19 @@ class HKTradingController(QObject):
         
         # 初始化扫描时间为当前 Bar，避免启动时立即触发不完整的 Bar 分析
         now = datetime.now()
-        last_strategy_scan_time = now.replace(minute=(now.minute // 30) * 30, second=0, microsecond=0)
+        # 初始化扫描时间为过去，确保启动后在交易时段内能立即触发扫描
+        last_strategy_scan_time = datetime.now() - timedelta(minutes=31)
+        
+        # 0. 初始化现有持仓的风险监控
+        self._initialize_position_trackers()
         
         while self._is_running:
             try:
                 # 0. 基础维护
                 self._cleanup_old_charts(hours=24)
+                
+                # Phase 4: 检查并热加载最新的优化的模型
+                self.signal_validator.check_and_reload()
                 
                 # 检查是否暂停
                 if self._is_paused:
@@ -924,12 +930,15 @@ class HKTradingController(QObject):
         # 否则视为不重复 -> 即持仓=0时可以处理买点
         position_qty = self.get_position_quantity(code)
         if is_buy and position_qty > 0: 
+            self.log_message.emit(f"⏭️ {code} {bsp_type_display} 已有持仓({position_qty})，跳过买入信号")
             return False
         if not is_buy and position_qty <= 0: 
+            self.log_message.emit(f"⏭️ {code} {bsp_type_display} 无持仓，跳过卖出信号")
             return False
 
         # 2. 挂单校验 (如果有相同方向正在进行中的订单，不要重复下单)
         if self.check_pending_orders(code, 'BUY' if is_buy else 'SELL'):
+            self.log_message.emit(f"⏭️ {code} {bsp_type_display} 已有相同方向挂单，跳过")
             return False
 
         # 3. ML 过滤 (放到最后，避免浪费算力和日志刷屏)
@@ -939,9 +948,12 @@ class HKTradingController(QObject):
                 bsp_list = chan_env.get_bsp()
                 if bsp_list:
                     ml_res = self.signal_validator.validate_signal(chan_env, bsp_list[-1], threshold=self.ml_threshold)
+                    prob = ml_res.get('prob', 0)
                     if not ml_res['is_valid']:
-                        self.log_message.debug(f"🤖 {code} {bsp_type_display} ML 过滤: {ml_res['msg']}")
+                        self.log_message.emit(f"🤖 {code} {bsp_type_display} ML 评分较低 ({prob*100:.1f}%)，已过滤")
                         return False
+                    else:
+                        self.log_message.emit(f"🤖 {code} {bsp_type_display} ML 校验通过 ({prob*100:.1f}%)")
 
         return True
 
@@ -1228,7 +1240,7 @@ class HKTradingController(QObject):
             # 3. 更新最高价
             if current_price > tracker['highest_price']:
                 tracker['highest_price'] = current_price
-                self.log_message.debug(f"📈 {code} 创持仓新高: {current_price:.3f}")
+                self.log_message.emit(f"📈 {code} 创持仓新高: {current_price:.3f}")
                 
             # 4. 判断回撤止损
             highest = tracker['highest_price']
@@ -1305,13 +1317,57 @@ class HKTradingController(QObject):
                 position = data[data['code'] == code]
                 if not position.empty:
                     qty = int(position.iloc[0]['qty'])
-                    self.log_message.emit(f"{code} 当前持仓: {qty} 股")
                     return qty
-            self.log_message.emit(f"{code} 无持仓")
             return 0
         except Exception as e:
             self.log_message.emit(f"获取持仓异常 {code}: {e}")
             return 0
+
+    def _initialize_position_trackers(self):
+        """为现有持仓初始化追踪止损器"""
+        self.log_message.emit("🛡️ 正在为现有持仓初始化风险监控...")
+        try:
+            ret, data = self.trd_ctx.position_list_query(trd_env=self.trd_env)
+            if ret == RET_OK and not data.empty:
+                held = data[data['qty'].astype(float) > 0]
+                for _, row in held.iterrows():
+                    code = row['code']
+                    if code in self.position_trackers:
+                        continue
+                        
+                    # 获取最新报价
+                    info = self.get_stock_info(code)
+                    if not info: continue
+                    current_price = info.get('current_price', 0)
+                    if current_price <= 0: continue
+                    
+                    # 获取数据计算 ATR
+                    try:
+                        end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        start_time = (datetime.now() - timedelta(days=15)).strftime("%Y-%m-%d")
+                        chan = CChan(
+                            code=code,
+                            begin_time=start_time,
+                            end_time=end_time,
+                            data_src=DATA_SRC.FUTU,
+                            lv_list=[KL_TYPE.K_30M],
+                            config=self.chan_config
+                        )
+                        if chan and len(chan[0]) > 0:
+                            kl_list = list(chan[0].klu_iter())
+                            atr_value = self._calculate_atr(kl_list, period=14)
+                            if atr_value > 0:
+                                self.position_trackers[code] = {
+                                    'highest_price': current_price,
+                                    'atr': atr_value,
+                                    'atr_multiplier': 2.0
+                                }
+                                self.log_message.emit(f"🛡️ {code} 已加载移动止损监控: 现价={current_price:.3f}, ATR={atr_value:.3f}")
+                    except Exception as e:
+                        logger.error(f"Error calculating ATR for existing position {code}: {e}")
+            self.log_message.emit("✅ 风险监控初始化完成")
+        except Exception as e:
+            self.log_message.emit(f"⚠️ 初始化风险监控失败: {e}")
 
     async def _async_evaluate_single_signal(self, session, signal: Dict) -> Optional[Dict]:
         """

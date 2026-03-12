@@ -53,6 +53,7 @@ class BacktestKLineUnit:
         self.trend = {}  # 趋势指标（CChan 兼容）
         self.limit_flag = 0  # 涨跌停标志（CChan 兼容）
         self.trade_info = type('MockTradeInfo', (), {'metric': {}})()  # 交易信息（CChan 兼容）
+        self._klc = None
 
     def set_idx(self, idx: int):
         """设置 K 线索引"""
@@ -105,12 +106,12 @@ class BacktestKLineUnit:
     
     def set_klc(self, klc):
         """设置 K 线组合引用（简化版本，用于回测）"""
-        self.__klc = klc
+        self._klc = klc
     
     @property
     def klc(self):
         """获取 K 线组合引用（CChan 兼容）"""
-        return self.__klc
+        return self._klc
 
     def __repr__(self):
         return f"BacktestKLineUnit({self.timestamp}, {self.kl_type}, O:{self.open}, H:{self.high}, L:{self.low}, C:{self.close}, V:{self.volume}, IDX:{self.idx})"

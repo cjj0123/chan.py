@@ -196,6 +196,9 @@ class CChan:
         elif self.data_src == DATA_SRC.FINNHUB:
             from DataAPI.FinnhubAPI import CFinnhubAPI
             return CFinnhubAPI
+        elif self.data_src == DATA_SRC.IB:
+            from DataAPI.InteractiveBrokersAPI import CInteractiveBrokersAPI
+            return CInteractiveBrokersAPI
         if self.data_src in _dict:
             return _dict[self.data_src]
         assert isinstance(self.data_src, str)

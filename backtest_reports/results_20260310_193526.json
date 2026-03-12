@@ -1,0 +1,21 @@
+{
+  "initial_funds": 100000,
+  "final_cash": 100000,
+  "final_portfolio_value": 100000,
+  "total_return_pct": 0.0,
+  "final_positions": {},
+  "trades_count": 0,
+  "total_buys": 0,
+  "total_sells": 0,
+  "total_profit_loss_no_cost": 0,
+  "profit_factor": 1.0,
+  "max_drawdown_pct": 0.0,
+  "equity_curve": [],
+  "trade_log": [],
+  "cost_statistics": {
+    "total_cost": 0.0
+  },
+  "annualized_return": 0,
+  "trades_per_month": 0,
+  "stop_loss_triggered": 0
+}

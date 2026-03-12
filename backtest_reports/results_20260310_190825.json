@@ -1,0 +1,147 @@
+{
+  "initial_funds": 100000.0,
+  "final_cash": 120323.077125,
+  "final_portfolio_value": 120323.077125,
+  "total_return_pct": 0.20323077124999997,
+  "final_positions": {},
+  "trades_count": 8,
+  "total_buys": 4,
+  "total_sells": 4,
+  "total_profit_loss_no_cost": 20572.0,
+  "profit_factor": 0.6633880059593151,
+  "max_drawdown_pct": 0.00022220016534133603,
+  "equity_curve": [
+    {
+      "time": "2025-05-22 00:00:00",
+      "value": 100000.0
+    },
+    {
+      "time": "2025-05-22 00:00:00",
+      "value": 99956.235128
+    },
+    {
+      "time": "2025-05-22 00:00:00",
+      "value": 99934.294711
+    },
+    {
+      "time": "2025-06-06 00:00:00",
+      "value": 102583.514795
+    },
+    {
+      "time": "2025-06-10 00:00:00",
+      "value": 104546.825896
+    },
+    {
+      "time": "2025-09-02 00:00:00",
+      "value": 104523.59557399999
+    },
+    {
+      "time": "2025-09-17 00:00:00",
+      "value": 108202.96918999999
+    },
+    {
+      "time": "2026-01-05 00:00:00",
+      "value": 108181.3160425
+    },
+    {
+      "time": "2026-02-05 00:00:00",
+      "value": 120323.077125
+    }
+  ],
+  "trade_log": [
+    {
+      "time": "2025-05-22 00:00:00",
+      "code": "US.TER",
+      "action": "BUY",
+      "qty": 400,
+      "price": 78.12,
+      "amount": 31248.0,
+      "cost": 43.764872000000004,
+      "funds_after": 68708.235128
+    },
+    {
+      "time": "2025-05-22 00:00:00",
+      "code": "US.ACMR",
+      "action": "BUY",
+      "qty": 700,
+      "price": 22.54,
+      "amount": 15778.0,
+      "cost": 21.940417,
+      "funds_after": 52908.294711
+    },
+    {
+      "time": "2025-06-06 00:00:00",
+      "code": "US.TER",
+      "action": "SELL",
+      "qty": 400,
+      "price": 84.86,
+      "amount": 33944.0,
+      "cost": 46.779916,
+      "funds_after": 86805.514795
+    },
+    {
+      "time": "2025-06-10 00:00:00",
+      "code": "US.ACMR",
+      "action": "SELL",
+      "qty": 700,
+      "price": 25.38,
+      "amount": 17766.0,
+      "cost": 24.688899,
+      "funds_after": 104546.825896
+    },
+    {
+      "time": "2025-09-02 00:00:00",
+      "code": "US.ACMR",
+      "action": "BUY",
+      "qty": 600,
+      "price": 27.58,
+      "amount": 16548.0,
+      "cost": 23.230321999999997,
+      "funds_after": 87975.59557399999
+    },
+    {
+      "time": "2025-09-17 00:00:00",
+      "code": "US.ACMR",
+      "action": "SELL",
+      "qty": 600,
+      "price": 33.76,
+      "amount": 20256.0,
+      "cost": 28.626383999999998,
+      "funds_after": 108202.96918999999
+    },
+    {
+      "time": "2026-01-05 00:00:00",
+      "code": "US.ACMR",
+      "action": "BUY",
+      "qty": 500,
+      "price": 30.03,
+      "amount": 15015.0,
+      "cost": 21.6531475,
+      "funds_after": 93166.3160425
+    },
+    {
+      "time": "2026-02-05 00:00:00",
+      "code": "US.ACMR",
+      "action": "SELL",
+      "qty": 500,
+      "price": 54.39,
+      "amount": 27195.0,
+      "cost": 38.23891750000001,
+      "funds_after": 120323.077125
+    }
+  ],
+  "cost_statistics": {
+    "total_cost": 248.922875,
+    "total_commission": 53.324999999999996,
+    "total_stamp_duty": 182,
+    "total_trading_fee": 10.042874999999999,
+    "total_clearing_fee": 3.555
+  },
+  "win_rate": 1.0,
+  "avg_profit": 5143.0,
+  "avg_loss": 0,
+  "profit_loss_ratio": Infinity,
+  "annualized_return": 0.2642446054519729,
+  "trades_per_month": 0.8333333333333334,
+  "stop_loss_triggered": 1
+}

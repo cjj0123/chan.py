@@ -333,14 +333,6 @@ class TraderGUI(QMainWindow):
         self.tabs.addTab(self.settings_tab, "⚙️ 设置 & 自动化")
         layout = QVBoxLayout(self.settings_tab)
 
-        # --- 基础设置 ---
-        base_settings_group = QGroupBox("基础设置")
-        base_settings_layout = QVBoxLayout()
-        self.bi_strict_cb = QCheckBox("笔严格模式")
-        self.bi_strict_cb.setChecked(True)
-        base_settings_layout.addWidget(self.bi_strict_cb)
-        base_settings_group.setLayout(base_settings_layout)
-        layout.addWidget(base_settings_group)
 
         # --- 港股自动交易模块 ---
         hk_group = QGroupBox("🤖 港股自动交易")
@@ -388,7 +380,6 @@ class TraderGUI(QMainWindow):
         hk_layout.addWidget(self.auto_log_text)
         
         hk_group.setLayout(hk_layout)
-        layout.addWidget(hk_group)
 
         # --- 美股自动交易模块 (IB) ---
         us_group = QGroupBox("🤖 美股自动交易 (IB)")
@@ -431,10 +422,6 @@ class TraderGUI(QMainWindow):
         self.us_liquidate_btn.setStyleSheet("background-color: #ff4d4f; color: white; font-weight: bold;")
         us_func_layout.addWidget(self.us_liquidate_btn)
 
-        self.us_test_order_btn = QPushButton("🧪 下单测试")
-        self.us_test_order_btn.clicked.connect(self.on_us_test_order_clicked)
-        us_func_layout.addWidget(self.us_test_order_btn)
-
         us_func_layout.addStretch()
         us_layout.addLayout(us_func_layout)
         
@@ -446,7 +433,12 @@ class TraderGUI(QMainWindow):
         us_layout.addWidget(self.us_auto_log_text)
         
         us_group.setLayout(us_layout)
-        layout.addWidget(us_group)
+        
+        # 将港股和美股模块并排显示
+        market_layout = QHBoxLayout()
+        market_layout.addWidget(hk_group)
+        market_layout.addWidget(us_group)
+        layout.addLayout(market_layout)
 
         # --- 多市场监控模块 (A/US) ---
         monitor_group = QGroupBox("🔍 多市场监控 (A股/美股)")
@@ -714,9 +706,16 @@ class TraderGUI(QMainWindow):
             self.us_auto_btn.setText("启动美股交易")
             self.append_us_auto_log("ℹ️ 美股自动交易已停止")
 
-    def update_us_funds_display(self, available: float, total: float):
-        """更新美股资金显示 (由 Controller 信号触发)"""
+    def update_us_funds_display(self, available: float, total: float, positions: list):
+        """更新美股资金和持仓显示 (由 Controller 信号触发)"""
         self.append_us_auto_log(f"💰 [IB 账户] 可用资金: ${available:,.2f}, 总资产: ${total:,.2f}")
+        if positions:
+            pos_msg = "📦 [当前持仓]:"
+            for p in positions:
+                pos_msg += f"\n   • {p['symbol']}: {p['qty']} 股, 市值: ${p['mkt_value']:.2f}, 成本: ${p['avg_cost']:.2f}"
+            self.append_us_auto_log(pos_msg)
+        else:
+            self.append_us_auto_log("ℹ️ 当前账户无美股持仓")
 
     def on_us_force_scan_clicked(self):
         """手动触发美股策略扫描"""
@@ -749,15 +748,6 @@ class TraderGUI(QMainWindow):
             self.append_us_auto_log("🔥 正在执行美股全量清仓...")
             self.us_trading_controller.close_all_positions()
 
-    def on_us_test_order_clicked(self):
-        """美股下单测试"""
-        if self.us_trading_controller is None:
-            self.append_us_auto_log("⚠️ 请先启动美股交易。")
-            return
-            
-        code, ok = QInputDialog.getText(self, '下单测试', '请输入要测试的美股代码 (例如 US.AAPL):', text="US.AAPL")
-        if ok and code:
-            self.us_trading_controller.place_test_order(code)
             
     def on_monitor_force_scan_clicked(self):
         """异步/定时监控：手动触发一次扫描"""
@@ -938,7 +928,7 @@ class TraderGUI(QMainWindow):
         """获取缠论配置"""
         config = CChanConfig()
         config.bNewStyle = True  # 新笔模式
-        config.bi_strict = self.bi_strict_cb.isChecked()  # 笔严格模式
+        # config.bi_strict = self.bi_strict_cb.isChecked()  # 笔严格模式 (已删除 UI)
         return config
 
     def get_timeframe_kl_type(self):
@@ -1279,12 +1269,8 @@ class TraderGUI(QMainWindow):
             except ValueError:
                 days = 30
             
-            # 默认使用 Futu 优先
-            data_sources = [DATA_SRC.FUTU, "custom:SQLiteAPI.SQLiteAPI"]
-            
-            # 美股特殊处理：优先使用 IB
-            if normalized_code.startswith("US.") and os.getenv("IB_HOST"):
-                data_sources = [DATA_SRC.IB] + data_sources
+            # 数据源由 SingleAnalysisThread 根据代码自动选择最优优先级
+            data_sources = None
             
             kl_types = [KL_TYPE.K_DAY, KL_TYPE.K_30M, KL_TYPE.K_5M, KL_TYPE.K_1M]
             

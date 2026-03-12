@@ -194,6 +194,9 @@ class MarketMonitorController(QObject):
         while self._is_running:
             try:
                 now = datetime.now()
+                # Phase 4: 检查并热加载最新的优化的模型
+                self.ml_validator.check_and_reload()
+                
                 # 计算 30 分钟 Bar 的起始时间 (例如 10:29 -> 10:00, 10:31 -> 10:30)
                 current_bar = now.replace(minute=(now.minute // 30) * 30, second=0, microsecond=0)
                 
@@ -297,6 +300,7 @@ class MarketMonitorController(QObject):
                 sig_key_loose = f"{code}_{sig.type2str()}"
                 
                 if sig_key_strict in self.notified_signals:
+                    logger.debug(f"[监控] {code} 严格去重跳过: {sig_key_strict}")
                     continue
                 
                 if sig_key_loose in self.notified_signals:
@@ -304,10 +308,14 @@ class MarketMonitorController(QObject):
                     if isinstance(last_notify_info, str):
                         try:
                             last_time = datetime.strptime(last_notify_info, "%Y-%m-%d %H:%M:%S")
-                            if (now - last_time).total_seconds() < 14400: # 4小时保护期
+                            diff_sec = (now - last_time).total_seconds()
+                            if diff_sec < 14400: # 4小时保护期
+                                logger.info(f"[监控] {code} 宽松去重跳过 (最近报过): {sig_key_loose} since {last_notify_info} ({diff_sec/3600:.1f}h ago)")
                                 continue
-                        except:
-                            pass
+                            else:
+                                logger.info(f"[监控] {code} 保护期已过，重新报信号: {sig_key_loose} (上次: {last_notify_info})")
+                        except Exception as e:
+                            logger.error(f"解析信号记录时间报错: {e}")
                 
                 # 记录并保存 (同时记录严格和宽松的键)
                 now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -315,7 +323,7 @@ class MarketMonitorController(QObject):
                 self.notified_signals[sig_key_loose] = now_str
                 self._save_notified_signals()
                 
-                self.log_message.emit(f"🎯 [监控] {code} 发现信号: {sig.type2str()} @ {sig.klu.time}")
+                self.log_message.emit(f"🎯 [监控] {code} {name} 发现信号: {sig.type2str()} @ {sig.klu.time}")
                 self._notify_signal(code, sig, chan, name=name)
             
         else:

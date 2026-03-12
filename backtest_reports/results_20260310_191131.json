@@ -1,0 +1,63 @@
+{
+  "initial_funds": 100000.0,
+  "final_cash": 102699.218914,
+  "final_portfolio_value": 102699.218914,
+  "total_return_pct": 0.026992189139999973,
+  "final_positions": {},
+  "trades_count": 2,
+  "total_buys": 1,
+  "total_sells": 1,
+  "total_profit_loss_no_cost": 2824.0,
+  "profit_factor": 0.06499424628158816,
+  "max_drawdown_pct": 0.0,
+  "equity_curve": [
+    {
+      "time": "2025-10-03 00:00:00",
+      "value": 100000.0
+    },
+    {
+      "time": "2025-10-03 00:00:00",
+      "value": 99939.64107499999
+    },
+    {
+      "time": "2025-10-21 00:00:00",
+      "value": 102699.218914
+    }
+  ],
+  "trade_log": [
+    {
+      "time": "2025-10-03 00:00:00",
+      "code": "US.ISRG",
+      "action": "BUY",
+      "qty": 100,
+      "price": 434.5,
+      "amount": 43450.0,
+      "cost": 60.358925,
+      "funds_after": 56489.641075
+    },
+    {
+      "time": "2025-10-21 00:00:00",
+      "code": "US.ISRG",
+      "action": "SELL",
+      "qty": 100,
+      "price": 462.74,
+      "amount": 46274.0,
+      "cost": 64.42216099999999,
+      "funds_after": 102699.218914
+    }
+  ],
+  "cost_statistics": {
+    "total_cost": 124.78108599999999,
+    "total_commission": 26.917199999999998,
+    "total_stamp_duty": 91,
+    "total_trading_fee": 5.069406,
+    "total_clearing_fee": 1.79448
+  },
+  "win_rate": 1.0,
+  "avg_profit": 2824.000000000001,
+  "avg_loss": 0,
+  "profit_loss_ratio": Infinity,
+  "annualized_return": 0.0651619040787037,
+  "trades_per_month": 0.3896103896103896,
+  "stop_loss_triggered": 0
+}

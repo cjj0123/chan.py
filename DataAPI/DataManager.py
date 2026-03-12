@@ -3,6 +3,7 @@
 实现混合数据源策略：本地数据库（历史数据）+ 实时API（最新数据）
 支持多级缓存和并发处理
 """
+import os
 import pandas as pd
 import sqlite3
 from datetime import datetime, timedelta
@@ -126,7 +127,11 @@ class DataManager:
             # 美股特殊处理
             if code.upper().startswith("US."):
                 from config import API_CONFIG
-                if API_CONFIG.get('POLYGON_API_KEY'):
+                # 优先使用 Interactive Brokers (Phase 2 Integration)
+                if os.getenv("IB_HOST"):
+                    from DataAPI.InteractiveBrokersAPI import CInteractiveBrokersAPI
+                    api_cls = CInteractiveBrokersAPI
+                elif API_CONFIG.get('POLYGON_API_KEY'):
                     from DataAPI.PolygonAPI import CPolygonAPI
                     api_cls = CPolygonAPI
                 elif API_CONFIG.get('FINNHUB_API_KEY'):
@@ -226,7 +231,64 @@ class DataManager:
                 finally:
                     quote_ctx.close()
             except Exception as e:
-                print(f"⚠️ [DataManager] 实时价格获取失败: {e}")
+                print(f"⚠️ [DataManager] 富途实时价格获取失败: {e}")
+        
+        # 美股特殊处理 (Interactive Brokers)
+        if code.upper().startswith("US.") and os.getenv("IB_HOST"):
+            try:
+                from ib_insync import IB, Stock
+                import asyncio
+                import random
+                import nest_asyncio
+                
+                # Use a different client ID range for real-time prices to avoid conflicts with download
+                realtime_client_id = int(os.getenv("IB_CLIENT_ID_RT", str(random.randint(2000, 2999))))
+                
+                async def fetch_ib_price():
+                    ib_inner = IB()
+                    try:
+                        print(f"🚀 [DataManager] Connecting to IB RTP ({os.getenv('IB_HOST')}, ClientID: {realtime_client_id})...")
+                        await ib_inner.connectAsync(
+                            os.getenv("IB_HOST"), 
+                            int(os.getenv("IB_PORT", "4002")), 
+                            clientId=realtime_client_id,
+                            timeout=5
+                        )
+                        symbol = code.split(".")[1]
+                        contract = Stock(symbol, 'SMART', 'USD')
+                        await ib_inner.qualifyContractsAsync(contract)
+                        ib_inner.reqMarketDataType(3) # 延迟行情
+                        ticker = ib_inner.reqMktData(contract, '', False, False)
+                        
+                        # 等待数据填充 (最多2秒)
+                        for _ in range(20):
+                            if ticker.last > 0 or ticker.close > 0:
+                                break
+                            await asyncio.sleep(0.1)
+                            
+                        if ticker.last and ticker.last > 0:
+                            return float(ticker.last)
+                        elif ticker.close and ticker.close > 0:
+                            return float(ticker.close)
+                        return None
+                    finally:
+                        if ib_inner.isConnected():
+                            ib_inner.disconnect()
+
+                # Robust execution in background threads
+                nest_asyncio.apply()
+                try:
+                    # If there's already a loop running, use it. Otherwise use asyncio.run
+                    try:
+                        loop = asyncio.get_running_loop()
+                        return loop.run_until_complete(fetch_ib_price())
+                    except RuntimeError:
+                        return asyncio.run(fetch_ib_price())
+                except Exception as loop_e:
+                    print(f"⚠️ [DataManager] IB异步执行错误: {loop_e}")
+                    return None
+            except Exception as e:
+                print(f"⚠️ [DataManager] IB实时价格获取失败: {e}")
         
         # 回退到数据库最新收盘价
         try:

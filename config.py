@@ -16,8 +16,10 @@ TRADING_CONFIG = {
     # 富途相关配置
     'hk_watchlist_group': os.getenv('HK_WATCHLIST_GROUP', '港股'),
     'min_visual_score': int(os.getenv('MIN_VISUAL_SCORE', '70')),
+    'hk_dry_run': os.getenv('HK_DRY_RUN', 'True').lower() in ('true', '1', 'yes'),
+    'us_dry_run': os.getenv('US_DRY_RUN', 'False').lower() in ('true', '1', 'yes'), # 默认开通（对应 IB 模拟端口 4002）
     'max_position_ratio': float(os.getenv('MAX_POSITION_RATIO', '0.2')),
-    'dry_run': os.getenv('DRY_RUN', 'True').lower() in ('true', '1', 'yes'),
+    'max_total_positions': int(os.getenv('MAX_TOTAL_POSITIONS', '10')),
     
     # 交易时间配置
     'trading_hours_start': os.getenv('TRADING_HOURS_START', '09:30'),
@@ -73,19 +75,22 @@ CHART_CONFIG = {
 
 # 图表参数配置
 CHART_PARA = {
-    "seg": {},
+    "seg": {
+        "color": "#9932CC",  # 紫色线段
+        "width": 2
+    },
     "bi": {
-        "color": "#FFFF00",  # 黄色
+        "color": "#000000",  # 黑色笔
         "show_num": False
     },
     "zs": {
-        "color": "#4169E1",  # 皇家蓝
+        "color": "#FF8C00",  # 橙色中枢
         "linewidth": 2
     },
     "bsp": {
         "fontsize": 12,
-        "buy_color": "red",
-        "sell_color": "green"
+        "buy_color": "#C71585",  # 洋红色买买点 (与 AI 提示词保持高度一致)
+        "sell_color": "#C71585"
     },
     "macd": {
         "width": 0.6

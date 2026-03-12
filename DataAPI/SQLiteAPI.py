@@ -220,7 +220,7 @@ def download_and_save_all_stocks(stock_codes, days=365, log_callback=None):
         try:
             # Determine market type and select appropriate data source
             if code.startswith("US."):
-                # 美股: 优先使用 Polygon/YFinance
+                # 美股: 优先使用 Interactive Brokers (IB)
                 kl_data, source_used = _download_us_stock_data(code, begin_time, end_time, log_callback)
                 
             elif code.startswith("HK."):
@@ -409,7 +409,7 @@ def download_and_save_all_stocks_multi_timeframe(stock_codes, days=365, timefram
             try:
                 # Use the same logic as day timeframe for all timeframes
                 if code.startswith("US."):
-                    # 美股: 优先使用 Polygon/YFinance
+                    # 美股: 优先使用 Interactive Brokers (IB)
                     kl_data, source_used = _download_us_stock_data_with_timeframe(code, begin_time, end_time, k_type, log_callback)
                 elif code.startswith("HK."):
                     # 港股: 优先使用Futu，失败则使用AKShare
@@ -464,96 +464,47 @@ def download_and_save_all_stocks_multi_timeframe(stock_codes, days=365, timefram
                 continue
 
 def _download_us_stock_data(code, begin_time, end_time, log_callback=None):
-    """下载美股数据 (日线) - 优先使用 Polygon/YFinance"""
+    """下载美股数据 (日线) - 优先使用 Interactive Brokers (IB)"""
     return _download_us_stock_data_with_timeframe(code, begin_time, end_time, KL_TYPE.K_DAY, log_callback)
 
 def _download_us_stock_data_with_timeframe(code, begin_time, end_time, k_type, log_callback=None):
-    """下载美股数据（支持多时间级别） - 优先使用 Polygon/YFinance"""
-    from DataAPI.PolygonAPI import CPolygonAPI
-    from DataAPI.YFinanceAPI import CYFinanceAPI
-    from DataAPI.FutuAPI import CFutuAPI
-    from DataAPI.AkshareAPI import CAkshare
+    """下载美股数据（支持多时间级别） - 优先使用 Interactive Brokers (IB)"""
+    from DataAPI.InteractiveBrokersAPI import CInteractiveBrokersAPI
     from Common.CEnum import AUTYPE, KL_TYPE
-    from config import API_CONFIG
+    import os
     
     def _log(msg):
         if log_callback:
             log_callback(msg)
         print(msg)
 
-    # 1. 优先尝试 Polygon (如果有 API Key)
-    if API_CONFIG.get('POLYGON_API_KEY'):
-        _log(f"  🔍  正在尝试 Polygon 下载 {code} {k_type}...")
+    # 1. 优先使用 Interactive Brokers
+    if os.getenv("IB_HOST"):
+        _log(f"  🚀  正在通过 Interactive Brokers 下载 {code} {k_type}...")
         try:
-            api = CPolygonAPI(code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
+            api = CInteractiveBrokersAPI(code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
             kl_data = _extract_kl_data(api, code)
             if kl_data and len(kl_data) > 0:
-                return kl_data, "Polygon"
-            _log(f"  ℹ️  Polygon 无数据返回")
+                return kl_data, "Interactive Brokers"
+            _log(f"  ℹ️  IB 无数据返回")
         except Exception as e:
-            _log(f"  ⚠️  Polygon 下载失败: {e}")
+            _log(f"  ⚠️  IB 下载失败: {e}")
     else:
-        _log(f"  ℹ️  未检测到 Polygon API Key，跳过")
+        _log(f"  ℹ️  未检测到 IB 配置，尝试备选源")
 
-    # 2. 尝试 Finnhub (如果有 API Key)
-    if API_CONFIG.get('FINNHUB_API_KEY'):
-        _log(f"  🔍  正在尝试 Finnhub 下载 {code} {k_type}...")
-        try:
-            from DataAPI.FinnhubAPI import CFinnhubAPI
-            api = CFinnhubAPI(code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
-            kl_data = _extract_kl_data(api, code)
-            if kl_data and len(kl_data) > 0:
-                return kl_data, "Finnhub"
-            _log(f"  ℹ️  Finnhub 无数据返回")
-        except Exception as e:
-            _log(f"  ⚠️  Finnhub 下载失败: {e}")
-    else:
-        _log(f"  ℹ️  未检测到 Finnhub API Key，跳过")
-
-    # 3. 尝试 YFinance
+    # 2. 备选尝试 YFinance (作为唯一的无 Key 备选)
     _log(f"  🔍  正在尝试 YFinance 下载 {code} {k_type}...")
     try:
+        from DataAPI.YFinanceAPI import CYFinanceAPI
         api = CYFinanceAPI(code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
         kl_data = _extract_kl_data(api, code)
         if kl_data and len(kl_data) > 0:
             return kl_data, "YFinance"
-        _log(f"  ℹ️  YFinance 无数据返回")
     except Exception as e:
         _log(f"  ⚠️  YFinance 下载失败: {e}")
         
-    # 3. 尝试 Futu
-    _log(f"  🔍  正在尝试 Futu 下载 {code} {k_type}...")
-    try:
-        api = CFutuAPI(code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
-        kl_data = _extract_kl_data(api, code)
-        if kl_data and len(kl_data) > 0:
-            return kl_data, "Futu"
-        _log(f"  ℹ️  Futu 无数据返回")
-    except Exception as e:
-        _log(f"  ⚠️  Futu 下载失败: {e}")
-        
-    # 4. 尝试 AKShare (仅限日线)
-    if k_type == KL_TYPE.K_DAY:
-        _log(f"  🔍  正在尝试 AKShare 下载 {code} {k_type}...")
-        try:
-            akshare_code = convert_stock_code_for_akshare(code)
-            api = CAkshare(akshare_code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
-            kl_data = _extract_kl_data(api, code)
-            if kl_data and len(kl_data) > 0:
-                return kl_data, "AKShare"
-            _log(f"  ℹ️  AKShare 无数据返回")
-        except Exception as e:
-            _log(f"  ⚠️  AKShare 下载失败: {e}")
-        
-    # 特殊提醒：如果是周末请求空数据，给出提示
-    from datetime import datetime
-    try:
-        dt_begin = datetime.strptime(begin_time.split(' ')[0], "%Y-%m-%d")
-        dt_end = datetime.strptime(end_time.split(' ')[0], "%Y-%m-%d")
-        if dt_begin.weekday() >= 5 and dt_end.weekday() >= 5:
-            _log(f"  💡  提示：您请求的时间段 ({begin_time} 到 {end_time}) 处于周末，交易所不营业，故无行情数据。")
-    except:
-        pass
+    # 移除不再维护或不稳定的源: Polygon, Finnhub, Futu, AKShare (对于美股)
+    # 这些源要么需要复杂 Key，要么对美股支持有限
 
     return None, "None"
 

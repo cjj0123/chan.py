@@ -1,0 +1,20 @@
+{
+    "open_klu_rate": 0,
+    "open_klu_amp": 1,
+    "chan_divergence_rate": 2,
+    "macd_dif": 3,
+    "macd_dea": 4,
+    "macd_hist": 5,
+    "boll_pos": 6,
+    "boll_width": 7,
+    "roc_10": 8,
+    "ma20_dist": 9,
+    "ma60_dist": 10,
+    "volatility_atr": 11,
+    "bi_macd_area": 12,
+    "bi_macd_peak": 13,
+    "bi_slope": 14,
+    "bi_amp_norm": 15,
+    "bi_macd_area_ratio": 16,
+    "bi_amp_ratio": 17
+}

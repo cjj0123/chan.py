@@ -53,7 +53,7 @@ class CPolygonAPI(CCommonStockApi):
             response.raise_for_status()
             data = response.json()
             
-            if data.get('status') == 'OK' and 'results' in data:
+            if data.get('status') in ('OK', 'DELAYED') and 'results' in data:
                 for res in data['results']:
                     # Polygon 't' is Unix Msec timestamp (end of period)
                     dt = datetime.fromtimestamp(res['t'] / 1000.0)

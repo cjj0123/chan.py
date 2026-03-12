@@ -81,11 +81,10 @@ MASTER_PROMPT = """系统角色定义
 
 # 视觉图例与锚点（极其重要，请严格根据颜色识别）
 * 重点关注区域：图表的**最右侧（最新价格动态）**以及**红色/绿色标注出现的位置**。
-* 黄色线条：Bi（笔）- 基础趋势段。
+* 黑色线条：Bi（笔）- 基础趋势段。
 * 紫色线条：Seg（线段）- 高级别趋势段。
-* 蓝色矩形：ZhongShu（中枢）- 盘整与多空博弈区域。
-* 红色文字/箭头：BUY信号（b1, b2, b3a, b3b等）。
-* 绿色文字/箭头：SELL信号（s1, s2, s3a, s3b等）。
+* 橙色矩形：ZhongShu（中枢）- 盘整与多空博弈区域。
+* 洋红色文字/箭头：信号标识（b1, b2, s1, s2等）。红色为买（b），绿色为卖（s）的逻辑由文字区分，颜色统一使用洋红色以突出背景。
 * 虚线线条：代表尚未完成、正在延伸的笔或线段。
 * 副图MACD：柱状图（红绿柱）和橙蓝线（DIF/DEA），用于判断动力衰竭（背驰）。
 
@@ -146,7 +145,7 @@ I will provide stock K-line charts at the same time point:
 * Black lines: Bi (Strokes) - Basic trend segments.
 * Purple lines: Seg (Segments) - Higher-level trend segments.
 * Orange rectangles: ZhongShu (Central Pivots) - Consolidation and multi-party battle zones.
-* Magenta text/arrows: BUY signals (b1, b2, b3a, b3b, etc.) or SELL signals (s1, s2, s3a, s3b, etc.). Algorithm has marked these on the chart.
+* Magenta text/arrows: Signal labels (b1, b2, s1, s2, etc.). BUY signals (b) and SELL signals (s) are distinguished by text, while magenta color ensures visibility against K-lines.
 * Dashed black/purple lines: Latest incomplete, extending Bi/Seg.
 * Sub-chart MACD: Histogram (area/height) and yellow-white lines (DIF/DEA), used to judge momentum exhaustion (divergence).
 
@@ -454,6 +453,10 @@ class VisualJudge:
         if not primary_result:
             return self._return_error("全部模型调用失败")
         return primary_result
+
+    def judge(self, image_paths, signal_type=None):
+        """与 evaluate 等效的别名，增加兼容性"""
+        return self.evaluate(image_paths, signal_type)
 
     def _return_error(self, reason):
         return {

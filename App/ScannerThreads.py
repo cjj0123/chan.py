@@ -6,7 +6,7 @@ from Chan import CChan
 from ChanConfig import CChanConfig
 from config import TRADING_CONFIG
 from Common.CEnum import AUTYPE, DATA_SRC, KL_TYPE
-from Common.StockUtils import get_futu_stock_name
+from Common.StockUtils import get_futu_stock_name, get_default_data_sources
 from Common.TimeUtils import get_trading_duration_hours
 
 # 富途API相关
@@ -64,8 +64,6 @@ class ScanThread(QThread):
         begin_time = (datetime.now() - timedelta(days=scan_days)).strftime("%Y-%m-%d")
         end_time = datetime.now().strftime("%Y-%m-%d")
 
-
-
         # 尝试创建一个临时的 Futu 连接以复用，加速名称获取
         temp_quote_ctx = None
         try:
@@ -76,113 +74,132 @@ class ScanThread(QThread):
         except:
             pass
 
-        for idx, row in self.stock_list.iterrows():
-            if not self.is_running:
-                break
-            
-            code = row['代码']
-            name = row['名称']
-            
-            # 从Futu获取准确的股票名称 (传入 temp_quote_ctx 以复用连接)
-            accurate_name = get_futu_stock_name(code, quote_ctx=temp_quote_ctx)
-            if accurate_name != code:
-                name = accurate_name
-            
-            self.progress.emit(idx + 1, total, f"{code} {name}")
-            self.log_signal.emit(f"🔍 扫描 {code} {name}...")
+        try:
+            for idx, row in self.stock_list.iterrows():
+                if not self.is_running:
+                    break
+                
+                code = row['代码']
+                name = row['名称']
+                
+                # 从Futu获取准确的股票名称 (传入 temp_quote_ctx 以复用连接)
+                accurate_name = get_futu_stock_name(code, quote_ctx=temp_quote_ctx)
+                if accurate_name != code:
+                    name = accurate_name
+                
+                self.progress.emit(idx + 1, total, f"{code} {name}")
+                self.log_signal.emit(f"🔍 扫描 {code} {name}...")
 
+                # 数据源优先级处理
+                actual_data_src = self.data_src
+                import os
+                if code.upper().startswith("US.") and os.getenv("IB_HOST"):
+                    actual_data_src = DATA_SRC.IB
+
+                try:
+                    chan = CChan(
+                        code=code,
+                        begin_time=begin_time,
+                        end_time=end_time,
+                        data_src=actual_data_src,
+                        lv_list=[self.kl_type],
+                        config=self.config,
+                        autype=AUTYPE.QFQ,
+                    )
+
+                    # 判断是否有数据
+                    if len(chan.lv_list) == 0 or len(chan[chan.lv_list[0]]) == 0:
+                        fail_count += 1
+                        self.log_signal.emit(f"⏭️ {code} {name}: 无K线数据")
+                        continue
+                    
+                    last_klu = chan[chan.lv_list[0]][-1][-1]
+                    last_time = last_klu.time
+                    last_date = datetime(last_time.year, last_time.month, last_time.day)
+                    if (datetime.now() - last_date).days > 15:
+                        fail_count += 1
+                        self.log_signal.emit(f"⏸️ {code} {name}: 停牌超过15天")
+                        continue
+
+                    success_count += 1
+
+                    # 检查是否有买卖点
+                    bsp_list = chan.get_latest_bsp(number=0)
+                    
+                    # 与自动交易保持一致：只显示最近 max_signal_age_hours 小时内的信号
+                    max_age_hours = TRADING_CONFIG.get('max_signal_age_hours', 1)
+                    now = datetime.now()
+                    
+                    buy_points = []
+                    sell_points = []
+                    for bsp in bsp_list:
+                        # 转换 Bsp 的 CTime 为 datetime
+                        b_time = bsp.klu.time
+                        bsp_dt = datetime(b_time.year, b_time.month, b_time.day, b_time.hour, b_time.minute, b_time.second)
+                        
+                        # 计算交易小时数
+                        trading_hours = get_trading_duration_hours(bsp_dt, now)
+                        
+                        # 过滤条件
+                        if trading_hours <= max_age_hours:
+                            if bsp.is_buy:
+                                buy_points.append(bsp)
+                            else:
+                                sell_points.append(bsp)
+                    
+
+                    if buy_points:
+                        latest_buy = buy_points[0]
+                        self.log_signal.emit(f"✅ {code} {name}: 发现买点 {latest_buy.type2str()}")
+                        self.found_signal.emit({
+                            'code': code,
+                            'name': name,
+                            'price': row.get('最新价', 0.0),
+                            'change': row.get('涨跌幅', 0.0),
+                            'bsp_type': f"买点{latest_buy.type2str()}",
+                            'bsp_time': str(latest_buy.klu.time),
+                            'bsp_direction': 'buy',
+                            'chan': chan,
+                        })
+                    elif sell_points:
+                        latest_sell = sell_points[0]
+                        self.log_signal.emit(f"🔴 {code} {name}: 发现卖点 {latest_sell.type2str()}")
+                        self.found_signal.emit({
+                            'code': code,
+                            'name': name,
+                            'price': row.get('最新价', 0.0),
+                            'change': row.get('涨跌幅', 0.0),
+                            'bsp_type': f"卖点{latest_sell.type2str()}",
+                            'bsp_time': str(latest_sell.klu.time),
+                            'bsp_direction': 'sell',
+                            'chan': chan,
+                        })
+                    else:
+                        self.log_signal.emit(f"➖ {code} {name}: 无近期买卖点")
+                except Exception as e:
+                    fail_count += 1
+                    error_msg = str(e)
+                    if "list index out of range" in error_msg:
+                        self.log_signal.emit(f"❌ {code} {name}: 数据不足，无法分析")
+                    elif "Broken pipe" in error_msg or "Errno 32" in error_msg:
+                        self.log_signal.emit(f"❌ {code} {name}: 数据处理中断，可能是分钟级别数据格式问题")
+                    elif "custom" in error_msg.lower():
+                        self.log_signal.emit(f"❌ {code} {name}: 数据源错误，请检查数据库")
+                    else:
+                        self.log_signal.emit(f"❌ {code} {name}: {error_msg[:50]}")
+                    continue
+
+        except Exception as e:
+            self.log_signal.emit(f"❌ 扫描过程出错: {str(e)}")
+        finally:
+            if temp_quote_ctx:
+                temp_quote_ctx.close()
+            # 确保美股连接被释放
             try:
-                chan = CChan(
-                    code=code,
-                    begin_time=begin_time,
-                    end_time=end_time,
-                    data_src=self.data_src,
-                    lv_list=[self.kl_type],
-                    config=self.config,
-                    autype=AUTYPE.QFQ,
-                )
-
-                # 判断是否有数据
-                if len(chan.lv_list) == 0 or len(chan[chan.lv_list[0]]) == 0:
-                    fail_count += 1
-                    self.log_signal.emit(f"⏭️ {code} {name}: 无K线数据")
-                    continue
-                
-                last_klu = chan[chan.lv_list[0]][-1][-1]
-                last_time = last_klu.time
-                last_date = datetime(last_time.year, last_time.month, last_time.day)
-                if (datetime.now() - last_date).days > 15:
-                    fail_count += 1
-                    self.log_signal.emit(f"⏸️ {code} {name}: 停牌超过15天")
-                    continue
-
-                success_count += 1
-
-                # 检查是否有买卖点
-                bsp_list = chan.get_latest_bsp(number=0)
-                
-                # 与自动交易保持一致：只显示最近 max_signal_age_hours 小时内的信号
-                max_age_hours = TRADING_CONFIG.get('max_signal_age_hours', 1)
-                now = datetime.now()
-                
-                buy_points = []
-                sell_points = []
-                for bsp in bsp_list:
-                    # 转换 Bsp 的 CTime 为 datetime
-                    b_time = bsp.klu.time
-                    bsp_dt = datetime(b_time.year, b_time.month, b_time.day, b_time.hour, b_time.minute, b_time.second)
-                    
-                    # 计算交易小时数
-                    trading_hours = get_trading_duration_hours(bsp_dt, now)
-                    
-                    # 过滤条件
-                    if trading_hours <= max_age_hours:
-                        if bsp.is_buy:
-                            buy_points.append(bsp)
-                        else:
-                            sell_points.append(bsp)
-                
-
-                if buy_points:
-                    latest_buy = buy_points[0]
-                    self.log_signal.emit(f"✅ {code} {name}: 发现买点 {latest_buy.type2str()}")
-                    self.found_signal.emit({
-                        'code': code,
-                        'name': name,
-                        'price': row.get('最新价', 0.0),
-                        'change': row.get('涨跌幅', 0.0),
-                        'bsp_type': f"买点{latest_buy.type2str()}",
-                        'bsp_time': str(latest_buy.klu.time),
-                        'bsp_direction': 'buy',
-                        'chan': chan,
-                    })
-                elif sell_points:
-                    latest_sell = sell_points[0]
-                    self.log_signal.emit(f"🔴 {code} {name}: 发现卖点 {latest_sell.type2str()}")
-                    self.found_signal.emit({
-                        'code': code,
-                        'name': name,
-                        'price': row.get('最新价', 0.0),
-                        'change': row.get('涨跌幅', 0.0),
-                        'bsp_type': f"卖点{latest_sell.type2str()}",
-                        'bsp_time': str(latest_sell.klu.time),
-                        'bsp_direction': 'sell',
-                        'chan': chan,
-                    })
-                else:
-                    self.log_signal.emit(f"➖ {code} {name}: 无近期买卖点")
-            except Exception as e:
-                fail_count += 1
-                error_msg = str(e)
-                if "list index out of range" in error_msg:
-                    self.log_signal.emit(f"❌ {code} {name}: 数据不足，无法分析")
-                elif "Broken pipe" in error_msg or "Errno 32" in error_msg:
-                    self.log_signal.emit(f"❌ {code} {name}: 数据处理中断，可能是分钟级别数据格式问题")
-                elif "custom" in error_msg.lower():
-                    self.log_signal.emit(f"❌ {code} {name}: 数据源错误，请检查数据库")
-                else:
-                    self.log_signal.emit(f"❌ {code} {name}: {error_msg[:50]}")
-                continue
+                from DataAPI.InteractiveBrokersAPI import CInteractiveBrokersAPI
+                CInteractiveBrokersAPI.do_close()
+            except:
+                pass
 
         self.finished.emit(success_count, fail_count)
 
@@ -202,7 +219,7 @@ class SingleAnalysisThread(QThread):
         self.config = config
         self.kl_types = kl_types or [KL_TYPE.K_DAY, KL_TYPE.K_30M, KL_TYPE.K_5M, KL_TYPE.K_1M]
         self.base_days = days  # 用户输入的天数，仅用于日线
-        self.data_sources = data_sources or [DATA_SRC.FUTU, "custom:SQLiteAPI.SQLiteAPI"]
+        self.data_sources = data_sources or get_default_data_sources(code)
 
     def _get_days_for_level(self, kl_type):
         """根据级别返回合适的数据天数"""
@@ -211,67 +228,73 @@ class SingleAnalysisThread(QThread):
         return LEVEL_DATA_DAYS.get(kl_type, self.base_days)
 
     def run(self):
-       try:
-           end_time = datetime.now().strftime("%Y-%m-%d")
-           
-           self.log_signal.emit(f"🔍 开始分析 {self.code}...")
-           
-           results = {}
-           for kl_type in self.kl_types:
-               # 每个级别使用不同的数据天数
-               level_days = self._get_days_for_level(kl_type)
-               begin_time = (datetime.now() - timedelta(days=level_days)).strftime("%Y-%m-%d")
-               self.log_signal.emit(f"📊 级别 {kl_type.name}: 加载最近 {level_days} 天数据")
-               
-               chan = None
-               for data_src in self.data_sources:
-                   try:
-                       self.log_signal.emit(f"尝试使用数据源: {data_src}")
-                       chan = CChan(
-                           code=self.code,
-                           begin_time=begin_time,
-                           end_time=end_time,
-                           data_src=data_src,
-                           lv_list=[kl_type],
-                           config=self.config,
-                           autype=AUTYPE.QFQ,
-                       )
-                       if len(chan.lv_list) > 0:
-                           first_kl_data = chan[chan.lv_list[0]]
-                           if len(first_kl_data) > 0:
-                               break
-                   except Exception as e:
-                       self.log_signal.emit(f"级别 {kl_type.name} 数据源 {data_src} 失败: {str(e)}")
-                       continue
-               
-               if chan is None or len(chan.lv_list) == 0:
-                   self.log_signal.emit(f"⚠️ {self.code} 缺失级别: {kl_type.name} 数据")
-                   continue
-               
-               try:
-                   first_kl_type = chan.lv_list[0]
-                   first_kl_data = chan[first_kl_type]
-                   if hasattr(first_kl_data, 'bi_list'): _ = list(first_kl_data.bi_list)
-                   if hasattr(first_kl_data, 'seg_list'): _ = list(first_kl_data.seg_list)
-                   if hasattr(first_kl_data, 'zs_list'): _ = list(first_kl_data.zs_list)
-                   results[kl_type.name] = chan
-               except Exception as calc_error:
-                   self.log_signal.emit(f"⚠️ 计算级别 {kl_type.name} 时出现: {str(calc_error)}")
-           
-           if not results:
-               raise Exception(f"股票 {self.code} 没有任何可用级别的K线数据进行分析")
-               
-           self.log_signal.emit(f"✅ {self.code} 分析完成，获取到 {len(results)} 个级别数据")
-           self.finished.emit(results)
-       except Exception as e:
-           error_msg = str(e)
-           if "list index out of range" in error_msg:
-               self.error.emit("数据不足，无法分析。请确保数据库中有足够的历史K线数据（至少30天以上）。")
-           elif "custom" in error_msg.lower():
-               self.error.emit("数据源错误，请检查数据库连接和表结构。")
-           else:
-               self.error.emit(str(e))
-
+        try:
+            end_time = datetime.now().strftime("%Y-%m-%d")
+            
+            self.log_signal.emit(f"🔍 开始分析 {self.code}...")
+            
+            results = {}
+            for kl_type in self.kl_types:
+                # 每个级别使用不同的数据天数
+                level_days = self._get_days_for_level(kl_type)
+                begin_time = (datetime.now() - timedelta(days=level_days)).strftime("%Y-%m-%d")
+                self.log_signal.emit(f"📊 级别 {kl_type.name}: 加载最近 {level_days} 天数据")
+                
+                chan = None
+                for data_src in self.data_sources:
+                    try:
+                        self.log_signal.emit(f"尝试使用数据源: {data_src}")
+                        chan = CChan(
+                            code=self.code,
+                            begin_time=begin_time,
+                            end_time=end_time,
+                            data_src=data_src,
+                            lv_list=[kl_type],
+                            config=self.config,
+                            autype=AUTYPE.QFQ,
+                        )
+                        if len(chan.lv_list) > 0:
+                            first_kl_data = chan[chan.lv_list[0]]
+                            if len(first_kl_data) > 0:
+                                break
+                    except Exception as e:
+                        self.log_signal.emit(f"级别 {kl_type.name} 数据源 {data_src} 失败: {str(e)}")
+                        continue
+                
+                if chan is None or len(chan.lv_list) == 0:
+                    self.log_signal.emit(f"⚠️ {self.code} 缺失级别: {kl_type.name} 数据")
+                    continue
+                
+                try:
+                    first_kl_type = chan.lv_list[0]
+                    first_kl_data = chan[first_kl_type]
+                    if hasattr(first_kl_data, 'bi_list'): _ = list(first_kl_data.bi_list)
+                    if hasattr(first_kl_data, 'seg_list'): _ = list(first_kl_data.seg_list)
+                    if hasattr(first_kl_data, 'zs_list'): _ = list(first_kl_data.zs_list)
+                    results[kl_type.name] = chan
+                except Exception as calc_error:
+                    self.log_signal.emit(f"⚠️ 计算级别 {kl_type.name} 时出现: {str(calc_error)}")
+            
+            if not results:
+                raise Exception(f"股票 {self.code} 没有任何可用级别的K线数据进行分析")
+                
+            self.log_signal.emit(f"✅ {self.code} 分析完成，获取到 {len(results)} 个级别数据")
+            self.finished.emit(results)
+        except Exception as e:
+            error_msg = str(e)
+            if "list index out of range" in error_msg:
+                self.error.emit("数据不足，无法分析。请确保数据库中有足够的历史K线数据（至少30天以上）。")
+            elif "custom" in error_msg.lower():
+                self.error.emit("数据源错误，请检查数据库连接和表结构。")
+            else:
+                self.error.emit(str(e))
+        finally:
+            # 确保美股连接被释放
+            try:
+                from DataAPI.InteractiveBrokersAPI import CInteractiveBrokersAPI
+                CInteractiveBrokersAPI.do_close()
+            except:
+                pass
 
 
 class UpdateDatabaseThread(QThread):
@@ -362,6 +385,13 @@ class UpdateDatabaseThread(QThread):
             self.log_signal.emit(f"❌ 更新失败: {str(e)}")
             self.log_signal.emit(f"   错误详情: {traceback.format_exc()}")
             self.finished.emit(False, f"更新失败: {str(e)}")
+        finally:
+            # 确保多级别更新任务结束后关闭 IB 连接
+            try:
+                from DataAPI.InteractiveBrokersAPI import CInteractiveBrokersAPI
+                CInteractiveBrokersAPI.do_close()
+            except:
+                pass
 
 
 class RepairSingleStockThread(QThread):
@@ -402,7 +432,7 @@ class RepairSingleStockThread(QThread):
             for timeframe in timeframes:
                 if not self.is_running:
                     break
-                    
+                
                 try:
                     if diagnose_and_repair_stock(self.stock_code, timeframe, self.start_date, end_date, log_callback):
                         repaired_count += 1
@@ -428,3 +458,10 @@ class RepairSingleStockThread(QThread):
             self.log_signal.emit(f"❌ 数据修复失败: {str(e)}")
             self.log_signal.emit(f"   错误详情: {traceback.format_exc()}")
             self.finished.emit(False, f"数据修复失败: {str(e)}")
+        finally:
+            # 确保数据修复结束后关闭 IB 连接
+            try:
+                from DataAPI.InteractiveBrokersAPI import CInteractiveBrokersAPI
+                CInteractiveBrokersAPI.do_close()
+            except:
+                pass

@@ -22,7 +22,7 @@ class KLineHandler(StockQuoteHandlerBase):
     
     def on_recv_rsp(self, rsp_str):
         """处理K线数据推送"""
-        ret, data = super(StockQuoteHandlerBase, self).on_recv_rsp(rsp_str)
+        ret, data = super().on_recv_rsp(rsp_str)
         if ret != RET_OK:
             print(f"K线数据处理失败: {data}")
             return RET_ERROR

@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 
 class CheckableComboBox(QComboBox):
     """支持多选的下拉框"""
+    item_checked_changed = pyqtSignal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setEditable(True)
@@ -37,7 +39,6 @@ class CheckableComboBox(QComboBox):
         self.model = QStandardItemModel(self)
         self.setModel(self.model)
         self.view().pressed.connect(self.handleItemPressed)
-        self.item_checked_changed = pyqtSignal()
         self._max_selections = 5
         self._internal_updating = False
 
@@ -112,7 +113,8 @@ class BacktestRunnerThread(QThread):
                 start_date=self.config.get('start_date', '2024-01-01'),
                 end_date=self.config.get('end_date', '2025-12-31'),
                 watchlist=self.config.get('watchlist', []),
-                use_hk_costs=True
+                use_hk_costs=True,
+                use_ml=self.config.get('use_ml', False)
             )
             
             self.progress.emit(f"📊 准备回测 {len(self.config.get('watchlist', []))} 只股票...")
@@ -487,7 +489,8 @@ class BacktestTab(QWidget):
             'initial_funds': initial_funds,
             'start_date': start_date,
             'end_date': end_date,
-            'watchlist': watchlist
+            'watchlist': watchlist,
+            'use_ml': "机器学习增强" in self.strategy_combo.currentText()
         }
         
         self.log("=" * 40)

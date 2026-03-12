@@ -38,15 +38,7 @@ class CYFinanceAPI(CCommonStockApi):
         # However, for 1h it's usually 730 days. For 1m it's 7 days.
         
         try:
-            import requests as req
-            session = req.Session()
-            session.headers.update({
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-                'Accept-Language': 'en-US,en;q=0.9',
-            })
-            
-            ticker = yf.Ticker(ticker_str, session=session)
+            ticker = yf.Ticker(ticker_str)
             # Use auto_adjust for QFQ-like behavior in yfinance
             df = ticker.history(start=start_date, end=end_date, interval=interval, auto_adjust=True)
             
