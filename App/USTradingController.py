@@ -175,17 +175,40 @@ class USTradingController(QObject):
                     if now_ts - last_reconnect_time > 15:
                         last_reconnect_time = now_ts
                         try:
-                            # Use a stable clientId for the main trading loop
-                            target_client_id = self.client_id
+                            # 1.1 检查主站是否可达 (防止静默失败)
+                            import socket
+                            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            sock.settimeout(2)
+                            result = sock.connect_ex((self.host, self.port))
+                            sock.close()
+                            
+                            if result != 0:
+                                self.log_message.emit(f"❌ [美股] 目标端口不可达 ({self.host}:{self.port})，请确认 IB Gateway/TWS 已启动且 API 设置正确")
+                                last_reconnect_time = now_ts + 45 # 延长重试间隔
+                                continue
+
+                            # 1.2 使用半波动 ID (防止单一 ID 被挂起的旧进程占用，同时控制 ID 总量)
+                            # 每次失败后在基础 ID 上小幅摆动
+                            target_client_id = self.client_id + (int(time.time() // 60) % 5)
                             self.log_message.emit(f"🔄 [美股] 正在发起异步连接 ({self.host}:{self.port}, ID:{target_client_id})...")
-                            await self.ib.connectAsync(self.host, self.port, clientId=target_client_id, timeout=10)
+                            
+                            # 增加内部超时捕获
+                            try:
+                                await asyncio.wait_for(self.ib.connectAsync(self.host, self.port, clientId=target_client_id), timeout=12)
+                            except asyncio.TimeoutError:
+                                raise Exception("IB 连接指令执行超时 (12s)")
+                                
                             self.log_message.emit(f"🔌 [美股] IB 连接成功 (ID:{target_client_id})，同步实时数据流")
                             self.ib.reqAccountUpdates(True)
                         except Exception as e:
-                            self.log_message.emit(f"⚠️ [美股] 连接失败: {e}")
+                            # 打印完整异常栈到后台，GUI 显示精简信息
+                            import traceback
+                            err_detail = traceback.format_exc().splitlines()[-1]
+                            self.log_message.emit(f"⚠️ [美股] 连接失败: {e if str(e) else err_detail}")
+                            
                             if "loop is closed" in str(e).lower():
                                 self.log_message.emit("♻️ [美股] 检测到事件循环异常，正在重建 IB 客户端...")
-                                self.ib = IB() # Force recreate instance to pick up current loop
+                                self.ib = IB() 
                     await asyncio.sleep(1)
                     continue
 
