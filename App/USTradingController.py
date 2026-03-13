@@ -175,8 +175,8 @@ class USTradingController(QObject):
                     if now_ts - last_reconnect_time > 15:
                         last_reconnect_time = now_ts
                         try:
-                            # Randomize clientId to avoid conflicts on restart
-                            target_client_id = self.client_id + random.randint(0, 1000)
+                            # Use a stable clientId for the main trading loop
+                            target_client_id = self.client_id
                             self.log_message.emit(f"🔄 [美股] 正在发起异步连接 ({self.host}:{self.port}, ID:{target_client_id})...")
                             await self.ib.connectAsync(self.host, self.port, clientId=target_client_id, timeout=10)
                             self.log_message.emit(f"🔌 [美股] IB 连接成功 (ID:{target_client_id})，同步实时数据流")
@@ -490,13 +490,29 @@ class USTradingController(QObject):
                 if v.tag in available_tags or v.tag in net_liq_tags:
                     found_tags.append(f"{v.tag}({v.currency}):{v.value}")
 
-                if v.tag in available_tags and v.currency in ('USD', '', 'BASE'):
-                    available = max(available, float(v.value))
-                if v.tag in net_liq_tags and v.currency in ('USD', '', 'BASE'):
-                    total = max(total, float(v.value))
+                if v.tag in available_tags:
+                    # 优先 USD，其次 BASE，最后接受任何币种（如果目前还是 0）
+                    if v.currency in ('USD', 'BASE') or available == 0.0:
+                        try: available = float(v.value)
+                        except: pass
+                if v.tag in net_liq_tags:
+                    if v.currency in ('USD', 'BASE') or total == 0.0:
+                        try: total = float(v.value)
+                        except: pass
             
             if available == 0.0 and total == 0.0:
-                self.log_message.emit(f"⚠️ 未能从账户获取到资金信息。找到的标签: {', '.join(found_tags[:5])}...")
+                # 最后的终极手段：尝试 TotalCashValue 或者是 NetLiquidationByCurrency
+                for v in vals:
+                    if v.tag in ('TotalCashValue', 'NetLiquidationByCurrency', 'EquityWithLoanValue'):
+                        found_tags.append(f"EXT-{v.tag}({v.currency}):{v.value}")
+                        if available == 0.0: 
+                            try: available = float(v.value)
+                            except: pass
+                        if total == 0.0:
+                            try: total = float(v.value)
+                            except: pass
+
+                self.log_message.emit(f"⚠️ 未能从常规标签获取资金。找到的所有资产标签: {', '.join(found_tags[:10])}")
             
             positions_data = []
             for item in port:

@@ -33,8 +33,12 @@ class CInteractiveBrokersAPI(CCommonStockApi):
         # Determine fixed clientId for this thread to reuse
         # Using a range to avoid collisions with main trading (10)
         if not hasattr(_ib_local, 'client_id'):
-            import random
-            _ib_local.client_id = random.randint(50, 499)
+            # Use thread name or ID to generate a semi-stable clientId
+            import threading
+            import hashlib
+            thread_name = threading.current_thread().name
+            cid_hash = int(hashlib.md5(thread_name.encode()).hexdigest(), 16)
+            _ib_local.client_id = 50 + (cid_hash % 400) # Range 50-450
         self.client_id = _ib_local.client_id
 
     async def _ensure_connection(self):
