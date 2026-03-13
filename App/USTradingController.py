@@ -175,7 +175,7 @@ class USTradingController(QObject):
                     if now_ts - last_reconnect_time > 15:
                         last_reconnect_time = now_ts
                         try:
-                            # 1.1 检查主站是否可达 (防止静默失败)
+                            # 1.1 检查主站是否可达
                             import socket
                             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                             sock.settimeout(2)
@@ -183,31 +183,32 @@ class USTradingController(QObject):
                             sock.close()
                             
                             if result != 0:
-                                self.log_message.emit(f"❌ [美股] 目标端口不可达 ({self.host}:{self.port})，请确认 IB Gateway/TWS 已启动且 API 设置正确")
-                                last_reconnect_time = now_ts + 45 # 延长重试间隔
+                                self.log_message.emit(f"❌ [美股] 目标端口不可达 ({self.host}:{self.port})，请确认 IB Gateway 已启动")
+                                last_reconnect_time = now_ts + 20
                                 continue
 
-                            # 1.2 使用半波动 ID (防止单一 ID 被挂起的旧进程占用，同时控制 ID 总量)
-                            # 每次失败后在基础 ID 上小幅摆动
-                            target_client_id = self.client_id + (int(time.time() // 60) % 5)
-                            self.log_message.emit(f"🔄 [美股] 正在发起异步连接 ({self.host}:{self.port}, ID:{target_client_id})...")
+                            # 1.2 增强 ID 轮询：每次失败后强制切换下一个 ID (437-446)
+                            # 避免使用 time // 60 导致的分钟内 ID 锁定
+                            if not hasattr(self, '_id_offset'): self._id_offset = 0
+                            target_client_id = self.client_id + self._id_offset
+                            self._id_offset = (self._id_offset + 1) % 10 # 在 10 个 ID 间轮询
                             
-                            # 增加内部超时捕获
+                            self.log_message.emit(f"🔄 [美股] 发起连接 ({self.host}:{self.port}, ID:{target_client_id})...")
+                            
                             try:
                                 await asyncio.wait_for(self.ib.connectAsync(self.host, self.port, clientId=target_client_id), timeout=12)
                             except asyncio.TimeoutError:
-                                raise Exception("IB 连接指令执行超时 (12s)")
+                                raise Exception("IB 连接超时 (12s)")
                                 
-                            self.log_message.emit(f"🔌 [美股] IB 连接成功 (ID:{target_client_id})，同步实时数据流")
+                            self.log_message.emit(f"🔌 [美股] IB 连接成功 (ID:{target_client_id})")
                             self.ib.reqAccountUpdates(True)
                         except Exception as e:
-                            # 打印完整异常栈到后台，GUI 显示精简信息
                             import traceback
-                            err_detail = traceback.format_exc().splitlines()[-1]
-                            self.log_message.emit(f"⚠️ [美股] 连接失败: {e if str(e) else err_detail}")
+                            last_exc = traceback.format_exc().splitlines()[-1]
+                            self.log_message.emit(f"⚠️ [美股] 连接失败: {e if str(e) else last_exc}")
                             
                             if "loop is closed" in str(e).lower():
-                                self.log_message.emit("♻️ [美股] 检测到事件循环异常，正在重建 IB 客户端...")
+                                self.log_message.emit("♻️ [美股] 重建 IB 客户端...")
                                 self.ib = IB() 
                     await asyncio.sleep(1)
                     continue
@@ -497,45 +498,45 @@ class USTradingController(QObject):
             self.log_message.emit("⚠️ IB 未连接，无法查询资金")
             return 0.0, 0.0, []
         try:
-            loop = asyncio.get_running_loop()
-            vals = await loop.run_in_executor(self.executor, self.ib.accountValues)
-            port = await loop.run_in_executor(self.executor, self.ib.portfolio)
+            # 1. 直接获取缓存值 (ib_insync 会自动维护同步)
+            # 不使用 run_in_executor 因其仅为内存列表访问
+            vals = self.ib.accountValues()
+            port = self.ib.portfolio()
+            
+            # 2. 如果缓存为空，等待 0.8s 让数据流进来 (IB 刚连接时需要时间)
+            if not vals:
+                await asyncio.sleep(0.8)
+                vals = self.ib.accountValues()
+                port = self.ib.portfolio()
             
             available, total = 0.0, 0.0
             found_tags = []
             
             # 常见标签集合
-            available_tags = ('AvailableFunds', 'AvailableFunds-S', 'FullAvailableFunds', 'FullAvailableFunds-S')
-            net_liq_tags = ('NetLiquidation', 'NetLiquidation-S', 'NetLiquidationByCurrency')
+            available_tags = ('AvailableFunds', 'AvailableFunds-S', 'FullAvailableFunds', 'FullAvailableFunds-S', 'CashBalance', 'TotalCashBalance')
+            net_liq_tags = ('NetLiquidation', 'NetLiquidation-S', 'NetLiquidationByCurrency', 'EquityWithLoanValue')
             
             for v in vals:
-                # 记录找到的标签，方便调试
                 if v.tag in available_tags or v.tag in net_liq_tags:
                     found_tags.append(f"{v.tag}({v.currency}):{v.value}")
 
+                # 解析数值
+                try: val_f = float(v.value)
+                except: continue
+
                 if v.tag in available_tags:
-                    # 优先 USD，其次 BASE，最后接受任何币种（如果目前还是 0）
-                    if v.currency in ('USD', 'BASE') or available == 0.0:
-                        try: available = float(v.value)
-                        except: pass
+                    # 优先 USD，其次 BASE，最后接受非零值
+                    if v.currency == 'USD': available = val_f
+                    elif v.currency == 'BASE' and available == 0.0: available = val_f
+                    elif available == 0.0: available = val_f
+                
                 if v.tag in net_liq_tags:
-                    if v.currency in ('USD', 'BASE') or total == 0.0:
-                        try: total = float(v.value)
-                        except: pass
+                    if v.currency == 'USD': total = val_f
+                    elif v.currency == 'BASE' and total == 0.0: total = val_f
+                    elif total == 0.0: total = val_f
             
             if available == 0.0 and total == 0.0:
-                # 最后的终极手段：尝试 TotalCashValue 或者是 NetLiquidationByCurrency
-                for v in vals:
-                    if v.tag in ('TotalCashValue', 'NetLiquidationByCurrency', 'EquityWithLoanValue'):
-                        found_tags.append(f"EXT-{v.tag}({v.currency}):{v.value}")
-                        if available == 0.0: 
-                            try: available = float(v.value)
-                            except: pass
-                        if total == 0.0:
-                            try: total = float(v.value)
-                            except: pass
-
-                self.log_message.emit(f"⚠️ 未能从常规标签获取资金。找到的所有资产标签: {', '.join(found_tags[:10])}")
+                self.log_message.emit(f"⚠️ 未能获取到资金。找到的所有资产标签: {', '.join(found_tags[:15])}")
             
             positions_data = []
             for item in port:
