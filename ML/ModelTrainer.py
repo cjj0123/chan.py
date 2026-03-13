@@ -34,18 +34,14 @@ from ChanConfig import CChanConfig
 from ML.FeatureExtractor import FeatureExtractor
 from BacktestDataLoader import BacktestDataLoader
 from Common.CEnum import KL_TYPE
+from ML.MarketComponentResolver import MarketComponentResolver
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # --- Model Definitions ---
-
-if torch:
+if torch is not None:
     class MLPModel(nn.Module):
-        """
-        Chanlun Phase 2: MLP 架构扩展。
-        使用简单的三层全连接网络，由于样本量可能较小，移除 BatchNorm1d 以避免单样本 Batch 错误。
-        """
         def __init__(self, input_size):
             super(MLPModel, self).__init__()
             self.net = nn.Sequential(
@@ -60,18 +56,34 @@ if torch:
 
         def forward(self, x):
             return self.net(x)
+else:
+    class MLPModel:
+        def __init__(self, *args, **kwargs):
+            raise ImportError("PyTorch is not installed. MLPModel is unavailable.")
 
 # --- Trainer Class ---
 
 class ModelTrainer:
     """
     模型训练器：支持多种模型 (XGBoost, LightGBM, MLP) 和多维度标签。
+    支持全球市场样本采集与分片训练。
     """
     def __init__(self, 
-                 watchlist: List[str] = ["HK.00700", "US.AAPL", "US.TSLA", "US.NVDA"], 
-                 start_date: str = "2024-01-01", 
+                 watchlist: List[str] = None, 
+                 start_date: str = "2021-01-01", 
                  end_date: str = "2025-12-31"):
-        self.watchlist = watchlist
+        # 默认使用成分股解析器
+        self.resolver = MarketComponentResolver()
+        if watchlist is None:
+            logger.info("📡 未指定观察列表，正在解析全球主要成分股...")
+            all_targets = self.resolver.get_all_training_targets()
+            self.watchlist = []
+            for m, stocks in all_targets.items():
+                self.watchlist.extend(stocks)
+            logger.info(f"✅ 解析完成，共计 {len(self.watchlist)} 只目标股票")
+        else:
+            self.watchlist = watchlist
+            
         self.start_date = start_date
         self.end_date = end_date
         
@@ -91,44 +103,51 @@ class ModelTrainer:
             "print_warning": False,
         })
 
-    def collect_samples(self):
-        """收集历史买点样本及其多种标签"""
-        logger.info(f"🚀 开始为 {len(self.watchlist)} 只股票收集买点样本...")
+    def collect_samples(self, target_watchlist: List[str] = None, start_date: str = None, end_date: str = None):
+        """收集指定列表或默认列表的买点样本"""
+        coins = target_watchlist if target_watchlist else self.watchlist
+        s_date = start_date if start_date else self.start_date
+        e_date = end_date if end_date else self.end_date
+        
+        logger.info(f"🚀 开始为 {len(coins)} 只股票收集买点样本 ({s_date} -> {e_date})...")
         samples = []
 
-        for code in self.watchlist:
+        for code in coins:
             try:
-                klines = self.loader.load_kline_data(code, '30M', self.start_date, self.end_date)
-                if not klines: continue
-                logger.info(f"🔍 正在扫描 {code} 的 {len(klines)} 根 K 线寻找样本...")
+                # 针对全球采集，增加 5m 数据的支持（如果存在）
+                klines = self.loader.load_kline_data(code, '30M', s_date, e_date)
+                if not klines or len(klines) < 100: continue
                 
+                logger.debug(f"🔍 扫描 {code} 样本中...")
                 chan = CChan(code=code, data_src="CUSTOM", config=self.chan_config, lv_list=[KL_TYPE.K_30M])
                 
-                for i, klu in enumerate(klines):
+                # 批量触发以提高效率
+                step = 100
+                for i in range(0, len(klines), step):
+                    chunk = klines[i : i + step]
                     try:
-                        chan.trigger_load({KL_TYPE.K_30M: [klu]})
+                        chan.trigger_load({KL_TYPE.K_30M: chunk})
                     except Exception: continue
                     
                     bsp_list = chan.get_latest_bsp(number=0)
-                    if not bsp_list: continue
-                    
-                    last_bsp = bsp_list[-1]
-                    if not last_bsp.is_buy or not last_bsp.klu.klc: continue
-                    
-                    # 仅记录新确认的买点 (5根K线内确认)
-                    if (chan[0][-1].idx - last_bsp.klu.klc.idx) > 5: continue
-                    
-                    features = self.extractor.extract_bsp_features(chan, last_bsp)
-                    
-                    # 生成多维度标签 (Phase 2)
-                    labels = self._generate_labels(klines, i, klu.close)
-                    if not labels: continue
-                    
-                    # 合并特征和标签
-                    sample = {"code": code, "time": str(klu.time)}
-                    sample.update(labels)
-                    sample.update(features)
-                    samples.append(sample)
+                    for bsp in bsp_list:
+                        if not bsp.is_buy or not bsp.klu.klc: continue
+                        
+                        # 特征提取
+                        idx_in_klines = bsp.klu.idx
+                        if idx_in_klines >= len(klines): continue
+                        
+                        features = self.extractor.extract_bsp_features(chan, bsp)
+                        labels = self._generate_labels(klines, idx_in_klines, bsp.klu.close)
+                        if not labels: continue
+                        
+                        sample = {"code": code, "time": str(bsp.klu.time)}
+                        sample.update(labels)
+                        sample.update(features)
+                        samples.append(sample)
+                
+                if len(samples) % 100 == 0:
+                    logger.info(f"📊 已收集 {len(samples)} 个样本...")
                     
             except Exception as e:
                 logger.error(f"❌ 处理 {code} 出错: {e}")
@@ -138,8 +157,13 @@ class ModelTrainer:
             return
 
         df = pd.DataFrame(samples)
-        # 填充缺失值为0（主要是某些极其罕见的特征）
         df.fillna(0, inplace=True)
+        
+        # 如果已存在，则追加 (Deduplicate later)
+        if os.path.exists(self.train_data_file):
+            old_df = pd.read_csv(self.train_data_file)
+            df = pd.concat([old_df, df]).drop_duplicates(subset=["code", "time"])
+            
         df.to_csv(self.train_data_file, index=False)
         
         # 提取特征名映射
@@ -149,7 +173,7 @@ class ModelTrainer:
         with open(self.meta_file, 'w', encoding='utf-8') as f:
             json.dump(feature_meta, f, indent=4)
             
-        logger.info(f"✅ 样本收集完成。共提取了 {len(samples)} 个样本。保存至 {self.train_data_file}")
+        logger.info(f"✅ 样本采集增量完成。当前总计 {len(df)} 个样本。")
 
     def _generate_labels(self, klines, start_idx, buy_price) -> Dict[str, int]:
         """为单个买点生成多个维度的标签"""

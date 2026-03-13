@@ -228,20 +228,18 @@ def get_default_data_sources(code: str) -> list:
     default_sources = ["custom:SQLiteAPI.SQLiteAPI"]
     
     if is_us_stock(code):
-        # 美股优先级逻辑
+        # 美股优先级逻辑: IB -> YFinance -> 本地数据库
         sources = []
         # 1. IB (如果环境配置了主机)
         if os.getenv("IB_HOST"):
             sources.append(DATA_SRC.IB)
-        # 2. Polygon (如果有 API KEY)
-        if API_CONFIG.get('POLYGON_API_KEY'):
-            sources.append(DATA_SRC.POLYGON)
-        # 3. YFinance (无需 KEY，作为稳健兜底)
+        
+        # 2. YFinance (无需 KEY，作为第一备选驱动)
         sources.append(DATA_SRC.YFINANCE)
-        # 4. 本地数据库
+        
+        # 3. 本地数据库 (兜底)
         sources.append("custom:SQLiteAPI.SQLiteAPI")
-        # 5. 富途 (美股作为最后尝试，因为常报 ret=-1 无权限)
-        sources.append(DATA_SRC.FUTU)
+        
         return sources
     else:
         # 港股/A股优先级逻辑

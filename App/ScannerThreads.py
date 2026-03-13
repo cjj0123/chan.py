@@ -90,25 +90,29 @@ class ScanThread(QThread):
                 self.progress.emit(idx + 1, total, f"{code} {name}")
                 self.log_signal.emit(f"🔍 扫描 {code} {name}...")
 
-                # 数据源优先级处理
-                actual_data_src = self.data_src
-                import os
-                if code.upper().startswith("US.") and os.getenv("IB_HOST"):
-                    actual_data_src = DATA_SRC.IB
-
+                # 数据源选择逻辑：统一使用 Common.StockUtils 中的优先级
+                from Common.StockUtils import get_default_data_sources
+                data_sources = get_default_data_sources(code) if self.data_src == DATA_SRC.FUTU else [self.data_src]
+                
+                chan = None
+                for src in data_sources:
+                    try:
+                        chan = CChan(
+                            code=code,
+                            begin_time=begin_time,
+                            end_time=end_time,
+                            data_src=src,
+                            lv_list=[self.kl_type],
+                            config=self.config,
+                            autype=AUTYPE.QFQ,
+                        )
+                        if len(chan.lv_list) > 0 and len(chan[chan.lv_list[0]]) > 0:
+                            break # 成功获取数据
+                    except Exception as e:
+                        continue
+                
                 try:
-                    chan = CChan(
-                        code=code,
-                        begin_time=begin_time,
-                        end_time=end_time,
-                        data_src=actual_data_src,
-                        lv_list=[self.kl_type],
-                        config=self.config,
-                        autype=AUTYPE.QFQ,
-                    )
-
-                    # 判断是否有数据
-                    if len(chan.lv_list) == 0 or len(chan[chan.lv_list[0]]) == 0:
+                    if chan is None or len(chan.lv_list) == 0:
                         fail_count += 1
                         self.log_signal.emit(f"⏭️ {code} {name}: 无K线数据")
                         continue
@@ -337,15 +341,27 @@ class UpdateDatabaseThread(QThread):
                 def stop_check():
                     return not self.is_running
                 
-                download_and_save_all_stocks_multi_timeframe(
-                    self.stock_codes,
-                    days=self.days,
-                    timeframes=self.timeframes,
-                    log_callback=log_callback,
-                    start_date=self.start_date,
-                    end_date=self.end_date,
-                    stop_check=stop_check
-                )
+                import asyncio
+                # Use the new async version which is optimized for IB
+                from DataAPI.SQLiteAPI import download_and_save_all_stocks_async
+                
+                # Use a specific event loop for this thread to avoid asyncio.run issues
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(download_and_save_all_stocks_async(
+                        self.stock_codes,
+                        days=self.days,
+                        timeframes=self.timeframes,
+                        log_callback=log_callback,
+                        start_date=self.start_date,
+                        end_date=self.end_date,
+                        stop_check=stop_check
+                    ))
+                except Exception as e:
+                    self.log_signal.emit(f"❌ 异步下载出错: {e}")
+                finally:
+                    loop.close()
                 
                 if self.is_running:
                     db = CChanDB()

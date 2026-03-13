@@ -10,6 +10,8 @@ from Common.func_util import str2float
 from KLine.KLine_Unit import CKLine_Unit
 from DataAPI.CommonStockAPI import CCommonStockApi
 from Trade.db_util import CChanDB
+import asyncio
+import os
 
 
 def convert_stock_code_for_akshare(code):
@@ -463,6 +465,202 @@ def download_and_save_all_stocks_multi_timeframe(stock_codes, days=365, timefram
                     print(f"❌ 下载 {code} {tf_name} 失败: {e}")
                 continue
 
+async def download_and_save_all_stocks_async(stock_codes, days=365, timeframes=['day', '30m', '5m', '1m'], log_callback=None, start_date=None, end_date=None, stop_check=None, ib_client=None):
+    """
+    Async version of data down-loader, optimized for US stocks via IB.
+    """
+    from datetime import datetime
+    import os
+    
+    us_stocks = [c for c in stock_codes if c.startswith("US.")]
+    other_stocks = [c for c in stock_codes if not c.startswith("US.")]
+    
+    # Process US Stocks Async
+    if us_stocks and os.getenv("IB_HOST"):
+        await _download_us_stocks_async_batch(
+            us_stocks, days, timeframes, log_callback, start_date, end_date, stop_check, ib_client
+        )
+    
+    # Process Other Stocks Sync (falling back to the standard loop)
+    if other_stocks:
+        # We can just call the synchronous version for others
+        # To avoid blocking the event loop too much, we could use run_in_executor, 
+        # but for simplicity and since they are fewer/less throttled, standard call is fine.
+        download_and_save_all_stocks_multi_timeframe(
+            other_stocks, days, timeframes, log_callback, start_date, end_date, stop_check
+        )
+
+async def _download_us_stocks_async_batch(stock_codes, days, timeframes, log_callback, start_date, end_date, stop_check, ib_client=None):
+    """Internal helper for async batch US download"""
+    from ib_insync import IB, Stock
+    from DataAPI.InteractiveBrokersAPI import CInteractiveBrokersAPI
+    from Common.CEnum import KL_TYPE
+    import sqlite3
+    
+    host = os.getenv("IB_HOST", "127.0.0.1")
+    port = int(os.getenv("IB_PORT", "4002"))
+    client_id = 15 # Different from trading (10) and scan (50+)
+    
+    should_disconnect = False
+    ib = ib_client
+    if not ib:
+        ib = IB()
+        should_disconnect = True
+    
+    try:
+        if not ib.isConnected():
+            msg = f"🔌 [IB-Sync] Connecting to {host}:{port}..."
+            print(msg)
+            if log_callback: log_callback(msg)
+            await asyncio.wait_for(ib.connectAsync(host, port, clientId=client_id), timeout=10)
+        
+        # Batch Qualify
+        msg = f"🚀 [IB-Sync] Qualifying {len(stock_codes)} US contracts..."
+        print(msg)
+        if log_callback: log_callback(msg)
+        
+        contracts = [Stock(c.split(".")[1], 'SMART', 'USD') for c in stock_codes]
+        try:
+            # Add timeout to qualification
+            qualified = await asyncio.wait_for(ib.qualifyContractsAsync(*contracts), timeout=15)
+            symbol_map = {q.symbol: q for q in qualified}
+            msg = f"✅ [IB-Sync] {len(qualified)}/{len(contracts)} contracts qualified."
+            print(msg)
+            if log_callback: log_callback(msg)
+        except asyncio.TimeoutError:
+            msg = "⚠️ [IB-Sync] Contract qualification timed out, trying limited symbols"
+            print(msg)
+            if log_callback: log_callback(msg)
+            symbol_map = {} # Will fallback to single qualification if needed or skip
+        
+        semaphore = asyncio.Semaphore(5) # Strict for DB sync to avoid pacing
+        
+        db = CChanDB()
+        
+        tasks = []
+        for code in stock_codes:
+            symbol = code.split(".")[1]
+            if symbol not in symbol_map: 
+                msg = f"⚠️  {code} Qualification failed"
+                print(msg)
+                if log_callback: log_callback(msg)
+                continue
+                
+            for tf_name in timeframes:
+                tasks.append(_download_single_us_tf_async(
+                    ib, code, symbol_map[symbol], tf_name, days, 
+                    start_date, end_date, semaphore, db, log_callback, stop_check
+                ))
+        
+        await asyncio.gather(*tasks)
+        
+    finally:
+        if should_disconnect:
+            ib.disconnect()
+
+async def _download_single_us_tf_async(ib, code, contract, tf_name, days, start_date, end_date, semaphore, db, log_callback, stop_check):
+    if stop_check and stop_check(): return
+    
+    from Common.CEnum import KL_TYPE, AUTYPE
+    from DataAPI.InteractiveBrokersAPI import CInteractiveBrokersAPI
+    import pandas as pd
+    import sqlite3
+    from datetime import datetime, timedelta
+
+    tf_map = {
+        'day': (KL_TYPE.K_DAY, days),
+        '30m': (KL_TYPE.K_30M, min(days, 730)),
+        '5m': (KL_TYPE.K_5M, min(days, 180)),
+        '1m': (KL_TYPE.K_1M, min(days, 90)),
+    }
+    k_type, tf_days = tf_map[tf_name]
+    table_name = f"kline_{tf_name}"
+
+    # Determine Range (same logic as sync)
+    if start_date and end_date:
+        desired_begin = start_date
+        desired_end = end_date
+    else:
+        desired_end = end_date or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        desired_begin = start_date or (datetime.now() - timedelta(days=tf_days)).strftime("%Y-%m-%d")
+
+    # Check DB
+    with sqlite3.connect(db.db_path) as conn:
+        existing = pd.read_sql_query(f"SELECT MIN(date) as min_date, MAX(date) as max_date FROM {table_name} WHERE code = ?", conn, params=(code,))
+    
+    begin_time, end_time = desired_begin, desired_end
+    if not existing.empty and existing.iloc[0]['min_date']:
+        ex_min, ex_max = existing.iloc[0]['min_date'], existing.iloc[0]['max_date']
+        if ex_max < desired_end:
+            begin_time = ex_max
+        elif ex_min > desired_begin:
+            begin_time, end_time = desired_begin, ex_min
+        else:
+            return # Skip
+
+    async with semaphore:
+        msg = f"⏳ [IB-Sync] {code} {tf_name} fetching..."
+        print(msg)
+        if log_callback: log_callback(msg)
+        try:
+            api = CInteractiveBrokersAPI(code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
+            # We bypass the API's own internal connection management and use the shared 'ib' instance
+            # We need to hack it slightly or expose a method. Since we updated InteractiveBrokersAPI, 
+            # we can inject the ib instance into _ib_local.ib but that's messy.
+            # Better: use the logic directly here or add a method to get_kl_data that takes 'ib'.
+            
+            # For now, let's use the new async method but it expects _ib_local.ib to be set.
+            from DataAPI.InteractiveBrokersAPI import _ib_local
+            _ib_local.ib = ib
+            
+            kl_units = await api.get_kl_data_async()
+            if kl_units:
+                kl_data = _extract_kl_data_from_units(kl_units, code, k_type)
+                df = pd.DataFrame(kl_data)
+                df = df.drop_duplicates(subset=['date'], keep='last')
+                
+                import time
+                for retry in range(5):
+                    try:
+                        with sqlite3.connect(db.db_path, timeout=30) as conn:
+                            # Manual replacement to be safe and handle existing data
+                            columns = df.columns.tolist()
+                            placeholders = ', '.join(['?' for _ in columns])
+                            sql = f"INSERT OR REPLACE INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders})"
+                            conn.executemany(sql, list(df.itertuples(index=False, name=None)))
+                            conn.commit()
+                        break 
+                    except sqlite3.OperationalError as e:
+                        if "locked" in str(e) or "busy" in str(e):
+                            time.sleep(1)
+                            continue
+                        raise e
+                
+                if log_callback: log_callback(f"✅ [IB-Sync] {code} {tf_name} updated ({len(kl_data)} bars)")
+        except Exception as e:
+            if log_callback: log_callback(f"❌ [IB-Sync] {code} {tf_name} error: {e}")
+
+def _extract_kl_data_from_units(kl_units, code, k_type):
+    from Common.CEnum import KL_TYPE
+    kl_data = []
+    for kl_unit in kl_units:
+        if k_type in [KL_TYPE.K_1M, KL_TYPE.K_5M, KL_TYPE.K_15M, KL_TYPE.K_30M, KL_TYPE.K_60M]:
+            date_str = f"{kl_unit.time.year}-{kl_unit.time.month:02d}-{kl_unit.time.day:02d} {kl_unit.time.hour:02d}:{kl_unit.time.minute:02d}:00"
+        else:
+            date_str = f"{kl_unit.time.year}-{kl_unit.time.month:02d}-{kl_unit.time.day:02d}"
+        kl_data.append({
+            'code': code,
+            'date': date_str,
+            'open': kl_unit.open,
+            'high': kl_unit.high,
+            'low': kl_unit.low,
+            'close': kl_unit.close,
+            'volume': getattr(kl_unit, 'volume', 0),
+            'turnover': getattr(kl_unit, 'turnover', 0),
+            'turnrate': getattr(kl_unit, 'turnrate', 0.0)
+        })
+    return kl_data
+
 def _download_us_stock_data(code, begin_time, end_time, log_callback=None):
     """下载美股数据 (日线) - 优先使用 Interactive Brokers (IB)"""
     return _download_us_stock_data_with_timeframe(code, begin_time, end_time, KL_TYPE.K_DAY, log_callback)
@@ -504,8 +702,6 @@ def _download_us_stock_data_with_timeframe(code, begin_time, end_time, k_type, l
         _log(f"  ⚠️  YFinance 下载失败: {e}")
         
     # 移除不再维护或不稳定的源: Polygon, Finnhub, Futu, AKShare (对于美股)
-    # 这些源要么需要复杂 Key，要么对美股支持有限
-
     return None, "None"
 
 def _download_hk_stock_data_with_timeframe(code, begin_time, end_time, k_type, log_callback=None):

@@ -247,30 +247,29 @@ class MarketMonitorController(QObject):
         days = LEVEL_DATA_DAYS.get(KL_TYPE.K_30M, 90)
         begin_time = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
         
-        # 数据源选择逻辑
-        data_src = DATA_SRC.FUTU # 默认使用富途
+        # 数据源选择逻辑：统一使用 Common.StockUtils 中的优先级
+        from Common.StockUtils import get_default_data_sources
+        data_sources = get_default_data_sources(code)
         
-        # 美股逻辑：识别 US. 前缀，切换到更高质量的数据源
-        if code.upper().startswith("US."):
-            from config import API_CONFIG
-            # 优先使用 Interactive Brokers
-            if os.getenv("IB_HOST"):
-                data_src = DATA_SRC.IB
-            elif API_CONFIG.get('POLYGON_API_KEY'):
-                data_src = DATA_SRC.POLYGON
-            else:
-                data_src = DATA_SRC.YFINANCE
-
-        chan = CChan(
-            code=code,
-            begin_time=begin_time,
-            data_src=data_src,
-            lv_list=[KL_TYPE.K_30M],
-            config=CChanConfig(CHAN_CONFIG),
-            autype=AUTYPE.QFQ
-        )
+        chan = None
+        for src in data_sources:
+            try:
+                chan = CChan(
+                    code=code,
+                    begin_time=begin_time,
+                    data_src=src,
+                    lv_list=[KL_TYPE.K_30M],
+                    config=CChanConfig(CHAN_CONFIG),
+                    autype=AUTYPE.QFQ
+                )
+                if not chan.lv_list or len(chan[chan.lv_list[0]]) == 0:
+                    continue
+                break # 成功获取数据
+            except Exception as e:
+                logger.debug(f"Source {src} failed for {code}: {e}")
+                continue
         
-        if not chan.lv_list or len(chan[chan.lv_list[0]]) == 0:
+        if chan is None:
             return
 
         # 获取最新买卖点
@@ -339,16 +338,6 @@ class MarketMonitorController(QObject):
         # --- 机器学习验证 (对所有信号尝试获取评分) ---
         ml_result = self.ml_validator.validate_signal(chan, bsp)
         
-        # 即使 ML 验证不通过，监控模式也倾向于显示信号，除非是极其低分的拦截
-        # 但我们这里遵循原逻辑：如果买点被过滤则不通知
-        if bsp.is_buy and not ml_result.get('is_valid', True):
-            self.log_message.emit(f"🚫 [监控] {code} 信号被 ML 过滤: {ml_result.get('msg')}")
-            return
-            
-        prob = ml_result.get('prob')
-        ml_info = f" | ML概率: {prob:.2f}" if prob is not None else " | ML概率: N/A"
-        self.log_message.emit(f"🌟 [A/US 监控信号] {msg_base}{ml_info}")
-        
         # 生成图表
         chart_path = os.path.abspath(os.path.join(self.charts_dir, f"{code.replace('.', '_')}_{datetime.now().strftime('%H%M%S')}.png"))
         try:
@@ -372,11 +361,41 @@ class MarketMonitorController(QObject):
             else:
                 self.log_message.emit(f"🧠 [监控] 正在对 {code} 进行视觉评分...")
                 visual_result = self.visual_judge.evaluate([chart_path], bsp_type_str)
+                
+                if visual_result is None:
+                    self.log_message.emit(f"⚠️ [监控] {code} 视觉评分返回为空 (超时或模型故障)")
+                    return
+
                 score = visual_result.get('score', 0)
                 analysis = visual_result.get('analysis', "")
                 # 存入缓存
                 self.visual_score_cache[cache_key] = {"score": score, "analysis": analysis}
                 self.log_message.emit(f"✅ [监控] {code} 评分完成: {score}分")
+
+            # --- ML 验证 (混合评分策略) ---
+            prob = ml_result.get('prob', 0)
+            is_ml_pass = ml_result.get('is_valid', False)
+            final_pass = is_ml_pass
+            override_msg = ""
+            
+            if score >= 90:
+                if prob >= 0.20:
+                    final_pass = True
+                    override_msg = f"🌟 触发高分视觉覆盖 (Visual:{score}, ML:{prob:.2f})"
+                elif prob < 0.10:
+                    final_pass = False
+                    override_msg = "🚨 ML 概率极低 (<10%)，视觉覆盖失效"
+            elif score < 70:
+                final_pass = False
+                override_msg = f"📉 视觉得分不及格 ({score})"
+            
+            if bsp.is_buy and not final_pass:
+                fail_reason = override_msg if override_msg else ml_result.get('msg')
+                self.log_message.emit(f"🚫 [监控] {code} 信号被拦截 [Visual: {score}, ML: {prob:.2f}]: {fail_reason}")
+                return
+
+            if override_msg and bsp.is_buy:
+                self.log_message.emit(f"✅ [监控] {code} {sig_type} {bsp_type_str} 准入 | {override_msg}")
 
             # Discord 推送 (使用配置中的阈值)
             min_score = TRADING_CONFIG.get('min_visual_score', 70)

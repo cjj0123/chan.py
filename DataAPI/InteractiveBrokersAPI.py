@@ -37,161 +37,47 @@ class CInteractiveBrokersAPI(CCommonStockApi):
             _ib_local.client_id = random.randint(50, 499)
         self.client_id = _ib_local.client_id
 
-    def get_kl_data(self) -> Generator[CKLine_Unit, None, None]:
-        """
-        Connect to IB Gateway and fetch historical data.
-        Reuses loop and connection if already established in this thread.
-        """
-        import sys
-        import traceback
-        from ib_insync import IB, Stock, util
+    async def _ensure_connection(self):
+        """Helper to ensure IB connection in the current event loop"""
+        from ib_insync import IB
+        loop = asyncio.get_event_loop()
+        nest_asyncio.apply(loop)
+        
+        if not hasattr(_ib_local, 'ib') or _ib_local.ib is None or not _ib_local.ib.isConnected():
+            _ib_local.ib = IB()
+            prefix = f"🔌 [IB-API-{self.client_id}]"
+            print(f"{prefix} Establishing NEW shared connection to {self.host}:{self.port}...")
+            await _ib_local.ib.connectAsync(self.host, self.port, clientId=self.client_id, timeout=10)
+        return _ib_local.ib
+
+    async def get_kl_data_async(self) -> List[CKLine_Unit]:
+        """True async version of K-line fetching"""
+        from ib_insync import Stock
         from datetime import datetime
         
+        ib = await self._ensure_connection()
+        stock_code = str(self.code).upper()
+        symbol = stock_code.split(".")[1] if stock_code.startswith("US.") else stock_code
+        
         try:
-            # 1. Ensure loop existence for this thread
-            if not hasattr(_ib_local, 'loop') or _ib_local.loop is None or _ib_local.loop.is_closed():
-                _ib_local.loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(_ib_local.loop)
-                nest_asyncio.apply(_ib_local.loop)
-            
-            loop = _ib_local.loop
-            
-            stock_code = str(self.code).upper()
-            if stock_code.startswith("US."):
-                symbol = stock_code.split(".")[1]
-            else:
-                symbol = stock_code
-                
-            async def fetch_bars():
-                # 2. Ensure IB connection existence for this thread
-                if not hasattr(_ib_local, 'ib') or _ib_local.ib is None or not _ib_local.ib.isConnected():
-                    _ib_local.ib = IB()
-                    prefix = f"🔌 [IB-API-{self.client_id}]"
-                    print(f"{prefix} Establishing NEW shared connection to {self.host}:{self.port}...")
-                    await _ib_local.ib.connectAsync(self.host, self.port, clientId=self.client_id, timeout=10)
-                
-                ib = _ib_local.ib
-                prefix = f"🚀 [IB-API-{self.client_id}]"
-                
-                try:
-                    contract = Stock(symbol, 'SMART', 'USD')
-                    await ib.qualifyContractsAsync(contract)
-                    
-                    bar_size = self.type_map.get(self.k_type, '1 day')
-                    if self.begin_date:
-                        try:
-                            # Support both date formats
-                            if ' ' in self.begin_date:
-                                start_dt = datetime.strptime(self.begin_date, "%Y-%m-%d %H:%M:%S")
-                            else:
-                                start_dt = datetime.strptime(self.begin_date, "%Y-%m-%d")
-                        except ValueError:
-                            start_dt = datetime.now() - timedelta(days=365)
-                            
-                        try:
-                            if self.end_date and ' ' in self.end_date:
-                                end_dt = datetime.strptime(self.end_date, "%Y-%m-%d %H:%M:%S")
-                            elif self.end_date:
-                                end_dt = datetime.strptime(self.end_date, "%Y-%m-%d")
-                            else:
-                                end_dt = datetime.now()
-                        except ValueError:
-                            end_dt = datetime.now()
-                    else:
-                        start_dt = datetime.now().replace(year=datetime.now().year - 1)
-                        end_dt = datetime.now()
-
-                    def to_naive(dt):
-                        if isinstance(dt, datetime):
-                            return dt.replace(tzinfo=None) if dt.tzinfo else dt
-                        from datetime import date
-                        if isinstance(dt, date):
-                            return datetime(dt.year, dt.month, dt.day)
-                        return dt
-
-                    all_bars = []
-                    current_end = to_naive(end_dt)
-                    target_start = to_naive(start_dt)
-
-                    while current_end > target_start:
-                        # Append explicit timezone to silence IB warning 2174
-                        end_str = current_end.strftime('%Y%m%d %H:%M:%S US/Eastern')
-                        
-                        # Calculate appropriate duration to avoid over-fetching
-                        remaining_delta = current_end - target_start
-                        remaining_seconds = int(remaining_delta.total_seconds())
-                        
-                        if remaining_seconds <= 86400:
-                            duration_str = f"{remaining_seconds} S"
-                        else:
-                            # IB rejects "S" for > 86400. Switch to "D".
-                            days_needed = (remaining_seconds + 86399) // 86400
-                            if self.k_type == KL_TYPE.K_1M:
-                                duration_str = f"{min(days_needed, 30)} D"
-                            elif self.k_type in [KL_TYPE.K_5M, KL_TYPE.K_15M]:
-                                duration_str = f"{min(days_needed, 60)} D"
-                            elif self.k_type in [KL_TYPE.K_30M, KL_TYPE.K_60M]:
-                                duration_str = f"{min(days_needed, 365)} D"
-                            else:
-                                duration_str = f"{min(days_needed, 3650)} D"
-
-                        try:
-                            # print(f"{prefix} Requesting {symbol} {bar_size} for {duration_str} ending {end_str}")
-                            bars = await asyncio.wait_for(
-                                ib.reqHistoricalDataAsync(
-                                    contract, end_str, duration_str, bar_size, 'TRADES', True, 1, False
-                                ),
-                                timeout=30
-                            )
-                        except asyncio.TimeoutError:
-                            print(f"⚠️ [IB-API] Request timed out for {symbol}")
-                            break
-
-                        if not bars:
-                            break
-                        
-                        all_bars = list(bars) + all_bars
-                        earliest = to_naive(bars[0].date)
-                        if earliest >= current_end:
-                            break
-                        current_end = earliest
-                        if len(all_bars) > 10000: # Safety break
-                            break
-
-                    # Deduplicate and sort
-                    seen_times = set()
-                    final_bars = []
-                    for b in all_bars:
-                        b_naive_dt = to_naive(b.date)
-                        if b_naive_dt not in seen_times:
-                            final_bars.append(b)
-                            seen_times.add(b_naive_dt)
-                    final_bars.sort(key=lambda x: to_naive(x.date))
-                    
-                    return [b for b in final_bars if to_naive(b.date) >= target_start]
-                except Exception as e:
-                    print(f"❌ [IB-API] Error fetching {symbol}: {e}")
-                    return []
-
-            # Execute via the shared loop
-            bars = None
+            contract = Stock(symbol, 'SMART', 'USD')
             try:
-                bars = loop.run_until_complete(fetch_bars())
-            except Exception as loop_e:
-                print(f"❌ [IB-API] Loop error for {stock_code}: {loop_e}", file=sys.stderr)
-                # If error, clear the IB instance so it reconnects next time
-                if hasattr(_ib_local, 'ib'): _ib_local.ib = None
-                return
+                await asyncio.wait_for(ib.qualifyContractsAsync(contract), timeout=10)
+            except asyncio.TimeoutError:
+                print(f"⚠️ [IB-API] Qualification timeout for {symbol}")
+            
+            bar_size = self.type_map.get(self.k_type, '1 day')
+            start_dt = self._parse_date(self.begin_date) if self.begin_date else datetime.now() - timedelta(days=365)
+            end_dt = self._parse_date(self.end_date) if self.end_date else datetime.now()
 
-            if not bars:
-                return
-
-            print(f"✅ [IB-API] Received {len(bars)} bars for {stock_code}")
-            for bar in bars:
+            all_bars = await self._fetch_all_bars_async(ib, contract, start_dt, end_dt, bar_size)
+            
+            units = []
+            for bar in all_bars:
                 dt = bar.date
                 if not isinstance(dt, datetime):
                     dt = datetime(dt.year, dt.month, dt.day)
-                item_dict = {
+                units.append(CKLine_Unit({
                     DATA_FIELD.FIELD_TIME: CTime(dt.year, dt.month, dt.day, dt.hour, dt.minute),
                     DATA_FIELD.FIELD_OPEN: float(bar.open),
                     DATA_FIELD.FIELD_HIGH: float(bar.high),
@@ -200,12 +86,100 @@ class CInteractiveBrokersAPI(CCommonStockApi):
                     DATA_FIELD.FIELD_VOLUME: float(bar.volume),
                     DATA_FIELD.FIELD_TURNOVER: 0.0,
                     DATA_FIELD.FIELD_TURNRATE: 0.0
-                }
-                yield CKLine_Unit(item_dict)
+                }))
+            return units
+        except Exception as e:
+            print(f"❌ [IB-API] Async error for {symbol}: {e}")
+            return []
+
+    def _parse_date(self, date_str):
+        from datetime import datetime
+        try:
+            return datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S") if ' ' in date_str else datetime.strptime(date_str, "%Y-%m-%d")
+        except:
+            return datetime.now()
+
+    def _to_naive(self, dt):
+        from datetime import datetime, date
+        if isinstance(dt, datetime):
+            return dt.replace(tzinfo=None) if dt.tzinfo else dt
+        if isinstance(dt, date):
+            return datetime(dt.year, dt.month, dt.day)
+        return dt
+
+    async def _fetch_all_bars_async(self, ib, contract, start_dt, end_dt, bar_size):
+        all_bars = []
+        current_end = self._to_naive(end_dt)
+        target_start = self._to_naive(start_dt)
+
+        while current_end > target_start:
+            end_str = current_end.strftime('%Y%m%d %H:%M:%S US/Eastern')
+            remaining_seconds = int((current_end - target_start).total_seconds())
+            
+            if remaining_seconds <= 86400:
+                duration_str = f"{remaining_seconds} S"
+            else:
+                days_needed = (remaining_seconds + 86399) // 86400
+                if self.k_type == KL_TYPE.K_1M: duration_str = f"{min(days_needed, 30)} D"
+                elif self.k_type in [KL_TYPE.K_5M, KL_TYPE.K_15M]: duration_str = f"{min(days_needed, 60)} D"
+                elif self.k_type in [KL_TYPE.K_30M, KL_TYPE.K_60M]:
+                    if days_needed > 365:
+                        duration_str = f"{(days_needed + 364) // 365} Y"
+                    else:
+                        duration_str = f"{days_needed} D"
+                else:
+                    if days_needed > 365:
+                        duration_str = f"{(days_needed + 364) // 365} Y"
+                    else:
+                        duration_str = f"{days_needed} D"
+
+            try:
+                bars = await asyncio.wait_for(
+                    ib.reqHistoricalDataAsync(contract, end_str, duration_str, bar_size, 'TRADES', True, 1, False),
+                    timeout=30
+                )
+            except asyncio.TimeoutError:
+                break
+
+            if not bars: break
+            all_bars = list(bars) + all_bars
+            earliest = self._to_naive(bars[0].date)
+            if earliest >= current_end: break
+            current_end = earliest
+            if len(all_bars) > 10000: break
+
+        # Deduplicate and sort
+        seen_times = set()
+        final_bars = []
+        for b in all_bars:
+            b_naive_dt = self._to_naive(b.date)
+            if b_naive_dt not in seen_times:
+                final_bars.append(b)
+                seen_times.add(b_naive_dt)
+        final_bars.sort(key=lambda x: self._to_naive(x.date))
+        return [b for b in final_bars if self._to_naive(b.date) >= target_start]
+
+    def get_kl_data(self) -> Generator[CKLine_Unit, None, None]:
+        """
+        Legacy generator version. Reuses loop and connection.
+        """
+        import sys
+        
+        try:
+            if not hasattr(_ib_local, 'loop') or _ib_local.loop is None or _ib_local.loop.is_closed():
+                _ib_local.loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(_ib_local.loop)
+                nest_asyncio.apply(_ib_local.loop)
+            
+            loop = _ib_local.loop
+            bars = loop.run_until_complete(self.get_kl_data_async())
+            
+            if bars:
+                for b in bars:
+                    yield b
 
         except Exception as e:
             print(f"🔥 [IB-API] FATAL: {e}", file=sys.stderr)
-            traceback.print_exc()
 
     def SetBasciInfo(self):
         self.name = self.code
