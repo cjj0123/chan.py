@@ -31,7 +31,7 @@ class CInteractiveBrokersAPI(CCommonStockApi):
         self.port = int(os.getenv("IB_PORT", "4002"))
         
         # Determine fixed clientId for this thread to reuse
-        # Using a range to avoid collisions with main trading (10)
+        # Using 50-450 range to avoid collisions with main trading (fixed at 10-20)
         if not hasattr(_ib_local, 'client_id'):
             # Use thread name or ID to generate a semi-stable clientId
             import threading

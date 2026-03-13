@@ -77,7 +77,7 @@ class USTradingController(QObject):
         self.ib = None
         self.host = os.getenv("IB_HOST", "127.0.0.1")
         self.port = int(os.getenv("IB_PORT", "4002"))
-        self.client_id = 437
+        self.client_id = 10 # 彻底隔离：交易使用 10-20，扫描使用 50-450
         
         self.charts_dir = "charts_us"
         os.makedirs(self.charts_dir, exist_ok=True)
@@ -139,10 +139,11 @@ class USTradingController(QObject):
         
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
-        # Apply nest_asyncio to allow nested loops and better thread handling
         nest_asyncio.apply(self.loop)
         
         try:
+            # 确保启动前 IB 对象为空，强制 async_main 重新创建
+            self.ib = None 
             self.loop.run_until_complete(self._async_main())
         except Exception as e:
             err_msg = f"🚨 [美股] 异步主循环崩溃: {e}\n{traceback.format_exc()}"
@@ -207,9 +208,16 @@ class USTradingController(QObject):
                             last_exc = traceback.format_exc().splitlines()[-1]
                             self.log_message.emit(f"⚠️ [美股] 连接失败: {e if str(e) else last_exc}")
                             
-                            if "loop is closed" in str(e).lower():
-                                self.log_message.emit("♻️ [美股] 重建 IB 客户端...")
-                                self.ib = IB() 
+                            if "loop is closed" in str(e).lower() or "not running" in str(e).lower():
+                                self.log_message.emit("♻️ [美股] 触发核弹级重置：清理 IB 实例与事件循环...")
+                                if self.ib:
+                                    try: self.ib.disconnect()
+                                    except: pass
+                                self.ib = IB()
+                                # 强制绑定到当前运行的循环
+                                try:
+                                    asyncio.set_event_loop(asyncio.get_running_loop())
+                                except: pass
                     await asyncio.sleep(1)
                     continue
 
