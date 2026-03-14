@@ -19,6 +19,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from DataAPI.SQLiteAPI import download_and_save_all_stocks_async
 from ML.MarketComponentResolver import MarketComponentResolver
 
+# 设置默认的 IB 环境变量，确保异步下载逻辑能被触发
+if "IB_HOST" not in os.environ:
+    os.environ["IB_HOST"] = "127.0.0.1"
+if "IB_PORT" not in os.environ:
+    os.environ["IB_PORT"] = "4002"
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
