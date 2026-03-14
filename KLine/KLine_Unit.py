@@ -23,6 +23,9 @@ class CKLine_Unit:
         self.open = kl_dict[DATA_FIELD.FIELD_OPEN]
         self.high = kl_dict[DATA_FIELD.FIELD_HIGH]
         self.low = kl_dict[DATA_FIELD.FIELD_LOW]
+        self._volume = kl_dict.get(DATA_FIELD.FIELD_VOLUME, 0)
+        self._turnover = kl_dict.get(DATA_FIELD.FIELD_TURNOVER, 0)
+        self._turnrate = kl_dict.get(DATA_FIELD.FIELD_TURNRATE, 0)
 
         self.check(autofix)
 
@@ -146,6 +149,18 @@ class CKLine_Unit:
             if sub_klu.include_sub_lv_time(sub_lv_t):
                 return True
         return False
+
+    @property
+    def volume(self):
+        return self._volume
+
+    @property
+    def turnover(self):
+        return self._turnover
+
+    @property
+    def turnrate(self):
+        return self._turnrate
 
     def set_pre_klu(self, pre_klu: Optional['CKLine_Unit']):
         if pre_klu is None:
