@@ -43,9 +43,7 @@ def run_training_pipeline(market="HK", limit=20):
     trainer = ModelTrainer(
         watchlist=watchlist,
         start_date="2023-01-01",  # 扩充到 2023 年
-        end_date=datetime.now().strftime("%Y-%m-%d"),
-        profit_target=0.03,
-        holding_period=45
+        end_date=datetime.now().strftime("%Y-%m-%d")
     )
     
     # 第一阶段：收集样本
@@ -54,14 +52,9 @@ def run_training_pipeline(market="HK", limit=20):
     
     # 第二阶段：训练模型
     logger.info("--- Stage 2: Training Model ---")
-    trainer.train_model()
+    trainer.train_all()
     
-    # 验证模型文件生成
-    if os.path.exists(trainer.model_file):
-        size = os.path.getsize(trainer.model_file)
-        logger.info(f"✅ 训练完成！模型已保存至: {trainer.model_file} ({size} 字节)")
-    else:
-        logger.error("❌ 模型训练失败，未生成模型文件。")
+    logger.info("✅ 训练流水线执行完毕，详情请查看日志输出。")
 
 if __name__ == "__main__":
     import argparse

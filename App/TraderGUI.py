@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
     QSplitter, QFrame, QMessageBox, QProgressBar, QDateTimeEdit,
     QGridLayout, QHeaderView, QProgressDialog, QSizePolicy, QInputDialog
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, pyqtSlot, QTimer
 from PyQt6.QtGui import QTextCursor
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavigationToolbar
@@ -123,10 +123,15 @@ class TraderGUI(QMainWindow):
         self.futu_monitor = None
         self.hk_trading_controller = None
         self.us_trading_controller = None
+        self.schwab_trading_controller = None
         self.market_monitor_controller = None
         self.discord_bot = None
         # 确保按钮在界面显示后是可见的
         self.ensure_buttons_visible()
+        
+        # 重新加载自选股分组，确保所有 Tab 的下拉框都能获得数据
+        # (第一次 load 发生在 create_scanner_tab 中，此时 settings_tab 还不存在)
+        self.load_futu_watchlists()
         
         # 启动时不显示数据库统计信息，以提高启动速度
         # 数据库统计将在用户点击"更新本地数据库"时显示
@@ -352,6 +357,27 @@ class TraderGUI(QMainWindow):
         hk_btns_layout.addWidget(self.hk_auto_status)
         hk_btns_layout.addWidget(self.hk_auto_btn)
         
+        # 港股专用自选股选择 (支持多选：逗号分隔)
+        hk_btns_layout.addWidget(QLabel(" 📊 港股分组:"))
+        self.hk_watchlist_combo = QComboBox()
+        # 复用已加载的分组
+        for i in range(self.watchlist_combo.count()):
+            self.hk_watchlist_combo.addItem(self.watchlist_combo.itemText(i))
+        # 默认选中"港股" (如果存在)
+        idx = self.hk_watchlist_combo.findText("港股")
+        if idx >= 0: self.hk_watchlist_combo.setCurrentIndex(idx)
+        hk_btns_layout.addWidget(self.hk_watchlist_combo)
+        
+        # 附加分组 (可选，用于合并扫描热点_实盘等)
+        hk_btns_layout.addWidget(QLabel("+"))
+        self.hk_extra_combo = QComboBox()
+        self.hk_extra_combo.addItem("无")
+        for i in range(self.watchlist_combo.count()):
+            self.hk_extra_combo.addItem(self.watchlist_combo.itemText(i))
+        idx2 = self.hk_extra_combo.findText("热点_实盘")
+        if idx2 >= 0: self.hk_extra_combo.setCurrentIndex(idx2)
+        hk_btns_layout.addWidget(self.hk_extra_combo)
+        
         hk_btns_layout.addStretch()
         hk_layout.addLayout(hk_btns_layout)
         
@@ -381,6 +407,9 @@ class TraderGUI(QMainWindow):
         
         hk_group.setLayout(hk_layout)
 
+        # --- 美股模块容器 (右侧列) ---
+        us_column = QVBoxLayout()
+        
         # --- 美股自动交易模块 (IB) ---
         us_group = QGroupBox("🤖 美股自动交易 (IB)")
         us_layout = QVBoxLayout()
@@ -403,6 +432,16 @@ class TraderGUI(QMainWindow):
         idx = self.us_watchlist_combo.findText("美股")
         if idx >= 0: self.us_watchlist_combo.setCurrentIndex(idx)
         us_btns_layout.addWidget(self.us_watchlist_combo)
+        
+        # 美股附加分组
+        us_btns_layout.addWidget(QLabel("+"))
+        self.us_extra_combo = QComboBox()
+        self.us_extra_combo.addItem("无")
+        for i in range(self.watchlist_combo.count()):
+            self.us_extra_combo.addItem(self.watchlist_combo.itemText(i))
+        idx2 = self.us_extra_combo.findText("热点_实盘")
+        if idx2 >= 0: self.us_extra_combo.setCurrentIndex(idx2)
+        us_btns_layout.addWidget(self.us_extra_combo)
 
         us_btns_layout.addStretch()
         us_layout.addLayout(us_btns_layout)
@@ -434,14 +473,78 @@ class TraderGUI(QMainWindow):
         
         us_group.setLayout(us_layout)
         
+        # --- 美股自动交易模块 (Schwab) ---
+        schwab_group = QGroupBox("🤖 美股自动交易 (Schwab)")
+        schwab_layout = QVBoxLayout()
+        
+        # Schwab 控制按钮行
+        schwab_btns_layout = QHBoxLayout()
+        self.schwab_auto_status = QLabel("自动交易: [未启动]")
+        self.schwab_auto_btn = QPushButton("启动 Schwab 交易")
+        self.schwab_auto_btn.clicked.connect(self.toggle_schwab_trading)
+        schwab_btns_layout.addWidget(self.schwab_auto_status)
+        schwab_btns_layout.addWidget(self.schwab_auto_btn)
+        
+        # 自选股选择
+        schwab_btns_layout.addWidget(QLabel(" 📊 监控分组:"))
+        self.schwab_watchlist_combo = QComboBox()
+        for i in range(self.watchlist_combo.count()):
+            self.schwab_watchlist_combo.addItem(self.watchlist_combo.itemText(i))
+        idx = self.schwab_watchlist_combo.findText("美股")
+        if idx >= 0: self.schwab_watchlist_combo.setCurrentIndex(idx)
+        schwab_btns_layout.addWidget(self.schwab_watchlist_combo)
+        
+        schwab_btns_layout.addWidget(QLabel("+"))
+        self.schwab_extra_combo = QComboBox()
+        self.schwab_extra_combo.addItem("无")
+        for i in range(self.watchlist_combo.count()):
+            self.schwab_extra_combo.addItem(self.watchlist_combo.itemText(i))
+        idx2 = self.schwab_extra_combo.findText("热点_实盘")
+        if idx2 >= 0: self.schwab_extra_combo.setCurrentIndex(idx2)
+        schwab_btns_layout.addWidget(self.schwab_extra_combo)
+        
+        schwab_btns_layout.addStretch()
+        schwab_layout.addLayout(schwab_btns_layout)
+        
+        # 功能按钮行
+        schwab_func_layout = QHBoxLayout()
+        self.schwab_scan_btn = QPushButton("立刻执行扫描")
+        self.schwab_scan_btn.clicked.connect(self.on_schwab_force_scan_clicked)
+        schwab_func_layout.addWidget(self.schwab_scan_btn)
+        
+        self.schwab_query_funds_btn = QPushButton("刷新账户资金")
+        self.schwab_query_funds_btn.clicked.connect(self.on_schwab_query_funds_clicked)
+        schwab_func_layout.addWidget(self.schwab_query_funds_btn)
+        
+        self.schwab_liquidate_btn = QPushButton("一键清仓")
+        self.schwab_liquidate_btn.clicked.connect(self.on_schwab_liquidate_clicked)
+        self.schwab_liquidate_btn.setStyleSheet("background-color: #ff4d4f; color: white; font-weight: bold;")
+        schwab_func_layout.addWidget(self.schwab_liquidate_btn)
+        
+        schwab_func_layout.addStretch()
+        schwab_layout.addLayout(schwab_func_layout)
+        
+        # Schwab 日志
+        self.schwab_auto_log_text = QTextEdit()
+        self.schwab_auto_log_text.setReadOnly(True)
+        self.schwab_auto_log_text.setPlaceholderText("Schwab 自动化系统日志将显示在此处...")
+        self.schwab_auto_log_text.setMinimumHeight(150)
+        schwab_layout.addWidget(self.schwab_auto_log_text)
+        
+        schwab_group.setLayout(schwab_layout)
+        
+        # 组装美股列 (IB + Schwab)
+        us_column.addWidget(us_group)
+        us_column.addWidget(schwab_group)
+        
         # 将港股和美股模块并排显示
         market_layout = QHBoxLayout()
         market_layout.addWidget(hk_group)
-        market_layout.addWidget(us_group)
+        market_layout.addLayout(us_column)
         layout.addLayout(market_layout)
 
-        # --- 多市场监控模块 (A/US) ---
-        monitor_group = QGroupBox("🔍 多市场监控 (A股/美股)")
+        # --- 多市场监控模块 (A股市场监控) ---
+        monitor_group = QGroupBox("🔍 A股市场监控")
         monitor_main_layout = QVBoxLayout()
         
         # 监控控制行
@@ -453,9 +556,24 @@ class TraderGUI(QMainWindow):
         monitor_ctrl_layout.addWidget(self.monitor_btn)
         
         self.monitor_watchlist_combo = QComboBox()
-        self.monitor_watchlist_combo.addItem("加载中...")
-        monitor_ctrl_layout.addWidget(QLabel("监控分组:"))
+        # 复用已加载的分组
+        for i in range(self.watchlist_combo.count()):
+            self.monitor_watchlist_combo.addItem(self.watchlist_combo.itemText(i))
+        idx = self.monitor_watchlist_combo.findText("沪深")
+        if idx >= 0: self.monitor_watchlist_combo.setCurrentIndex(idx)
+        
+        monitor_ctrl_layout.addWidget(QLabel(" 📊 监控分组:"))
         monitor_ctrl_layout.addWidget(self.monitor_watchlist_combo)
+        
+        # A股附加分组
+        monitor_ctrl_layout.addWidget(QLabel("+"))
+        self.monitor_extra_combo = QComboBox()
+        self.monitor_extra_combo.addItem("无")
+        for i in range(self.watchlist_combo.count()):
+            self.monitor_extra_combo.addItem(self.watchlist_combo.itemText(i))
+        idx2 = self.monitor_extra_combo.findText("热点_实盘")
+        if idx2 >= 0: self.monitor_extra_combo.setCurrentIndex(idx2)
+        monitor_ctrl_layout.addWidget(self.monitor_extra_combo)
         
         self.monitor_scan_btn = QPushButton("立刻执行扫描")
         self.monitor_scan_btn.clicked.connect(self.on_monitor_force_scan_clicked)
@@ -492,7 +610,13 @@ class TraderGUI(QMainWindow):
         """切换多市场监控状态"""
         if self.market_monitor_controller is None:
             try:
+                # 使用 A股专用分组和附加分组
                 group_name = self.monitor_watchlist_combo.currentText()
+                if hasattr(self, 'monitor_extra_combo'):
+                    extra = self.monitor_extra_combo.currentText()
+                    if extra and extra != "无" and extra != group_name:
+                        group_name = f"{group_name},{extra}"
+                
                 if group_name == "加载中..." or group_name == "":
                     self.append_monitor_log("❌ 启动监控失败: 未选择自选股分组")
                     return
@@ -534,7 +658,8 @@ class TraderGUI(QMainWindow):
         """切换富途实时监控状态"""
         if self.futu_monitor is None:
             try:
-                group_name = self.watchlist_combo.currentText()
+                # 使用港股专用分组选择框，而非扫描 Tab 的通用 combo
+                group_name = self.hk_watchlist_combo.currentText()
                 if group_name == "加载中..." or group_name == "":
                     self.append_auto_log("❌ 启动富途监控失败: 未选择自选股分组")
                     return
@@ -579,11 +704,15 @@ class TraderGUI(QMainWindow):
                 self.append_auto_log("❌ 无法导入 HKTradingController，可能缺少依赖")
                 return
             try:
-                group_name = self.watchlist_combo.currentText()
+                # 从港股专用下拉框获取分组名
+                group_name = self.hk_watchlist_combo.currentText()
+                extra_group = self.hk_extra_combo.currentText()
+                if extra_group and extra_group != "无":
+                    group_name = f"{group_name},{extra_group}"
                 
                 # 共享 Discord Bot
                 from App.DiscordBot import DiscordBot
-                bot = self._get_shared_discord_bot(controller=None) # 此处将在扫描线程内真正关联 controller
+                bot = self._get_shared_discord_bot(controller=None)
 
                 self.hk_trading_controller = HKTradingController(hk_watchlist_group=group_name, discord_bot=bot)
                 self.hk_trading_controller.log_message.connect(self.append_auto_log)
@@ -673,6 +802,11 @@ class TraderGUI(QMainWindow):
             try:
                 # 使用美股专用分组
                 group_name = self.us_watchlist_combo.currentText()
+                # 支持附加分组 (如有 "热点_实盘")
+                if hasattr(self, 'us_extra_combo'):
+                    extra = self.us_extra_combo.currentText()
+                    if extra and extra != "无" and extra != group_name:
+                        group_name = f"{group_name},{extra}"
                 
                 # 共享 Discord Bot
                 bot = self._get_shared_discord_bot(controller=None)
@@ -747,6 +881,96 @@ class TraderGUI(QMainWindow):
         if reply == QMessageBox.StandardButton.Yes:
             self.append_us_auto_log("🔥 正在执行美股全量清仓...")
             self.us_trading_controller.close_all_positions()
+
+    def append_schwab_auto_log(self, text: str):
+        """添加 Schwab 自动交易日志"""
+        from datetime import datetime
+        now = datetime.now().strftime("%H:%M:%S")
+        self.schwab_auto_log_text.append(f"[{now}] {text}")
+        self.schwab_auto_log_text.moveCursor(QTextCursor.MoveOperation.End)
+
+    def toggle_schwab_trading(self):
+        """切换 Schwab 自动交易状态"""
+        if self.schwab_trading_controller is None:
+            if USTradingController is None:
+                self.append_schwab_auto_log("❌ 无法导入 USTradingController，可能缺少依赖")
+                return
+            try:
+                group_name = self.schwab_watchlist_combo.currentText()
+                if hasattr(self, 'schwab_extra_combo'):
+                    extra = self.schwab_extra_combo.currentText()
+                    if extra and extra != "无" and extra != group_name:
+                        group_name = f"{group_name},{extra}"
+                
+                bot = self._get_shared_discord_bot(controller=None)
+
+                self.schwab_trading_controller = USTradingController(
+                    us_watchlist_group=group_name, discord_bot=bot, venue="SCHWAB"
+                )
+                self.schwab_trading_controller.log_message.connect(self.append_schwab_auto_log)
+                self.schwab_trading_controller.funds_updated.connect(self.update_schwab_funds_display)
+                
+                import threading
+                def run_trade():
+                    self.schwab_trading_controller.run_trading_loop()
+                    
+                self.schwab_trade_thread = threading.Thread(target=run_trade, daemon=True)
+                self.schwab_trade_thread.start()
+                
+                self.schwab_auto_status.setText("Schwab 自动交易: [运行中]")
+                self.schwab_auto_btn.setText("停止 Schwab 交易")
+                self.append_schwab_auto_log(f"✅ Schwab 自动交易已启动 (分组: {group_name})")
+            except Exception as e:
+                self.append_schwab_auto_log(f"❌ 启动 Schwab 自动交易失败: {e}")
+                self.schwab_trading_controller = None
+        else:
+            self.schwab_trading_controller.stop()
+            self.schwab_trading_controller = None
+            self.schwab_auto_status.setText("Schwab 自动交易: [已停止]")
+            self.schwab_auto_btn.setText("启动 Schwab 交易")
+            self.append_schwab_auto_log("ℹ️ Schwab 自动交易已停止")
+
+    def update_schwab_funds_display(self, available: float, total: float, positions: list):
+        """更新 Schwab 资金和持仓显示"""
+        self.append_schwab_auto_log(f"💰 [Schwab 账户] 可用资金: ${available:,.2f}, 总资产: ${total:,.2f}")
+        if positions:
+            pos_msg = "📦 [当前持仓]:"
+            for p in positions:
+                pos_msg += f"\n   • {p['symbol']}: {p['qty']} 股, 市值: ${p['mkt_value']:.2f}, 成本: ${p['avg_cost']:.2f}"
+            self.append_schwab_auto_log(pos_msg)
+        else:
+            self.append_schwab_auto_log("ℹ️ 当前账户无 Schwab 持仓")
+
+    def on_schwab_force_scan_clicked(self):
+        """手动触发 Schwab 策略扫描"""
+        if self.schwab_trading_controller is None:
+            self.append_schwab_auto_log("⚠️ 请先启动 Schwab 自动交易。")
+            return
+        
+        reply = QMessageBox.question(self, '确认扫描', '确定要立即执行一次完整的 Schwab 策略扫描吗？',
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            self.schwab_trading_controller.force_scan()
+            self.append_schwab_auto_log("⚡ 已手动触发向 Schwab 发起的扫描指令。")
+
+    def on_schwab_query_funds_clicked(self):
+        """查询 Schwab 账户资金"""
+        if self.schwab_trading_controller:
+            self.schwab_trading_controller.query_account_funds()
+        else:
+            self.append_schwab_auto_log("⚠️ 请先启动 Schwab 交易连接。")
+
+    def on_schwab_liquidate_clicked(self):
+        """Schwab 一键清仓"""
+        if self.schwab_trading_controller is None:
+            self.append_schwab_auto_log("⚠️ 请先启动 Schwab 交易。")
+            return
+            
+        reply = QMessageBox.warning(self, '危险操作', '确定要一键卖出所有 Schwab 持仓吗？此操作不可撤销！',
+                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            self.append_schwab_auto_log("🔥 正在执行 Schwab 全量清仓...")
+            self.schwab_trading_controller.close_all_positions()
 
             
     def on_monitor_force_scan_clicked(self):
@@ -1023,7 +1247,7 @@ class TraderGUI(QMainWindow):
             selected_watchlist = self.watchlist_combo.currentText()
             
             # 根据选择的分组构建查询条件
-            if selected_watchlist not in ["沪深A股", "港股通", "全部"] and selected_watchlist != "加载中...":
+            if selected_watchlist not in ["沪深", "港股通", "全部"] and selected_watchlist != "加载中...":
                 # 如果选择的是自定义分组，则尝试从富途API获取具体的自选股列表
                 try:
                     from futu import OpenQuoteContext, RET_OK
@@ -1058,7 +1282,7 @@ class TraderGUI(QMainWindow):
                 stock_query = "SELECT DISTINCT code FROM kline_day"
                 
                 # 根据选择的分组应用不同的筛选条件
-                if selected_watchlist == "沪深A股":
+                if selected_watchlist == "沪深":
                     stock_query += " WHERE code LIKE 'SH.%' OR code LIKE 'SZ.%'"
                 elif selected_watchlist == "港股通":
                     stock_query += " WHERE code LIKE 'HK.%'"
@@ -1173,7 +1397,7 @@ class TraderGUI(QMainWindow):
             selected_watchlist = self.watchlist_combo.currentText()
             
             # 根据选择的分组构建查询条件
-            if selected_watchlist not in ["沪深A股", "港股通", "全部"] and selected_watchlist != "加载中...":
+            if selected_watchlist not in ["沪深", "港股通", "全部"] and selected_watchlist != "加载中...":
                 # 如果选择的是自定义分组，则尝试从富途API获取具体的自选股列表
                 try:
                     from futu import OpenQuoteContext, RET_OK
@@ -1208,7 +1432,7 @@ class TraderGUI(QMainWindow):
                 stock_query = "SELECT DISTINCT code FROM kline_day"
                 
                 # 根据选择的分组应用不同的筛选条件
-                if selected_watchlist == "沪深A股":
+                if selected_watchlist == "沪深":
                     stock_query += " WHERE code LIKE 'SH.%' OR code LIKE 'SZ.%'"
                 elif selected_watchlist == "港股通":
                     stock_query += " WHERE code LIKE 'HK.%'"
@@ -1507,6 +1731,15 @@ class TraderGUI(QMainWindow):
                 if hasattr(self, 'monitor_watchlist_combo'):
                     self.monitor_watchlist_combo.clear()
                     self.monitor_watchlist_combo.addItems(group_names)
+                    idx = self.monitor_watchlist_combo.findText("沪深")
+                    if idx >= 0: self.monitor_watchlist_combo.setCurrentIndex(idx)
+                    
+                if hasattr(self, 'monitor_extra_combo'):
+                    self.monitor_extra_combo.clear()
+                    self.monitor_extra_combo.addItem("无")
+                    self.monitor_extra_combo.addItems(group_names)
+                    idx = self.monitor_extra_combo.findText("热点_实盘")
+                    if idx >= 0: self.monitor_extra_combo.setCurrentIndex(idx)
                 
                 if hasattr(self, 'us_watchlist_combo'):
                     self.us_watchlist_combo.clear()
@@ -1514,6 +1747,26 @@ class TraderGUI(QMainWindow):
                     # 尝试再次默认选中“美股”
                     idx = self.us_watchlist_combo.findText("美股")
                     if idx >= 0: self.us_watchlist_combo.setCurrentIndex(idx)
+                
+                if hasattr(self, 'hk_watchlist_combo'):
+                    self.hk_watchlist_combo.clear()
+                    self.hk_watchlist_combo.addItems(group_names)
+                    idx = self.hk_watchlist_combo.findText("港股")
+                    if idx >= 0: self.hk_watchlist_combo.setCurrentIndex(idx)
+                
+                if hasattr(self, 'hk_extra_combo'):
+                    self.hk_extra_combo.clear()
+                    self.hk_extra_combo.addItem("无")
+                    self.hk_extra_combo.addItems(group_names)
+                    idx = self.hk_extra_combo.findText("热点_实盘")
+                    if idx >= 0: self.hk_extra_combo.setCurrentIndex(idx)
+                
+                if hasattr(self, 'us_extra_combo'):
+                    self.us_extra_combo.clear()
+                    self.us_extra_combo.addItem("无")
+                    self.us_extra_combo.addItems(group_names)
+                    idx = self.us_extra_combo.findText("热点_实盘")
+                    if idx >= 0: self.us_extra_combo.setCurrentIndex(idx)
                 
                 # 安全地写入日志
                 if hasattr(self, 'log_text'):
@@ -1532,7 +1785,7 @@ class TraderGUI(QMainWindow):
                 return []
         except ImportError:
             # 如果没有futu模块，添加默认选项
-            default_groups = ["沪深A股", "港股通", "全部", "自选股1", "自选股2"]
+            default_groups = ["沪深", "港股通", "全部", "自选股1", "自选股2"]
             self.watchlist_combo.clear()
             self.watchlist_combo.addItems(default_groups)
             
