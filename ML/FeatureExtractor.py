@@ -122,62 +122,56 @@ class FeatureExtractor:
             
             if cur_bi.pre:
                 pre_bi = cur_bi.pre
-                # 动力学比例: 离开笔面积 / 进入笔面积 (背驰的核心量化)
                 features["bi_macd_area_ratio"] = features["bi_macd_area"] / (pre_bi.cal_macd_metric(MACD_ALGO.AREA, is_reverse=True) + 1e-7)
                 features["bi_amp_ratio"] = cur_bi.amp() / (pre_bi.amp() + 1e-7)
-                # 笔内成交量比例
                 cur_vol = cur_bi.cal_macd_metric(MACD_ALGO.VOLUMN, is_reverse=False)
                 pre_vol = pre_bi.cal_macd_metric(MACD_ALGO.VOLUMN, is_reverse=True)
                 features["bi_vol_ratio"] = cur_vol / (pre_vol + 1e-7)
+        except Exception:
+            pass  # 笔动力学提取失败 (数据不足等)
 
-            # 6.2 中枢结构特征 (ZS Relationships)
-            # 获取当前笔所属的线段中的中枢信息
+        # 6.2 中枢结构特征
+        try:
+            cur_bi = bsp.bi
             parent_seg = cur_bi.parent_seg
             if parent_seg:
                 features["seg_zs_cnt"] = parent_seg.get_multi_bi_zs_cnt()
                 features["seg_bi_cnt"] = parent_seg.cal_bi_cnt()
-                # 考察线段最后一个中枢（通常对三买、或者背驰后的买点最关键）
                 last_zs = parent_seg.get_final_multi_bi_zs()
                 if last_zs:
-                    # 距离中枢的位置 (价格相对位置)
                     features["dist_to_zs_mid"] = (klu.close - last_zs.mid) / (last_zs.mid + 1e-7)
                     features["dist_to_zs_high"] = (klu.close - last_zs.high) / (last_zs.high + 1e-7)
                     features["dist_to_zs_low"] = (klu.close - last_zs.low) / (last_zs.low + 1e-7)
-                    # 中枢宽度 (K线根数)
                     features["zs_klu_width"] = (last_zs.end.idx - last_zs.begin.idx)
-                    # 中枢波动率
                     features["zs_amp"] = (last_zs.high - last_zs.low) / (last_zs.mid + 1e-7)
-                    # 离开笔相对于进中枢笔的力度
                     if last_zs.bi_in and last_zs.bi_out:
-                         in_area = last_zs.bi_in.cal_macd_metric(MACD_ALGO.AREA, is_reverse=False)
-                         out_area = last_zs.bi_out.cal_macd_metric(MACD_ALGO.AREA, is_reverse=True)
-                         features["zs_divergence_ratio"] = out_area / (in_area + 1e-7)
+                        from Common.CEnum import MACD_ALGO
+                        in_area = last_zs.bi_in.cal_macd_metric(MACD_ALGO.AREA, is_reverse=False)
+                        out_area = last_zs.bi_out.cal_macd_metric(MACD_ALGO.AREA, is_reverse=True)
+                        features["zs_divergence_ratio"] = out_area / (in_area + 1e-7)
+        except Exception:
+            pass  # 中枢结构提取失败
 
-            # 6.3 多级别对开特征 (Multi-Level Alignment)
-            # 缠论核心：三级递归。这里检查上一个级别的状态
+        # 6.3 多级别对齐特征
+        try:
             if len(chan) > 1:
                 higher_level = chan[1]
-                # 这里假设 higher_level 也有买卖点列表
                 higher_bsp_list = higher_level.bs_point_lst.get_latest_bsp(number=1)
                 if higher_bsp_list:
                     hbsp = higher_bsp_list[-1]
-                    # 时间跨度：大级别买点确认后 N 小时内，小级别触发买点
                     time_diff = abs(klu.time.ts - hbsp.klu.time.ts)
-                    if time_diff <= 3600 * 24: # 同步性检查：24小时内大级别有同步信号
+                    if time_diff <= 3600 * 24:
                         features["higher_level_bsp_aligned"] = 1.0
                         features["higher_level_bsp_type"] = float(hbsp.type[0].value) if hbsp.type else 0.0
                     else:
                         features["higher_level_bsp_aligned"] = 0.0
                 
-                # 线段级别特征：当前买点是否在大级别线段的末端/反弹处
                 if len(higher_level.seg_list) > 0:
                     hseg = higher_level.seg_list[-1]
                     features["higher_seg_dir"] = 1.0 if hseg.is_up() else -1.0
                     features["higher_seg_amp"] = hseg.amp() / hseg.get_begin_val()
-
-        except Exception as e:
-            # print(f"Feature EXTRACTION_FAIL: {e}")
-            pass
+        except Exception:
+            pass  # 多级别对齐提取失败
 
         return features
 

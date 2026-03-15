@@ -71,7 +71,8 @@ class ModelTrainer:
     def __init__(self, 
                  watchlist: List[str] = None, 
                  start_date: str = "2021-01-01", 
-                 end_date: str = "2025-12-31"):
+                 end_date: str = "2025-12-31",
+                 market: str = None):
         # 默认使用成分股解析器
         self.resolver = MarketComponentResolver()
         if watchlist is None:
@@ -86,11 +87,16 @@ class ModelTrainer:
             
         self.start_date = start_date
         self.end_date = end_date
+        self.market = market  # 市场标识，用于分片存储
         
         self.loader = BacktestDataLoader()
         self.extractor = FeatureExtractor()
         
-        self.data_dir = "stock_cache/ml_data"
+        # P0: 市场专属模型分片 - 按市场隔离输出目录
+        if market and market.upper() not in ('GLOBAL', ''):
+            self.data_dir = os.path.join("stock_cache/ml_data", market.upper())
+        else:
+            self.data_dir = "stock_cache/ml_data"
         os.makedirs(self.data_dir, exist_ok=True)
         self.train_data_file = os.path.join(self.data_dir, "train_samples.csv")
         self.meta_file = os.path.join(self.data_dir, "feature_meta.json")
@@ -103,30 +109,30 @@ class ModelTrainer:
             "print_warning": False,
         })
 
-    def collect_samples(self, target_watchlist: List[str] = None, start_date: str = None, end_date: str = None):
+    def collect_samples(self, target_watchlist: List[str] = None, start_date: str = None, end_date: str = None, freq: str = '30M'):
         """收集指定列表或默认列表的买点样本"""
         coins = target_watchlist if target_watchlist else self.watchlist
         s_date = start_date if start_date else self.start_date
         e_date = end_date if end_date else self.end_date
         
-        logger.info(f"🚀 开始为 {len(coins)} 只股票收集买点样本 ({s_date} -> {e_date})...")
+        logger.info(f"🚀 开始为 {len(coins)} 只股票收集 {freq} 买点样本 ({s_date} -> {e_date})...")
         samples = []
 
         for code in coins:
             try:
                 # 针对全球采集，增加 5m 数据的支持（如果存在）
-                klines = self.loader.load_kline_data(code, '30M', s_date, e_date)
+                klines = self.loader.load_kline_data(code, freq, s_date, e_date)
                 if not klines or len(klines) < 100: continue
                 
-                logger.debug(f"🔍 扫描 {code} 样本中...")
-                chan = CChan(code=code, data_src="CUSTOM", config=self.chan_config, lv_list=[KL_TYPE.K_30M])
+                logger.debug(f"🔍 扫描 {code} ({freq}) 样本中...")
+                chan = CChan(code=code, data_src="CUSTOM", config=self.chan_config, lv_list=[KL_TYPE.K_5M if freq=='5M' else KL_TYPE.K_30M])
                 
                 # 批量触发以提高效率
                 step = 100
                 for i in range(0, len(klines), step):
                     chunk = klines[i : i + step]
                     try:
-                        chan.trigger_load({KL_TYPE.K_30M: chunk})
+                        chan.trigger_load({KL_TYPE.K_5M if freq=='5M' else KL_TYPE.K_30M: chunk})
                     except Exception: continue
                     
                     bsp_list = chan.get_latest_bsp(number=0)
@@ -138,7 +144,7 @@ class ModelTrainer:
                         if idx_in_klines >= len(klines): continue
                         
                         features = self.extractor.extract_bsp_features(chan, bsp)
-                        labels = self._generate_labels(klines, idx_in_klines, bsp.klu.close)
+                        labels = self._generate_labels(klines, idx_in_klines, bsp.klu.close, freq=freq)
                         if not labels: continue
                         
                         sample = {"code": code, "time": str(bsp.klu.time)}
@@ -146,41 +152,36 @@ class ModelTrainer:
                         sample.update(features)
                         samples.append(sample)
                 
-                if len(samples) % 100 == 0:
-                    logger.info(f"📊 已收集 {len(samples)} 个样本...")
+                if len(samples) > 0:
+                    df_current = pd.DataFrame(samples)
+                    df_current.fillna(0, inplace=True)
+                    if os.path.exists(self.train_data_file):
+                        old_df = pd.read_csv(self.train_data_file)
+                        df_current = pd.concat([old_df, df_current]).drop_duplicates(subset=["code", "time"])
+                    df_current.to_csv(self.train_data_file, index=False)
+                    
+                    # Update metadata
+                    label_cols = ["label_3p_15d", "label_5p_30d", "label_10p_60d"]
+                    feature_names = [c for c in df_current.columns if c not in ["code", "time"] + label_cols]
+                    feature_meta = {name: i for i, name in enumerate(feature_names)}
+                    with open(self.meta_file, 'w', encoding='utf-8') as f:
+                        json.dump(feature_meta, f, indent=4)
+                    
+                    logger.info(f"📊 已处理 {code}，当前累计 {len(df_current)} 个唯一样本。")
+                    samples = [] # Clear the batch
                     
             except Exception as e:
                 logger.error(f"❌ 处理 {code} 出错: {e}")
 
-        if not samples:
-            logger.warning("⚠️ 未收集到任何有效样本。")
-            return
+        logger.info(f"✅ 样本采集全部完成。")
 
-        df = pd.DataFrame(samples)
-        df.fillna(0, inplace=True)
-        
-        # 如果已存在，则追加 (Deduplicate later)
-        if os.path.exists(self.train_data_file):
-            old_df = pd.read_csv(self.train_data_file)
-            df = pd.concat([old_df, df]).drop_duplicates(subset=["code", "time"])
-            
-        df.to_csv(self.train_data_file, index=False)
-        
-        # 提取特征名映射
-        label_cols = ["label_3p_15d", "label_5p_30d", "label_10p_60d"]
-        feature_names = [c for c in df.columns if c not in ["code", "time"] + label_cols]
-        feature_meta = {name: i for i, name in enumerate(feature_names)}
-        with open(self.meta_file, 'w', encoding='utf-8') as f:
-            json.dump(feature_meta, f, indent=4)
-            
-        logger.info(f"✅ 样本采集增量完成。当前总计 {len(df)} 个样本。")
-
-    def _generate_labels(self, klines, start_idx, buy_price) -> Dict[str, int]:
+    def _generate_labels(self, klines, start_idx, buy_price, freq='30M') -> Dict[str, int]:
         """为单个买点生成多个维度的标签"""
+        scale = 6 if freq == '5M' else 1
         configs = [
-            (0.03, 15, "label_3p_15d"),
-            (0.05, 30, "label_5p_30d"),
-            (0.10, 60, "label_10p_60d")
+            (0.03, int(15 * scale), "label_3p_15d"),
+            (0.05, int(30 * scale), "label_5p_30d"),
+            (0.10, int(60 * scale), "label_10p_60d")
         ]
         res = {}
         for target, period, name in configs:
@@ -244,12 +245,21 @@ class ModelTrainer:
             raise FileNotFoundError("训练数据文件不存在，请先运行 --collect")
             
         df = pd.read_csv(self.train_data_file)
+        
+        # P0 修复: 按时间严格排序，防止未来信息泄漏
+        if 'time' in df.columns:
+            df['_sort_time'] = pd.to_datetime(df['time'], errors='coerce')
+            df = df.sort_values('_sort_time').reset_index(drop=True)
+            df = df.drop(columns=['_sort_time'])
+            logger.info(f"📅 样本已按时间排序 (Walk-Forward): {df['time'].iloc[0]} → {df['time'].iloc[-1]}")
+        
         label_cols = [c for c in df.columns if c.startswith("label_")]
         X = df.drop(columns=label_cols + ["code", "time"])
         y = df[target_label]
         
-        # 前 80% 训练，后 20% 测试
+        # P0 修复: 严格时序切分 (前 80% 训练，后 20% 测试，绝不打乱)
         split_idx = int(len(df) * 0.8)
+        logger.info(f"📊 训练集: {split_idx} 样本 (历史), 测试集: {len(df)-split_idx} 样本 (未来)")
         return X.iloc[:split_idx], X.iloc[split_idx:], y.iloc[:split_idx], y.iloc[split_idx:]
 
     def train_xgboost(self, target_label="label_3p_15d", params=None, threshold=0.5, save=True):
@@ -286,6 +296,20 @@ class ModelTrainer:
             
             y_prob = model.predict(dtest)
             score = self.get_cal_score(y_test.values, y_prob, threshold=threshold)
+            
+            # P2: 多维度评估报告
+            try:
+                from sklearn.metrics import roc_auc_score, f1_score, precision_score, recall_score
+                y_pred = (y_prob >= threshold).astype(int)
+                auc = roc_auc_score(y_test, y_prob)
+                f1 = f1_score(y_test, y_pred)
+                precision = precision_score(y_test, y_pred, zero_division=0)
+                recall = recall_score(y_test, y_pred, zero_division=0)
+                win_rate = precision  # 在交易语境下 precision ≈ 胜率
+                trade_count = int(sum(y_pred))
+                logger.info(f"📈 [XGB 评估] AUC: {auc:.4f} | F1: {f1:.4f} | 胜率: {win_rate:.2%} | 召回: {recall:.2%} | 触发次数: {trade_count}")
+            except Exception:
+                pass
             
             if save:
                 model.save_model(f"{self.model_prefix}xgb.json")
@@ -399,11 +423,12 @@ if __name__ == "__main__":
     parser.add_argument("--collect", action="store_true", help="收集样本数据")
     parser.add_argument("--train", action="store_true", help="训练模型(全家桶)")
     parser.add_argument("--label", type=str, default="label_3p_15d", help="指定训练用的目标标签")
+    parser.add_argument("--freq", type=str, default="30M", help="指定数据频率 (30M, 5M)")
     args = parser.parse_args()
     
     trainer = ModelTrainer()
     if args.collect: 
-        trainer.collect_samples()
+        trainer.collect_samples(freq=args.freq)
     if args.train: 
         trainer.train_all(target_label=args.label)
     if not args.collect and not args.train:

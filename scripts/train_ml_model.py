@@ -27,8 +27,11 @@ def run_training_pipeline(market="HK", limit=20):
     all_codes = loader.get_all_codes()
     
     # 筛选市场
-    market_prefix = market.upper() + "."
-    watchlist = [c for c in all_codes if c.startswith(market_prefix)]
+    market_upper = market.upper()
+    if market_upper == 'A':
+        watchlist = [c for c in all_codes if c.startswith('SH.') or c.startswith('SZ.')]
+    else:
+        watchlist = [c for c in all_codes if c.startswith(market_upper + ".")]
     
     if not watchlist:
         logger.error(f"❌ 未找到市场 {market} 的缓存数据，请先运行数据下载脚本。")
@@ -42,8 +45,9 @@ def run_training_pipeline(market="HK", limit=20):
     # 盈利目标 3%，持仓 45 根 K 线 (约2-3天)，回测最近两年的数据
     trainer = ModelTrainer(
         watchlist=watchlist,
-        start_date="2023-01-01",  # 扩充到 2023 年
-        end_date=datetime.now().strftime("%Y-%m-%d")
+        start_date="2023-01-01",
+        end_date=datetime.now().strftime("%Y-%m-%d"),
+        market=market
     )
     
     # 第一阶段：收集样本
