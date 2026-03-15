@@ -16,12 +16,12 @@ from BacktestDataLoader import BacktestDataLoader
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("TrainML")
 
-def run_training_pipeline(market="HK", limit=20):
+def run_training_pipeline(market="HK", limit=20, tune=False):
     """
     运行完整的机器学习训练流水线：
     1. 自动从缓存识别指定市场的股票清单
     2. 收集样本（特征 + 标签）
-    3. 训练 XGBoost 模型
+    3. 训练 XGBoost 模型 (可选 Optuna 调优)
     """
     loader = BacktestDataLoader()
     all_codes = loader.get_all_codes()
@@ -42,7 +42,6 @@ def run_training_pipeline(market="HK", limit=20):
     logger.info(f"🚀 开始为 {market} 市场训练，样本股票数量: {len(watchlist)}")
     
     # 初始化训练器
-    # 盈利目标 3%，持仓 45 根 K 线 (约2-3天)，回测最近两年的数据
     trainer = ModelTrainer(
         watchlist=watchlist,
         start_date="2023-01-01",
@@ -56,7 +55,10 @@ def run_training_pipeline(market="HK", limit=20):
     
     # 第二阶段：训练模型
     logger.info("--- Stage 2: Training Model ---")
-    trainer.train_all()
+    if tune:
+        trainer.train_all_with_optuna()
+    else:
+        trainer.train_all()
     
     logger.info("✅ 训练流水线执行完毕，详情请查看日志输出。")
 
@@ -65,6 +67,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Chanlun ML Training Pipeline")
     parser.add_argument("--market", type=str, default="HK", help="Market to train for (HK/US/A)")
     parser.add_argument("--limit", type=int, default=100, help="Number of stocks to use for training")
+    parser.add_argument("--tune", action="store_true", help="Enable P1 Optuna hyperparameter tuning")
     
     args = parser.parse_args()
     
@@ -76,4 +79,4 @@ if __name__ == "__main__":
         logger.error(f"缺少依赖: {e}. 请运行 pipeline install xgboost pandas")
         sys.exit(1)
         
-    run_training_pipeline(market=args.market, limit=args.limit)
+    run_training_pipeline(market=args.market, limit=args.limit, tune=args.tune)

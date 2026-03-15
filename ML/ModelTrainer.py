@@ -176,13 +176,29 @@ class ModelTrainer:
         logger.info(f"✅ 样本采集全部完成。")
 
     def _generate_labels(self, klines, start_idx, buy_price, freq='30M') -> Dict[str, int]:
-        """为单个买点生成多个维度的标签"""
+        """为单个买点生成多个维度的标签 (P1: ATR 自适应支撑)"""
         scale = 6 if freq == '5M' else 1
+        
+        # 1. 计算买点前 10 根 K 线的平均振幅 (ATR 比例)
+        amps = []
+        for i in range(max(0, start_idx - 10), start_idx + 1):
+            k = klines[i]
+            if k.low > 0:
+                amps.append((k.high - k.low) / k.low)
+        atr_ratio = sum(amps) / len(amps) if amps else 0.02 # 兜底 2% 振幅
+        
+        # 2. 基于 ATR 动态设定 止盈 & 止损 空间
+        target_3p = max(0.02, 1.5 * atr_ratio)   # 下限 2%，正常 1.5倍 振幅
+        target_5p = max(0.035, 2.5 * atr_ratio)  # 下限 3.5%
+        target_10p = max(0.05, 5.0 * atr_ratio)  # 下限 5%
+        stop_ratio = max(0.015, 0.8 * atr_ratio) # 止损至少 1.5%，或 0.8倍 ATR
+        
         configs = [
-            (0.03, int(15 * scale), "label_3p_15d"),
-            (0.05, int(30 * scale), "label_5p_30d"),
-            (0.10, int(60 * scale), "label_10p_60d")
+            (target_3p, int(15 * scale), "label_3p_15d"),
+            (target_5p, int(30 * scale), "label_5p_30d"),
+            (target_10p, int(60 * scale), "label_10p_60d")
         ]
+        
         res = {}
         for target, period, name in configs:
             future = klines[start_idx+1 : start_idx+1+period]
@@ -191,7 +207,7 @@ class ModelTrainer:
                 continue
             
             target_px = buy_price * (1 + target)
-            stop_px = buy_price * (1 - 0.03) # 统一 3% 止损作为硬性过滤
+            stop_px = buy_price * (1 - stop_ratio) # P1: 使用动态止损
             
             hit_target = False
             for fkl in future:
@@ -208,6 +224,12 @@ class ModelTrainer:
         self.train_xgboost(target_label)
         self.train_lightgbm(target_label)
         self.train_mlp(target_label)
+
+    def train_all_with_optuna(self, target_label="label_3p_15d"):
+        """P1: 顺序 Optuna 调优所有支持的模型"""
+        logger.info(f"🛠 [Optuna 调优] 基于标签 {target_label} 开启全模型超参搜索...")
+        self.train_xgboost_with_optuna(target_label)
+        self.train_lightgbm_with_optuna(target_label)
 
     def get_cal_score(self, y_true, y_prob, threshold=0.5) -> float:
         """
@@ -314,9 +336,101 @@ class ModelTrainer:
             if save:
                 model.save_model(f"{self.model_prefix}xgb.json")
                 logger.info(f"✅ XGBoost 模型已保存: {self.model_prefix}xgb.json, CalScore: {score:.4f} (threshold={threshold:.2f})")
-            return score
+            return 0.0
         except Exception as e:
             logger.error(f"XGBoost 训练失败: {e}")
+            return 0.0
+
+    def train_xgboost_with_optuna(self, target_label="label_3p_15d", n_trials=20):
+        """P1: 使用 Optuna 自动调优 XGBoost 超参数和阈值"""
+        import optuna
+        if xgb is None: return 0.0
+        logger.info(f"🧪 [Optuna] 开启 XGBoost 超参调优, 目标标签: {target_label}...")
+        try:
+            X_train, X_test, y_train, y_test = self._get_train_test_data(target_label)
+            pos_ratio = sum(y_train) / len(y_train)
+            scale_pos_weight = (1 - pos_ratio) / (pos_ratio + 1e-7)
+            
+            dtrain = xgb.DMatrix(X_train, label=y_train)
+            dtest = xgb.DMatrix(X_test, label=y_test)
+
+            def objective(trial):
+                params = {
+                    'objective': 'binary:logistic',
+                    'eval_metric': 'auc',
+                    'scale_pos_weight': scale_pos_weight,
+                    'max_depth': trial.suggest_int('max_depth', 3, 8),
+                    'eta': trial.suggest_float('eta', 0.01, 0.1, log=True),
+                    'subsample': trial.suggest_float('subsample', 0.6, 0.9),
+                    'colsample_bytree': trial.suggest_float('colsample_bytree', 0.6, 0.9)
+                }
+                
+                model = xgb.train(params, dtrain, num_boost_round=200, evals=[(dtest, 'test')], early_stopping_rounds=30, verbose_eval=False)
+                y_prob = model.predict(dtest)
+                from sklearn.metrics import roc_auc_score
+                return roc_auc_score(y_test, y_prob)
+
+            study = optuna.create_study(direction="maximize")
+            study.optimize(objective, n_trials=n_trials)
+            logger.info(f"🎯 [Optuna XGB] 最佳 AUC: {study.best_value:.4f} | 最佳参数: {study.best_params}")
+
+            best_params = study.best_params
+            best_params['objective'] = 'binary:logistic'
+            best_params['eval_metric'] = ['auc', 'logloss']
+            best_params['scale_pos_weight'] = scale_pos_weight
+            
+            model = xgb.train(best_params, dtrain, num_boost_round=300)
+            model.save_model(f"{self.model_prefix}xgb.json")
+            
+            optuna_dir = os.path.join(self.data_dir, "optuna")
+            os.makedirs(optuna_dir, exist_ok=True)
+            with open(os.path.join(optuna_dir, "best_params_xgb.json"), 'w') as f:
+                json.dump({"best_params": best_params, "best_auc": study.best_value}, f, indent=4)
+            return study.best_value
+        except Exception as e:
+            logger.error(f"Optuna XGBoost 调优失败: {e}")
+            return 0.0
+
+    def train_lightgbm_with_optuna(self, target_label="label_3p_15d", n_trials=20):
+        """P1: 使用 Optuna 自动调优 LightGBM"""
+        import optuna
+        if lgb is None: return 0.0
+        logger.info(f"🧪 [Optuna] 开启 LightGBM 超参调优...")
+        try:
+            X_train, X_test, y_train, y_test = self._get_train_test_data(target_label)
+            train_data = lgb.Dataset(X_train, label=y_train)
+            test_data = lgb.Dataset(X_test, label=y_test, reference=train_data)
+
+            def objective(trial):
+                params = {
+                    'objective': 'binary', 'metric': 'auc', 'is_unbalance': True,
+                    'num_leaves': trial.suggest_int('num_leaves', 15, 63),
+                    'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.1, log=True),
+                    'feature_fraction': trial.suggest_float('feature_fraction', 0.6, 0.9),
+                    'bagging_fraction': trial.suggest_float('bagging_fraction', 0.6, 0.9),
+                    'bagging_freq': 5
+                }
+                model = lgb.train(params, train_data, num_boost_round=200)
+                y_prob = model.predict(X_test)
+                from sklearn.metrics import roc_auc_score
+                return roc_auc_score(y_test, y_prob)
+
+            study = optuna.create_study(direction="maximize")
+            study.optimize(objective, n_trials=n_trials)
+            logger.info(f"🎯 [Optuna LGB] 最佳 AUC: {study.best_value:.4f} | 最佳参数: {study.best_params}")
+
+            best_params = study.best_params
+            best_params['objective'] = 'binary'; best_params['metric'] = 'auc'; best_params['is_unbalance'] = True
+            model = lgb.train(best_params, train_data, num_boost_round=300)
+            model.save_model(f"{self.model_prefix}lgb.txt")
+            
+            optuna_dir = os.path.join(self.data_dir, "optuna")
+            os.makedirs(optuna_dir, exist_ok=True)
+            with open(os.path.join(optuna_dir, "best_params_lgb.json"), 'w') as f:
+                json.dump({"best_params": best_params, "best_auc": study.best_value}, f, indent=4)
+            return study.best_value
+        except Exception as e:
+            logger.error(f"Optuna LightGBM 调优失败: {e}")
             return 0.0
 
     def train_lightgbm(self, target_label="label_3p_15d", params=None, threshold=0.5, save=True):
