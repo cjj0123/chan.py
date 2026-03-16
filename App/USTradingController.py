@@ -872,6 +872,16 @@ class USTradingController(QObject):
                 self.log_message.emit(f"⏳ [美股] {code} 存在未完成订单，跳过当前信号")
                 return
 
+            # --- 0. ML 优先审查 & 一票否决 (P1 加强) ---
+            ml_res = {}
+            if is_buy:
+                ml_res = self.ml_validator.validate_signal(chan_30m, bsp)
+                prob = ml_res.get('prob', 0) if ml_res else 0
+                if prob < 0.60: # 严格 60% 门限
+                    self.log_message.emit(f"🤖 [美股] {code} {bsp.type2str()} ML 未达标 ({prob*100:.1f}% < 60%) -> 一票否决，跳过视觉检查与绘图")
+                    return
+                self.log_message.emit(f"🤖 [美股] {code} {bsp.type2str()} ML 校验通过 ({prob*100:.1f}%) -> 继续触发视觉评估")
+
             # 1. 绘图 (为视觉 AI 准备素材) - 使用线程锁保护 matplotlib 全局状态
             chart_paths = []
             with self.chart_generation_lock:
@@ -899,35 +909,13 @@ class USTradingController(QObject):
             
             score = visual_res.get('score', 0)
             
-            # 3. ML 验证 (混合评分策略)
-            ml_start = time.perf_counter()
-            ml_res = self.ml_validator.validate_signal(chan_30m, bsp)
-            ml_time = time.perf_counter() - ml_start
-            
-            prob = ml_res.get('prob', 0) if ml_res else 0
-            final_pass = ml_res.get('is_valid', False) if ml_res else False
-            override_msg = ""
-            
-            if score >= 90:
-                if prob >= 0.20:
-                    final_pass = True
-                    override_msg = f"🌟 触发高分视觉覆盖 (Visual:{score}, ML:{prob:.2f})"
-                elif prob < 0.10:
-                    final_pass = False
-                    override_msg = "🚨 ML 概率极低 (<10%)，视觉覆盖失效"
-            elif score < 70:
-                final_pass = False
-                override_msg = f"📉 视觉得分不及格 ({score})"
-            
-            if not final_pass:
-                fail_reason = override_msg if override_msg else ml_res.get('msg', 'No ML result') if ml_res else "ML Data Missing"
-                self.log_message.emit(f"🤖 [美股] {code} {bsp.type2str()} 拦截 [Visual:{score}, ML:{prob:.2f}]: {fail_reason}")
+            # 3. 视觉验证 (已经过 ML 达标过滤)
+            if score < 70:
+                self.log_message.emit(f"🤖 [美股] {code} {bsp.type2str()} 拦截 [ML:{ml_res.get('prob', 0):.2f}, Visual:{score}]: 视觉得分不及格(<70)")
                 return
-
-            if override_msg:
-                self.log_message.emit(f"✅ [美股] {code} {bsp.type2str()} 最终综合评分: {score} | {override_msg}")
             else:
-                self.log_message.emit(f"✅ [美股] {code} 最终综合评分: {score} | ML 校验通过")
+                self.log_message.emit(f"✅ [美股] {code} {bsp.type2str()} 准入 [ML:{ml_res.get('prob', 0):.2f}, Visual:{score}]: 三项阈值均达标 (包含缠论买卖点)")
+
 
             if self.discord_bot and score >= self.min_visual_score:
                 msg = f"🗽 **美股自动化预警**\n股票: {code}\n信号: {bsp.type2str()}\n评分: **{score}分**\nML概率: {ml_res.get('prob',0)*100:.1f}%"

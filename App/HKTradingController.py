@@ -93,9 +93,9 @@ class HKTradingController(QObject):
         self.charts_dir = "charts"
         os.makedirs(self.charts_dir, exist_ok=True)
 
-        # 初始化富途连接
-        self.quote_ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
-        self.trd_ctx = OpenHKTradeContext(host='127.0.0.1', port=11111)
+        # 延迟初始化富途连接 (在后台线程首次使用时创建，确保 socket 线程亲和性)
+        self._quote_ctx = None
+        self._trd_ctx = None
         self.trd_env = TrdEnv.SIMULATE if self.dry_run else TrdEnv.REAL
 
         # 初始化 Discord Bot (将在启动扫描时真正启动)
@@ -147,6 +147,20 @@ class HKTradingController(QObject):
         
         # --- UI Callbacks ---
         self.log_message.emit("✅ 港股交易控制器初始化完成")
+
+    @property
+    def quote_ctx(self):
+        """延迟初始化 Futu 行情上下文，确保在使用线程上创建"""
+        if self._quote_ctx is None:
+            self._quote_ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
+        return self._quote_ctx
+
+    @property
+    def trd_ctx(self):
+        """延迟初始化 Futu 交易上下文，确保在使用线程上创建"""
+        if self._trd_ctx is None:
+            self._trd_ctx = OpenHKTradeContext(host='127.0.0.1', port=11111)
+        return self._trd_ctx
 
     def _load_executed_signals(self) -> Dict:
         """加载已执行信号记录"""
@@ -200,22 +214,30 @@ class HKTradingController(QObject):
         self.log_message.emit("⚡ 收到强制扫描指令，将在下一次心跳时触发完整扫描")
 
     def get_watchlist_data(self) -> Dict[str, str]:
-        """获取所选自选股分组的代码和名称清单"""
+        """获取所选自选股分组的代码和名称清单（支持逗号分隔的多分组合并）"""
         try:
-            # 如果是 "全部"，则获取所有自选股
-            group = self.hk_watchlist_group if self.hk_watchlist_group not in ["全部", "All", ""] else ""
-            ret, data = self.quote_ctx.get_user_security(group_name=group)
-            if ret == RET_OK and not data.empty:
-                # 过滤出以 'HK.' 开头的代码
-                hk_data = data[data['code'].str.startswith('HK.')]
-                # 返回 code -> name 的映射
-                name_col = 'name' if 'name' in hk_data.columns else 'stock_name'
-                watchlist = dict(zip(hk_data['code'].tolist(), hk_data[name_col].tolist()))
-                self.log_message.emit(f"成功获取 {len(watchlist)} 只港股自选股")
-                return watchlist
-            else:
-                self.log_message.emit(f"获取自选股列表失败: {data}")
-                return {}
+            # 支持多分组合并: "港股,热点_实盘" -> 分别拉取再合并
+            groups = [g.strip() for g in self.hk_watchlist_group.split(',') if g.strip()]
+            if not groups:
+                groups = [""]
+            
+            merged_watchlist = {}
+            for group in groups:
+                if group in ["全部", "All", ""]:
+                    group = ""
+                ret, data = self.quote_ctx.get_user_security(group_name=group)
+                if ret == RET_OK and not data.empty:
+                    # 过滤出以 'HK.' 开头的代码
+                    hk_data = data[data['code'].str.startswith('HK.')]
+                    name_col = 'name' if 'name' in hk_data.columns else 'stock_name'
+                    partial = dict(zip(hk_data['code'].tolist(), hk_data[name_col].tolist()))
+                    merged_watchlist.update(partial)
+                    self.log_message.emit(f"分组 [{group or '全部'}] 获取到 {len(partial)} 只港股")
+                else:
+                    self.log_message.emit(f"获取分组 [{group}] 失败: {data}")
+            
+            self.log_message.emit(f"合计获取 {len(merged_watchlist)} 只港股自选股 (去重后)")
+            return merged_watchlist
         except Exception as e:
             self.log_message.emit(f"获取自选股列表异常: {e}")
             return {}
@@ -876,8 +898,6 @@ class HKTradingController(QObject):
                 
                 # 为后续请求预留一点 API 额度
                 time.sleep(1.0)
-                
-                # 提取信号基本属性
                 bsp_type = chan_result.get('bsp_type', '未知')
                 is_buy = chan_result.get('is_buy_signal', False)
                 bsp_time_str = chan_result.get('bsp_datetime_str', '')
@@ -966,20 +986,6 @@ class HKTradingController(QObject):
         if self.check_pending_orders(code, 'BUY' if is_buy else 'SELL'):
             self.log_message.emit(f"⏭️ {code} {bsp_type_display} 已有相同方向挂单，跳过")
             return False
-
-        # 4. ML 过滤
-        if is_buy:
-            chan_env = chan_result.get('chan_analysis', {}).get('chan_30m')
-            if chan_env:
-                bsp_list = chan_env.get_bsp()
-                if bsp_list:
-                    ml_res = self.signal_validator.validate_signal(chan_env, bsp_list[-1], threshold=self.ml_threshold)
-                    prob = ml_res.get('prob', 0)
-                    if not ml_res['is_valid']:
-                        self.log_message.emit(f"🤖 {code} {bsp_type_display} ML 评分较低 ({prob*100:.1f}%)，已过滤")
-                        return False
-                    else:
-                        self.log_message.emit(f"🤖 {code} {bsp_type_display} ML 校验通过 ({prob*100:.1f}%)")
 
         return True
 
@@ -1406,16 +1412,32 @@ class HKTradingController(QObject):
 
     async def _async_evaluate_single_signal(self, session, signal: Dict) -> Optional[Dict]:
         """
-        异步评估单个信号的辅助函数
+        异步评估单个信号的辅助函数 (P1 加强: ML 优先一票否决)
         """
         code = signal['code']
         chart_paths = signal['chart_paths']
-        bsp_type = signal['bsp_type']  # 使用信号类型作为额外信息
+        bsp_type = signal['bsp_type']
         
-        # 构建缓存键: 股票代码_时间_信号类型
         bsp_time_str = signal.get('chan_result', {}).get('bsp_datetime_str', '')
         cache_key = f"{code}_{bsp_time_str}_{bsp_type}"
+        bsp_type_display = f"{'b' if signal['is_buy'] else 's'}{bsp_type}"
         
+        # --- 0. ML 优先审查 & 一票否决 ---
+        ml_res = {}
+        if signal.get('is_buy'):
+            chan_env = signal.get('chan_result', {}).get('chan_analysis', {}).get('chan_30m')
+            if chan_env:
+                bsp_list = chan_env.get_bsp()
+                if bsp_list:
+                    ml_start = time.perf_counter()
+                    ml_res = self.signal_validator.validate_signal(chan_env, bsp_list[-1], threshold=self.ml_threshold)
+                    prob = ml_res.get('prob', 0)
+                    
+                    if prob < self.ml_threshold:
+                        self.log_message.emit(f"🤖 {code} {bsp_type_display} ML 未达标 ({prob*100:.1f}% < {self.ml_threshold*100:.0f}%) -> 一票否决，跳过视觉评分")
+                        return None
+                    self.log_message.emit(f"🤖 {code} {bsp_type_display} ML 校验通过 ({prob*100:.1f}%) -> 继续触发视觉评估")
+
         try:
             # 检查缓存
             if cache_key in self.visual_score_cache:
@@ -1425,6 +1447,11 @@ class HKTradingController(QObject):
                 # 使用线程池执行器来异步调用同步的evaluate方法
                 loop = asyncio.get_event_loop()
                 visual_result = await loop.run_in_executor(None, self.visual_judge.evaluate, chart_paths, bsp_type)
+                
+                if visual_result is None:
+                    self.log_message.emit(f"⚠️ {code} 视觉评分返回为空 (超时或模型故障)")
+                    return None
+                
                 if visual_result and visual_result.get('action') != 'ERROR':
                     # 只缓存成功的评分
                     self.visual_score_cache[cache_key] = visual_result
@@ -1438,6 +1465,13 @@ class HKTradingController(QObject):
             
             self.log_message.emit(f"✅ {code} {bsp_type_display} 评分完成: {score}")
             
+            # --- 2. 视觉验证 (已经过 ML 达标过滤) ---
+            if score < 70:
+                self.log_message.emit(f"🤖 {code} {bsp_type_display} 拦截 [ML:{ml_res.get('prob', 0):.2f}, Visual:{score}]: 视觉得分不达标(<70)")
+                return None
+            else:
+                self.log_message.emit(f"✅ {code} {bsp_type_display} 准入 [ML:{ml_res.get('prob', 0):.2f}, Visual:{score}]: 三项阈值均达标 (包含缠论买卖点)")
+
             # 添加评分结果到信号数据
             scored_signal = signal.copy()
             scored_signal['score'] = score
