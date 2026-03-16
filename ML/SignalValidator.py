@@ -48,6 +48,7 @@ class SignalValidator:
                  policy: str = "MAJORITY"):
         self.extractor = FeatureExtractor()
         self.market_models = {} # 为不同市场存储模型: {'US': {models}, 'HK': {models}, ...}
+        self.market_features = {} # 为不同市场存储特征对齐元数据
         self.feature_meta = {}
         self.mlp_norms = {}
         self.market_thresholds = {} # {'US': thresholds, ...}
@@ -73,23 +74,26 @@ class SignalValidator:
         
     def _load_all_market_models(self):
         """扫描目录加载所有可用市场的权重"""
-        markets = ["US", "HK", "CN", "GLOBAL"]
+        markets = ["US", "HK", "A", "CN", "GLOBAL"]
         for m in markets:
             m_dir = os.path.join(self.model_dir, m) if m != "GLOBAL" else self.model_dir
             if os.path.exists(m_dir):
-                models, thresholds, norm, timestamps = self._load_model_set(m_dir)
+                models, thresholds, norm, feat_meta, timestamps = self._load_model_set(m_dir)
                 if models:
                     self.market_models[m] = models
                     self.market_thresholds[m] = thresholds
                     self.mlp_norms[m] = norm
+                    if feat_meta:
+                        self.market_features[m] = feat_meta
                     self._model_timestamps[m] = timestamps
                     logger.info(f"✅ SignalValidator: {m} market models loaded.")
 
-    def _load_model_set(self, m_dir: str) -> Tuple[Dict, Dict, Dict, Dict]:
+    def _load_model_set(self, m_dir: str) -> Tuple[Dict, Dict, Dict, Dict, Dict]:
         """从特定目录加载一组模型"""
         models = {}
         thresholds = {"XGB": 0.5, "LGB": 0.5, "MLP": 0.5}
         norm = {}
+        feat_meta = {}
         timestamps = {}
         
         try:
@@ -121,10 +125,16 @@ class SignalValidator:
                 models['MLP'] = m
                 timestamps['MLP'] = os.path.getmtime(mlp_path)
                 
-            return models, thresholds, norm, timestamps
+            # 4. 加载该市场的特征元数据 (如有)
+            f_meta_path = os.path.join(m_dir, "feature_meta.json")
+            if os.path.exists(f_meta_path):
+                with open(f_meta_path, 'r', encoding='utf-8') as f:
+                    feat_meta = json.load(f)
+                    
+            return models, thresholds, norm, feat_meta, timestamps
         except Exception as e:
             logger.error(f"Error loading model set from {m_dir}: {e}")
-            return {}, {}, {}, {}
+            return {}, {}, {}, {}, {}
 
     def _load_all_models(self, model_dir: str, meta_path: str) -> bool:
         if not os.path.exists(meta_path):
@@ -189,7 +199,7 @@ class SignalValidator:
 
     def check_and_reload(self):
         """检查所有市场的模型文件是否更新"""
-        markets = ["US", "HK", "CN", "GLOBAL"]
+        markets = ["US", "HK", "A", "CN", "GLOBAL"]
         for market in markets:
             timestamps = self._model_timestamps.get(market, {})
             m_dir = os.path.join(self.model_dir, market) if market != "GLOBAL" else self.model_dir
@@ -205,11 +215,13 @@ class SignalValidator:
                         break
                         
             if needs_reload:
-                models, thresholds, norm, new_ts = self._load_model_set(m_dir)
+                models, thresholds, norm, feat_meta, new_ts = self._load_model_set(m_dir)
                 if models:
                     self.market_models[market] = models
                     self.market_thresholds[market] = thresholds
                     self.mlp_norms[market] = norm
+                    if feat_meta:
+                        self.market_features[market] = feat_meta
                     self._model_timestamps[market] = new_ts
                     logger.info(f"🔄 SignalValidator: Market {market} models reloaded.")
 
@@ -217,7 +229,7 @@ class SignalValidator:
         """根据股票代码推断市场"""
         if code.startswith("US."): return "US"
         if code.startswith("HK."): return "HK"
-        if code.startswith("SH.") or code.startswith("SZ."): return "CN"
+        if code.startswith("SH.") or code.startswith("SZ."): return "A"
         return "GLOBAL"
 
     def validate_signal(self, chan: CChan, bsp: CBS_Point, threshold: float = 0.5) -> Dict[str, Any]:
@@ -246,8 +258,12 @@ class SignalValidator:
             # 1. 提取特征
             features = self.extractor.extract_bsp_features(chan, bsp)
             
-            # 2. 对齐特征名
-            feat_names = sorted(self.feature_meta.items(), key=lambda x: x[1])
+            # 2. 对齐特征名 (优先用该市场的特征对齐规则，降级到全局规则)
+            market_meta = self.market_features.get(market, self.feature_meta)
+            if not market_meta:
+                market_meta = self.feature_meta  # 再次兜底
+                
+            feat_names = sorted(market_meta.items(), key=lambda x: x[1])
             feat_names = [f[0] for f in feat_names]
             row_data = {name: float(features.get(name, 0.0)) for name in feat_names}
             df_input = pd.DataFrame([row_data])
