@@ -1003,8 +1003,8 @@ class HKTradingController(QObject):
             
             # 1. 优先提取买卖点，并进行 ML 一票否决验证 (针对买入信号)
             bsp = None
-            if chan_30m and len(chan_30m) > 0:
-                bsp_list = chan_30m[0].get_bsp()
+            if chan_30m:
+                bsp_list = chan_30m.get_bsp()
                 if bsp_list: bsp = bsp_list[-1]
                 
             if bsp and signal.get('is_buy'):
