@@ -55,6 +55,9 @@ from App.DiscordBot import DiscordBot
 from DataAPI.SchwabAPI import CSchwabAPI
 from Common.SchwabRateLimiter import get_schwab_limiter
 
+# 导入 Futu US 交易
+from futu import OpenUSTradeContext, TrdMarket, TrdSide, OrderType, RET_OK
+
 logger = logging.getLogger(__name__)
 
 class USTradingController(QObject):
@@ -121,6 +124,14 @@ class USTradingController(QObject):
              
         # 风险属性：本地活性止损跟踪器 {code: {entry_price, highest_price, atr, trail_active}}
         self.position_trackers = {}
+        self._trd_ctx = None
+
+    @property
+    def trd_ctx(self):
+        """延迟初始化 Futu 交易上下文，确保在使用线程上创建"""
+        if self._trd_ctx is None:
+            self._trd_ctx = OpenUSTradeContext(host='127.0.0.1', port=11111)
+        return self._trd_ctx
 
     def _load_notified_signals(self) -> dict:
         """从磁盘加载已通知信号记录，防止重启后重复下单"""
@@ -626,6 +637,8 @@ class USTradingController(QObject):
         elif self.venue == "SCHWAB":
             if self.schwab_account_hash:
                 return await self._get_schwab_assets_async()
+        elif self.venue == "FUTU":
+            return await self._get_futu_assets_async()
         return 0.0, 0.0, []
 
     async def _get_ib_assets_async(self) -> Tuple[float, float, list]:
@@ -725,6 +738,10 @@ class USTradingController(QObject):
                 await self._execute_schwab_order_async(code, action, qty, price)
             else:
                 self.log_message.emit("❌ [美股-Schwab] 账户未初始化，无法下单")
+            return
+            
+        if self.venue == "FUTU":
+            await self._execute_futu_order_async(code, action, qty, price)
             return
 
         # IB 下单
@@ -1058,3 +1075,59 @@ class USTradingController(QObject):
                     del self.position_trackers[code]
         except Exception as e:
              logger.error(f"浮动止损检查异常: {e}")
+
+    async def _get_futu_assets_async(self) -> Tuple[float, float, list]:
+        """通过 Futu API 获取美股账户资产及持仓"""
+        try:
+            # 1. 查询账户资金
+            ret, data = self.trd_ctx.accinfo_query(trd_market=TrdMarket.US)
+            available, total = 0.0, 0.0
+            if ret == RET_OK and not data.empty:
+                available = float(data.iloc[0]['cash'])
+                total = float(data.iloc[0]['power'])
+            
+            # 2. 查询持仓
+            positions = []
+            ret_pos, pos_data = self.trd_ctx.position_list_query(trd_market=TrdMarket.US)
+            if ret_pos == RET_OK and not pos_data.empty:
+                for _, row in pos_data.iterrows():
+                    qty = int(row['qty'])
+                    if qty == 0: continue
+                    symbol = row['code'].split('.')[-1]
+                    positions.append({
+                        'symbol': symbol,
+                        'qty': qty,
+                        'mkt_value': float(row['market_val']),
+                        'avg_cost': float(row['cost_price']),
+                        'mkt_price': float(row['nominal_price'])
+                    })
+            return available, total, positions
+        except Exception as e:
+            self.log_message.emit(f"⚠️ [美股-Futu] 资金持仓查询失败: {e}")
+        return 0.0, 0.0, []
+
+    async def _execute_futu_order_async(self, code: str, action: str, qty: int, price: float):
+        """富途美股下单接口"""
+        try:
+            side = TrdSide.BUY if action == "BUY" else TrdSide.SELL
+            limit_price = round(price * 1.01, 2) if action == "BUY" else round(price * 0.99, 2)
+            
+            # 确保代码带有 US. 前缀
+            if not code.startswith("US."):
+                code = f"US.{code.split('.')[-1]}"
+                
+            ret, data = self.trd_ctx.place_order(
+                price=limit_price,
+                qty=qty,
+                code=code,
+                trd_side=side,
+                order_type=OrderType.NORMAL,
+                trd_market=TrdMarket.US
+            )
+            if ret == RET_OK:
+                order_id = data.iloc[0]['order_id']
+                self.log_message.emit(f"🚀 [美股-Futu] 限价单提交成功: {code} {action} {qty} @ ${limit_price:.2f} (ID: {order_id})")
+            else:
+                self.log_message.emit(f"❌ [美股-Futu] 下单失败: {data}")
+        except Exception as e:
+             self.log_message.emit(f"❌ [美股-Futu] 下单异常: {e}")
