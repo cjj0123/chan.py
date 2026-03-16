@@ -189,8 +189,12 @@ class SignalValidator:
 
     def check_and_reload(self):
         """检查所有市场的模型文件是否更新"""
-        for market, timestamps in self._model_timestamps.items():
+        markets = ["US", "HK", "CN", "GLOBAL"]
+        for market in markets:
+            timestamps = self._model_timestamps.get(market, {})
             m_dir = os.path.join(self.model_dir, market) if market != "GLOBAL" else self.model_dir
+            if not os.path.exists(m_dir): continue
+            
             model_files = {"XGB": "model_xgb.json", "LGB": "model_lgb.txt", "MLP": "model_mlp.pth"}
             needs_reload = False
             for m, f_name in model_files.items():
@@ -199,6 +203,7 @@ class SignalValidator:
                     if os.path.getmtime(p) > timestamps.get(m, 0):
                         needs_reload = True
                         break
+                        
             if needs_reload:
                 models, thresholds, norm, new_ts = self._load_model_set(m_dir)
                 if models:
