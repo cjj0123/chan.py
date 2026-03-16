@@ -30,6 +30,11 @@ TRADING_CONFIG = {
     # 信号时间过滤
     'max_signal_age_hours': int(os.getenv('MAX_SIGNAL_AGE_HOURS', '1')),
     
+    # 风险管理与 ATR 止损配置 (方案丙)
+    'atr_stop_init': float(os.getenv('ATR_STOP_INIT', '1.2')),       # 初始固定止损倍数
+    'atr_stop_trail': float(os.getenv('ATR_STOP_TRAIL', '2.5')),     # 移动止损回撤倍数
+    'atr_profit_threshold': float(os.getenv('ATR_PROFIT_THRESHOLD', '1.5')), # 触发移动止损的获利倍数
+    
     # Discord 配置
     'discord': {
         'token': os.getenv('DISCORD_BOT_TOKEN', ''),

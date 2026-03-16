@@ -1193,14 +1193,15 @@ class HKTradingController(QObject):
                             self.executed_signals[code] = bsp_time_str
                             self._save_executed_signals()
                         
-                        # 初始化或更新追踪止损基准值
+                        # 初始化分阶段移动止损基准值 (方案丙)
                         if atr_value and atr_value > 0:
                             self.position_trackers[code] = {
                                 'highest_price': price,
                                 'atr': atr_value,
-                                'atr_multiplier': atr_multiplier
+                                'entry_price': price,
+                                'trail_active': False
                             }
-                            self.log_message.emit(f"🛡️ {code} 已启动移动止损监控: 初始价={price:.3f}, ATR={atr_value:.3f}")
+                            self.log_message.emit(f"🛡️ {code} 已启动分阶段双重止损监控: 初始价={price:.3f}, ATR={atr_value:.3f}")
                             
                         self.log_message.emit(f"✅ 买入成功 {code}, 剩余资金: {available_funds:.2f}, 已买入{stocks_bought}/{remaining_slots}只(总持仓{current_position_count+stocks_bought}/{max_total_stocks})")
                     else:
@@ -1282,13 +1283,34 @@ class HKTradingController(QObject):
                 tracker['highest_price'] = current_price
                 self.log_message.emit(f"📈 {code} 创持仓新高: {current_price:.3f}")
                 
-            # 4. 判断回撤止损
+            # 4. 判断止损 (方案丙)
             highest = tracker['highest_price']
-            stop_distance = tracker['atr'] * tracker['atr_multiplier']
-            stop_price = highest - stop_distance
+            entry_price = tracker.get('entry_price', current_price)
+            atr = tracker['atr']
             
+            from config import TRADING_CONFIG
+            atr_stop_init = TRADING_CONFIG.get('atr_stop_init', 1.2)
+            atr_stop_trail = TRADING_CONFIG.get('atr_stop_trail', 2.5)
+            atr_profit_threshold = TRADING_CONFIG.get('atr_profit_threshold', 1.5)
+
+            # 检查是否达标开启移动止损
+            if not tracker.get('trail_active', False):
+                has_reached_threshold = (current_price - entry_price) >= (atr * atr_profit_threshold)
+                if has_reached_threshold:
+                    tracker['trail_active'] = True
+                    self.log_message.emit(f"🔓 {code} 已达获利门槛(${current_price:.2f} >= +{atr_profit_threshold}*ATR)，切换为移动止损模式")
+                    
+            if tracker.get('trail_active', False):
+                # 移动止损：最高价回撤 atr_stop_trail * ATR
+                stop_price = tracker['highest_price'] - (atr * atr_stop_trail)
+                stop_type = "移动止损"
+            else:
+                # 固定止损：买入价下方 atr_stop_init * ATR
+                stop_price = entry_price - (atr * atr_stop_init)
+                stop_type = "固定止损"
+                
             if current_price < stop_price:
-                self.log_message.emit(f"🚨 {code} 触发移动止损! 最高价={highest:.3f}, 现价={current_price:.3f}, 止损位={stop_price:.3f}")
+                self.log_message.emit(f"🚨 {code} 触发{stop_type}! 最高价={highest:.3f}, 现价={current_price:.3f}, 止损位={stop_price:.3f}")
                 
                 # 尝试强制抛售所有持仓
                 if self.execute_trade(code, 'SELL', qty, current_price, urgent=True):
