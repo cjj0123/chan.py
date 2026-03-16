@@ -342,10 +342,20 @@ class MarketMonitorController(QObject):
         bsp_type_str = bsp.type2str()
         msg_base = f"{code} ({name}) 发现 {sig_type} {bsp_type_str} | 时间: {bsp.klu.time} | 价格: {bsp.klu.close:.2f}"
         
-        # --- 机器学习验证 (对所有信号尝试获取评分) ---
-        ml_result = self.ml_validator.validate_signal(chan, bsp)
+        # --- 1. 机器学习验证 (P1 加强: 先 ML 过滤，一票否决) ---
+        ml_result = self.signal_validator.validate_signal(chan, bsp)
+        prob = ml_result.get('prob', 0)
+        from config import TRADING_CONFIG
+        ml_threshold = TRADING_CONFIG.get('ml_threshold', 0.70)
         
-        # 生成图表
+        if bsp.is_buy:
+            if prob < ml_threshold:
+                self.log_message.emit(f"🤖 [监控] {code} ML 未达标 ({prob*100:.1f}% < {ml_threshold*100:.0f}%) -> 一票否决，跳过图表生成与视觉评分")
+                return
+            else:
+                self.log_message.emit(f"🤖 [监控] {code} ML 校验通过 ({prob*100:.1f}%) -> 继续生成图表进行视觉评估")
+                
+        # --- 2. 只有 ML 达标后，才生成图表 (降低系统开销) ---
         chart_path = os.path.abspath(os.path.join(self.charts_dir, f"{code.replace('.', '_')}_{datetime.now().strftime('%H%M%S')}.png"))
         try:
             # 使用完整的图表配置和参数
@@ -353,7 +363,7 @@ class MarketMonitorController(QObject):
             plt.savefig(chart_path, bbox_inches='tight', dpi=120, facecolor='white')
             plt.close('all')
             
-            # --- 视觉评分 ---
+            # --- 3. 视觉评分 ---
             score = 0
             analysis = ""
             
