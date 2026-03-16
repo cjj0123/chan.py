@@ -228,16 +228,15 @@ def get_default_data_sources(code: str) -> list:
     default_sources = ["custom:SQLiteAPI.SQLiteAPI"]
     
     if is_us_stock(code):
-        # 美股优先级逻辑: IB -> YFinance -> 本地数据库
+        # 美股优先级逻辑: Schwab -> 本地数据库
         sources = []
-        # 1. IB (如果环境配置了主机)
-        if os.getenv("IB_HOST"):
-            sources.append(DATA_SRC.IB)
         
-        # 2. YFinance (无需 KEY，作为第一备选驱动)
-        sources.append(DATA_SRC.YFINANCE)
-        
-        # 3. 本地数据库 (兜底)
+        # 0. Schwab (如果 Token 存在)
+        token_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'schwab_token.json')
+        if os.path.exists(token_path):
+            sources.append(DATA_SRC.SCHWAB)
+            
+        # 1. 本地数据库 (兜底)
         sources.append("custom:SQLiteAPI.SQLiteAPI")
         
         return sources
