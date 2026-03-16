@@ -118,6 +118,9 @@ class USTradingController(QObject):
         if os.path.exists(self.schwab_token_path):
              # 占位初始化，真正连接时会刷新
              self.schwab_api = CSchwabAPI("US.AAPL") 
+             
+        # 风险属性：本地活性止损跟踪器 {code: {entry_price, highest_price, atr, trail_active}}
+        self.position_trackers = {}
 
     def _load_notified_signals(self) -> dict:
         """从磁盘加载已通知信号记录，防止重启后重复下单"""
@@ -263,6 +266,8 @@ class USTradingController(QObject):
                             await asyncio.wait_for(self.ib.connectAsync(self.host, self.port, clientId=target_client_id), timeout=12)
                             self.log_message.emit(f"🔌 [美股] IB 连接成功 (ID:{target_client_id})")
                             self.ib.reqAccountUpdates(True)
+                            # 异步进行仓位风控初始化 (方案丙)
+                            asyncio.create_task(self._initialize_position_trackers())
                         except asyncio.TimeoutError:
                             self.log_message.emit("⚠️ [美股] IB 连接超时 (12s)")
                         except Exception as e:
@@ -292,6 +297,13 @@ class USTradingController(QObject):
 
                 # 3. 驱动的心跳
                 await asyncio.sleep(0.5)
+
+                # 3.5 活性持仓止损监测 (方案丙)
+                if not hasattr(self, '_last_stop_check_time'):
+                    self._last_stop_check_time = time.time()
+                elif time.time() - self._last_stop_check_time >= 60: # 60秒一检
+                    await self._check_trailing_stops()
+                    self._last_stop_check_time = time.time()
 
                 if self._is_paused:
                     continue
@@ -934,3 +946,115 @@ class USTradingController(QObject):
         except Exception as e:
             self.log_message.emit(f"⚠️ [美股] 信号处理异常: {e}")
             print(traceback.format_exc())
+
+    async def _initialize_position_trackers(self):
+        """为现有持仓初始化追踪止损器 (方案丙)"""
+        self.log_message.emit("🛡️ 正在为当前美股持仓初始化风险监控...")
+        try:
+            available, total, positions = await self.get_account_assets_async()
+            if not positions: return
+            
+            for p in positions:
+                code = f"US.{p['symbol']}" # 构造成标准代码
+                if code in self.position_trackers: continue
+                
+                # 计算最新价格 (如果没给 marketPrice，用 mkt_value / qty 估算)
+                current = p.get('mkt_price') or (p['mkt_value'] / p['qty'] if p['qty'] != 0 else 0)
+                if current <= 0: continue
+                
+                try:
+                    # 从本地库缓存快速提取 30m 级别 ATR
+                    end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    start_time = (datetime.now() - timedelta(days=20)).strftime("%Y-%m-%d")
+                    chan = CChan(
+                        code=code,
+                        begin_time=start_time,
+                        end_time=end_time,
+                        data_src="custom:SQLiteAPI.SQLiteAPI", 
+                        lv_list=[KL_TYPE.K_30M],
+                        config=CChanConfig({"bi_strict": True, "bs_type": '1,2,x'})
+                    )
+                    
+                    if chan[KL_TYPE.K_30M]:
+                        # 计算 ATR (Average True Range)
+                        close_prices = [k.close for k in chan[KL_TYPE.K_30M]]
+                        high_prices = [k.high for k in chan[KL_TYPE.K_30M]]
+                        low_prices = [k.low for k in chan[KL_TYPE.K_30M]]
+                        
+                        tr_list = []
+                        for i in range(1, len(close_prices)):
+                            hl = high_prices[i] - low_prices[i]
+                            hc = abs(high_prices[i] - close_prices[i-1])
+                            lc = abs(low_prices[i] - close_prices[i-1])
+                            tr_list.append(max(hl, hc, lc))
+                        
+                        atr_val = sum(tr_list[-10:]) / 10 if len(tr_list) >= 10 else (current * 0.02)
+                        
+                        self.position_trackers[code] = {
+                            'entry_price': p['avg_cost'],
+                            'highest_price': max(current, p['avg_cost']),
+                            'atr': atr_val,
+                            'trail_active': False
+                        }
+                        self.log_message.emit(f"✅ {code} 风控载入: 成本=${p['avg_cost']:.2f}, ATR=${atr_val:.3f}")
+                except Exception as ex:
+                    print(f"初始化 {code} ATR失败: {ex}")
+        except Exception as e:
+            print(f"初始化持仓风控失败: {e}")
+
+    async def _check_trailing_stops(self):
+        """活性持仓止损检查算法 (方案丙) - 异步高频安全哨兵"""
+        if not self.position_trackers: return
+        
+        try:
+            available, total, positions = await self.get_account_assets_async()
+            current_held_codes = {f"US.{p['symbol']}": p for p in positions}
+            
+            for code in list(self.position_trackers.keys()):
+                # 1. 检查是否存在持仓
+                if code not in current_held_codes:
+                    self.log_message.emit(f"🔄 {code} 已无持仓，停止移动止损追踪")
+                    del self.position_trackers[code]
+                    continue
+                
+                p = current_held_codes[code]
+                qty = abs(p['qty'])
+                current_price = p.get('mkt_price') or (p['mkt_value'] / p['qty'] if p['qty'] != 0 else 0)
+                
+                # 2. 获取追踪器
+                tracker = self.position_trackers[code]
+                
+                # 3. 更新最高价
+                if current_price > tracker['highest_price']:
+                    tracker['highest_price'] = current_price
+                    self.log_message.emit(f"📈 {code} 创美股持仓新高: ${current_price:.2f}")
+                
+                # 4. 风控条件对齐
+                entry_price = tracker.get('entry_price', current_price)
+                highest = tracker['highest_price']
+                atr = tracker['atr']
+                
+                atr_init = TRADING_CONFIG.get('atr_stop_init', 1.2)
+                atr_trail = TRADING_CONFIG.get('atr_stop_trail', 2.5)
+                atr_profit = TRADING_CONFIG.get('atr_profit_threshold', 1.5)
+                
+                # 触发状态：开启移动止损
+                if not tracker.get('trail_active', False):
+                    if (current_price - entry_price) >= (atr * atr_profit):
+                        tracker['trail_active'] = True
+                        self.log_message.emit(f"🔓 {code} 已达获利门槛(+{atr_profit}*ATR)，切换为移动止损模式")
+                
+                if tracker.get('trail_active', False):
+                    stop_price = highest - (atr * atr_trail)
+                    stop_type = "移动止损"
+                else:
+                    stop_price = entry_price - (atr * atr_init)
+                    stop_type = "固定止损"
+                
+                # 5. 触发则立刻下平仓单
+                if current_price < stop_price:
+                    self.log_message.emit(f"🚨 {code} 触发{stop_type}! 最高价=${highest:.2f}, 现价=${current_price:.2f}, 止损位=${stop_price:.2f}")
+                    self.cmd_queue.put(('EXECUTE_TRADE', {'code': code, 'action': 'SELL', 'price': current_price}))
+                    del self.position_trackers[code]
+        except Exception as e:
+             logger.error(f"浮动止损检查异常: {e}")
