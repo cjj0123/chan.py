@@ -338,27 +338,26 @@ class MarketMonitorController(QObject):
 
     def _notify_signal(self, code: str, bsp, chan, name: str = ""):
         """推送信号日志和 Discord 图表"""
-        sig_type = "买点" if bsp.is_buy else "卖点"
-        bsp_type_str = bsp.type2str()
-        msg_base = f"{code} ({name}) 发现 {sig_type} {bsp_type_str} | 时间: {bsp.klu.time} | 价格: {bsp.klu.close:.2f}"
-        
-        # --- 1. 机器学习验证 (P1 加强: 先 ML 过滤，一票否决) ---
-        ml_result = self.signal_validator.validate_signal(chan, bsp)
-        prob = ml_result.get('prob', 0)
-        from config import TRADING_CONFIG
-        ml_threshold = TRADING_CONFIG.get('ml_threshold', 0.70)
-        
-        if bsp.is_buy:
-            if prob < ml_threshold:
-                self.log_message.emit(f"🤖 [监控] {code} ML 未达标 ({prob*100:.1f}% < {ml_threshold*100:.0f}%) -> 一票否决，跳过图表生成与视觉评分")
-                return
-            else:
-                self.log_message.emit(f"🤖 [监控] {code} ML 校验通过 ({prob*100:.1f}%) -> 继续生成图表进行视觉评估")
-                
-        # --- 2. 只有 ML 达标后，才生成图表 (降低系统开销) ---
-        chart_path = os.path.abspath(os.path.join(self.charts_dir, f"{code.replace('.', '_')}_{datetime.now().strftime('%H%M%S')}.png"))
         try:
-            # 使用完整的图表配置和参数
+            sig_type = "买点" if bsp.is_buy else "卖点"
+            bsp_type_str = bsp.type2str()
+            msg_base = f"{code} ({name}) 发现 {sig_type} {bsp_type_str} | 时间: {bsp.klu.time} | 价格: {bsp.klu.close:.2f}"
+            
+            # --- 1. 机器学习验证 (P1 加强: 先 ML 过滤，一票否决) ---
+            ml_result = self.signal_validator.validate_signal(chan, bsp)
+            prob = ml_result.get('prob', 0)
+            from config import TRADING_CONFIG
+            ml_threshold = TRADING_CONFIG.get('ml_threshold', 0.70)
+            
+            if bsp.is_buy:
+                if prob < ml_threshold:
+                    self.log_message.emit(f"🤖 [监控] {code} ML 未达标 ({prob*100:.1f}% < {ml_threshold*100:.0f}%) -> 一票否决，跳过图表生成与视觉评分")
+                    return
+                else:
+                    self.log_message.emit(f"🤖 [监控] {code} ML 校验通过 ({prob*100:.1f}%) -> 继续生成图表进行视觉评估")
+                    
+            # --- 2. 只有 ML 达标后，才生成图表 (降低系统开销) ---
+            chart_path = os.path.abspath(os.path.join(self.charts_dir, f"{code.replace('.', '_')}_{datetime.now().strftime('%H%M%S')}.png"))
             plot_driver = CPlotDriver(chan, plot_config=CHART_CONFIG, plot_para=CHART_PARA)
             plt.savefig(chart_path, bbox_inches='tight', dpi=120, facecolor='white')
             plt.close('all')
@@ -366,8 +365,6 @@ class MarketMonitorController(QObject):
             # --- 3. 视觉评分 ---
             score = 0
             analysis = ""
-            
-            # 构造缓存键: 股票_信号时间_买卖类型
             cache_key = f"{code}_{str(bsp.klu.time)}_{bsp_type_str}"
             
             if cache_key in self.visual_score_cache:
@@ -385,14 +382,10 @@ class MarketMonitorController(QObject):
 
                 score = visual_result.get('score', 0)
                 analysis = visual_result.get('analysis', "")
-                # 存入缓存
                 self.visual_score_cache[cache_key] = {"score": score, "analysis": analysis}
                 self.log_message.emit(f"✅ [监控] {code} 评分完成: {score}分")
 
-            # --- ML 验证 (混合评分策略) ---
-            prob = ml_result.get('prob', 0)
-            is_ml_pass = ml_result.get('is_valid', False)
-            final_pass = is_ml_pass
+            final_pass = ml_result.get('is_valid', False)
             override_msg = ""
             
             if score >= 90:
@@ -414,7 +407,6 @@ class MarketMonitorController(QObject):
             if override_msg and bsp.is_buy:
                 self.log_message.emit(f"✅ [监控] {code} {sig_type} {bsp_type_str} 准入 | {override_msg}")
 
-            # Discord 推送 (使用配置中的阈值)
             min_score = TRADING_CONFIG.get('min_visual_score', 70)
             if self.discord_bot:
                 import asyncio
@@ -430,11 +422,10 @@ class MarketMonitorController(QObject):
                             f"价格: {bsp.klu.close:.2f}\n"
                             f"ML评分: **{ml_score_str}**\n"
                             f"视觉评分: **{score}分**\n"
-                            f"分析: {analysis[:200]}..." # 截断分析内容
+                            f"分析: {analysis[:200]}..."
                         )
                         coro = self.discord_bot.send_notification(full_msg, chart_path)
                     else:
-                        # 分数太低仅在控制台打印
                         self.log_message.emit(f"⏭️ [监控] {code} 评分({score})低于推送阈值({min_score})，仅本地记录")
                         return
                     
@@ -442,7 +433,9 @@ class MarketMonitorController(QObject):
                 else:
                     self.log_message.emit("⚠️ [监控] Discord 机器人循环未绪，无法推送")
         except Exception as e:
-            self.log_message.emit(f"⚠️ [监控] 信号图表生成或视觉评分失败: {e}")
+            self.log_message.emit(f"⚠️ [监控] 信号推送或视觉评分失败: {e}")
+            import traceback
+            logger.error(f"_notify_signal error: {e}\n{traceback.format_exc()}")
 
     def _cleanup_charts(self):
         """清理过期的图表图片"""
