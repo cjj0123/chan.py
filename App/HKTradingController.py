@@ -994,13 +994,37 @@ class HKTradingController(QObject):
         return True
 
     def _process_candidate_signals(self, candidate_signals: List[Dict]) -> List[Dict]:
-        """封装图表生成和评分流程"""
+        """封装图表生成和评分流程 (P1 加强: 先 ML 过滤，达标再绘图)"""
         signals_with_charts = []
         for signal in candidate_signals:
-            chart_paths = self.generate_charts(signal['code'], signal['chan_result']['chan_analysis'])
+            chan_analysis = signal.get('chan_result', {}).get('chan_analysis', {})
+            chan_30m = chan_analysis.get('chan_30m')
+            bsp_type_display = f"{'b' if signal['is_buy'] else 's'}{signal['bsp_type']}"
+            
+            # 1. 优先提取买卖点，并进行 ML 一票否决验证 (针对买入信号)
+            bsp = None
+            if chan_30m and len(chan_30m) > 0:
+                bsp_list = chan_30m[0].get_bsp()
+                if bsp_list: bsp = bsp_list[-1]
+                
+            if bsp and signal.get('is_buy'):
+                ml_res = self.signal_validator.validate_signal(chan_30m, bsp, threshold=self.ml_threshold)
+                prob = ml_res.get('prob', 0)
+                signal['ml_prob'] = prob  # 保存备用
+                
+                if prob < self.ml_threshold:
+                    self.log_message.emit(f"🤖 {signal['code']} {bsp_type_display} ML 未达标 ({prob*100:.1f}% < {self.ml_threshold*100:.0f}%) -> 拦截，跳过图表生成")
+                    continue  # 跳过图表生成
+                else:
+                    self.log_message.emit(f"🤖 {signal['code']} {bsp_type_display} ML 校验通过 ({prob*100:.1f}%) -> 继续生成图表")
+            
+            # 2. 只有 ML 达标后，才生成图表 (降低系统开销)
+            chart_paths = self.generate_charts(signal['code'], chan_analysis)
             if chart_paths:
                 s = signal.copy()
                 s['chart_paths'] = chart_paths
+                if 'ml_prob' in signal:
+                    s['ml_prob'] = signal['ml_prob']
                 signals_with_charts.append(s)
         
         if signals_with_charts:
@@ -1448,22 +1472,9 @@ class HKTradingController(QObject):
         cache_key = f"{code}_{bsp_time_str}_{bsp_type}"
         bsp_type_display = f"{'b' if signal['is_buy'] else 's'}{bsp_type}"
         
-        # --- 0. ML 优先审查 & 一票否决 ---
-        ml_res = {}
-        if signal.get('is_buy'):
-            chan_env = signal.get('chan_result', {}).get('chan_analysis', {}).get('chan_30m')
-            if chan_env:
-                bsp_list = chan_env.get_bsp()
-                if bsp_list:
-                    ml_start = time.perf_counter()
-                    ml_res = self.signal_validator.validate_signal(chan_env, bsp_list[-1], threshold=self.ml_threshold)
-                    prob = ml_res.get('prob', 0)
-                    
-                    if prob < self.ml_threshold:
-                        self.log_message.emit(f"🤖 {code} {bsp_type_display} ML 未达标 ({prob*100:.1f}% < {self.ml_threshold*100:.0f}%) -> 一票否决，跳过视觉评分")
-                        return None
-                    self.log_message.emit(f"🤖 {code} {bsp_type_display} ML 校验通过 ({prob*100:.1f}%) -> 继续触发视觉评估")
-
+        # --- 0. ML 优先审查已在候选池循环中提前完成 ---
+        ml_prob = signal.get('ml_prob', 1.0) # 已经过校验，默认安全
+        
         try:
             # 检查缓存
             if cache_key in self.visual_score_cache:
@@ -1493,10 +1504,10 @@ class HKTradingController(QObject):
             
             # --- 2. 视觉验证 (已经过 ML 达标过滤) ---
             if score < 70:
-                self.log_message.emit(f"🤖 {code} {bsp_type_display} 拦截 [ML:{ml_res.get('prob', 0):.2f}, Visual:{score}]: 视觉得分不达标(<70)")
+                self.log_message.emit(f"🤖 {code} {bsp_type_display} 拦截 [ML:{ml_prob:.2f}, Visual:{score}]: 视觉得分不达标(<70)")
                 return None
             else:
-                self.log_message.emit(f"✅ {code} {bsp_type_display} 准入 [ML:{ml_res.get('prob', 0):.2f}, Visual:{score}]: 三项阈值均达标 (包含缠论买卖点)")
+                self.log_message.emit(f"✅ {code} {bsp_type_display} 准入 [ML:{ml_prob:.2f}, Visual:{score}]: 三项阈值均达标 (包含缠论买卖点)")
 
             # 添加评分结果到信号数据
             scored_signal = signal.copy()
