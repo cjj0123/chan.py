@@ -1080,7 +1080,7 @@ class USTradingController(QObject):
         """通过 Futu API 获取美股账户资产及持仓"""
         try:
             # 1. 查询账户资金
-            ret, data = self.trd_ctx.accinfo_query(trd_market=TrdMarket.US)
+            ret, data = self.trd_ctx.accinfo_query()
             available, total = 0.0, 0.0
             if ret == RET_OK and not data.empty:
                 available = float(data.iloc[0]['cash'])
@@ -1088,7 +1088,7 @@ class USTradingController(QObject):
             
             # 2. 查询持仓
             positions = []
-            ret_pos, pos_data = self.trd_ctx.position_list_query(trd_market=TrdMarket.US)
+            ret_pos, pos_data = self.trd_ctx.position_list_query()
             if ret_pos == RET_OK and not pos_data.empty:
                 for _, row in pos_data.iterrows():
                     qty = int(row['qty'])
@@ -1121,8 +1121,7 @@ class USTradingController(QObject):
                 qty=qty,
                 code=code,
                 trd_side=side,
-                order_type=OrderType.NORMAL,
-                trd_market=TrdMarket.US
+                order_type=OrderType.NORMAL
             )
             if ret == RET_OK:
                 order_id = data.iloc[0]['order_id']
