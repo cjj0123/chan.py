@@ -507,9 +507,61 @@ class TraderGUI(QMainWindow):
         
         schwab_group.setLayout(schwab_layout)
         
-        # 组装美股列 (IB + Schwab)
+        # --- 美股自动交易模块 (Futu) ---
+        futu_us_group = QGroupBox("🤖 美股自动交易 (Futu)")
+        futu_us_layout = QVBoxLayout()
+        
+        # 控制按钮行
+        futu_us_btns_layout = QHBoxLayout()
+        self.futu_us_auto_status = QLabel("自动交易: [未启动]")
+        self.futu_us_auto_btn = QPushButton("启动 Futu 交易")
+        self.futu_us_auto_btn.clicked.connect(self.toggle_futu_us_trading)
+        futu_us_btns_layout.addWidget(self.futu_us_auto_status)
+        futu_us_btns_layout.addWidget(self.futu_us_auto_btn)
+        
+        # 自选股选择
+        futu_us_btns_layout.addWidget(QLabel(" 📊 监控分组:"))
+        self.futu_us_watchlist_combo = QComboBox()
+        for i in range(self.watchlist_combo.count()):
+            self.futu_us_watchlist_combo.addItem(self.watchlist_combo.itemText(i))
+        idx = self.futu_us_watchlist_combo.findText("美股")
+        if idx >= 0: self.futu_us_watchlist_combo.setCurrentIndex(idx)
+        futu_us_btns_layout.addWidget(self.futu_us_watchlist_combo)
+        
+        futu_us_btns_layout.addStretch()
+        futu_us_layout.addLayout(futu_us_btns_layout)
+        
+        # 功能按钮行
+        futu_us_func_layout = QHBoxLayout()
+        self.futu_us_scan_btn = QPushButton("立刻执行扫描")
+        self.futu_us_scan_btn.clicked.connect(self.on_futu_us_force_scan_clicked)
+        futu_us_func_layout.addWidget(self.futu_us_scan_btn)
+        
+        self.futu_us_query_funds_btn = QPushButton("刷新账户资金")
+        self.futu_us_query_funds_btn.clicked.connect(self.on_futu_us_query_funds_clicked)
+        futu_us_func_layout.addWidget(self.futu_us_query_funds_btn)
+        
+        self.futu_us_liquidate_btn = QPushButton("一键清仓")
+        self.futu_us_liquidate_btn.clicked.connect(self.on_futu_us_liquidate_clicked)
+        self.futu_us_liquidate_btn.setStyleSheet("background-color: #ff4d4f; color: white; font-weight: bold;")
+        futu_us_func_layout.addWidget(self.futu_us_liquidate_btn)
+        
+        futu_us_func_layout.addStretch()
+        futu_us_layout.addLayout(futu_us_func_layout)
+        
+        # Futu 日志
+        self.futu_us_auto_log_text = QTextEdit()
+        self.futu_us_auto_log_text.setReadOnly(True)
+        self.futu_us_auto_log_text.setPlaceholderText("Futu 美股自动化系统日志将显示在此处...")
+        self.futu_us_auto_log_text.setMinimumHeight(150)
+        futu_us_layout.addWidget(self.futu_us_auto_log_text)
+        
+        futu_us_group.setLayout(futu_us_layout)
+        
+        # 组装美股列
         us_column.addWidget(us_group)
         us_column.addWidget(schwab_group)
+        us_column.addWidget(futu_us_group)
         
         # 将港股和美股模块并排显示
         market_layout = QHBoxLayout()
@@ -834,6 +886,93 @@ class TraderGUI(QMainWindow):
         if reply == QMessageBox.StandardButton.Yes:
             self.append_us_auto_log("🔥 正在执行美股全量清仓...")
             self.us_trading_controller.close_all_positions()
+
+    # --- Futu 美股自动交易控制方法 ---
+    def append_futu_us_auto_log(self, text: str):
+        """追加 Futu 美股自动化日志"""
+        from datetime import datetime
+        now = datetime.now().strftime("%H:%M:%S")
+        self.futu_us_auto_log_text.append(f"[{now}] {text}")
+
+    def toggle_futu_us_trading(self):
+        """切换美股自动交易状态 (Futu)"""
+        if not hasattr(self, 'futu_us_trading_controller'): self.futu_us_trading_controller = None
+        
+        if self.futu_us_trading_controller is None:
+            try:
+                # 使用选中的美股分组
+                group_name = self.futu_us_watchlist_combo.currentText()
+                bot = self._get_shared_discord_bot(controller=None)
+
+                self.futu_us_trading_controller = USTradingController(us_watchlist_group=group_name, discord_bot=bot, venue="FUTU")
+                self.futu_us_trading_controller.log_message.connect(self.append_futu_us_auto_log)
+                self.futu_us_trading_controller.funds_updated.connect(self.update_futu_us_funds_display)
+                
+                import threading
+                def run_trade():
+                    if self.discord_bot:
+                        self.discord_bot.controller = self.futu_us_trading_controller
+                    self.futu_us_trading_controller.run_trading_loop()
+                    
+                self.futu_us_trade_thread = threading.Thread(target=run_trade, daemon=True)
+                self.futu_us_trade_thread.start()
+                
+                self.futu_us_auto_status.setText("自动交易: [运行中]")
+                self.futu_us_auto_btn.setText("停止 Futu 交易")
+                self.append_futu_us_auto_log(f"✅ 美股自动交易已启动 (Futu, 分组: {group_name})")
+            except Exception as e:
+                self.append_futu_us_auto_log(f"❌ 启动美股自动交易失败: {e}")
+                self.futu_us_trading_controller = None
+        else:
+            if self.discord_bot and self.discord_bot.controller == self.futu_us_trading_controller:
+                self.discord_bot.controller = None
+            self.futu_us_trading_controller.stop()
+            self.futu_us_trading_controller = None
+            self.futu_us_auto_status.setText("自动交易: [已停止]")
+            self.futu_us_auto_btn.setText("启动 Futu 交易")
+            self.append_futu_us_auto_log("ℹ️ 美股自动交易 (Futu) 已停止")
+
+    def update_futu_us_funds_display(self, available: float, total: float, positions: list):
+        """更新 Futu 美股资金和持仓显示"""
+        self.append_futu_us_auto_log(f"💰 [Futu 账户] 可用资金: ${available:,.2f}, 总资产/购买力: ${total:,.2f}")
+        if positions:
+            pos_msg = "📦 [当前持仓]:"
+            for p in positions:
+                pos_msg += f"\n   • {p['symbol']}: {p['qty']} 股, 市值: ${p['mkt_value']:.2f}, 成本: ${p['avg_cost']:.2f}"
+            self.append_futu_us_auto_log(pos_msg)
+        else:
+            self.append_futu_us_auto_log("ℹ️ 当前账户无 Futu 美股持仓")
+
+    def on_futu_us_force_scan_clicked(self):
+        """手动触发 Futu 美股策略扫描"""
+        if not hasattr(self, 'futu_us_trading_controller') or self.futu_us_trading_controller is None:
+            self.append_futu_us_auto_log("⚠️ 请先启动 Futu 美股自动交易。")
+            return
+        
+        reply = QMessageBox.question(self, '确认扫描', '确定要立即执行一次完整的 Futu 美股策略扫描吗？',
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            self.futu_us_trading_controller.force_scan()
+            self.append_futu_us_auto_log("⚡ 已手动触发向 Futu 发起的扫描指令。")
+
+    def on_futu_us_query_funds_clicked(self):
+        """查询 Futu 美股账户资金"""
+        if hasattr(self, 'futu_us_trading_controller') and self.futu_us_trading_controller:
+            self.futu_us_trading_controller.query_account_funds()
+        else:
+            self.append_futu_us_auto_log("⚠️ 请先启动 Futu 交易连接。")
+
+    def on_futu_us_liquidate_clicked(self):
+        """Futu 美股一键清仓"""
+        if not hasattr(self, 'futu_us_trading_controller') or self.futu_us_trading_controller is None:
+            self.append_futu_us_auto_log("⚠️ 请先启动 Futu 交易。")
+            return
+            
+        reply = QMessageBox.critical(self, '一键清仓', '🚨 警告: 确定要清空所有 Futu 美股持仓吗？此操作不可撤销！',
+                                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            self.append_futu_us_auto_log("🔥 正在执行 Futu 美股全量清仓...")
+            self.futu_us_trading_controller.close_all_positions()
 
     def append_schwab_auto_log(self, text: str):
         """添加 Schwab 自动交易日志"""
