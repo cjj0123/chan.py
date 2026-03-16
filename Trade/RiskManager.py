@@ -177,7 +177,8 @@ class RiskManager:
     def calculate_position_size(self, code: str, available_funds: float, current_price: float, 
                              signal_score: int, risk_factor: float = 1.0, 
                              atr: Optional[float] = None, atr_multiplier: float = 2.0,
-                             total_assets: float = 0.0) -> int:
+                             total_assets: float = 0.0,
+                             lot_size: Optional[int] = None) -> int:
         """
         计算建议的仓位大小
         
@@ -190,6 +191,7 @@ class RiskManager:
             atr: ATR (Average True Range) 的值，用于计算止损距离
             atr_multiplier: ATR止损倍数
             total_assets: 总资产，用于计算整体仓位占比
+            lot_size: 最小交易单位 (如果提供则优先使用)
         
         Returns:
             int: 建议的股数
@@ -215,7 +217,9 @@ class RiskManager:
             # 计算最大投入金额 (如 20% * 100万元 = 20万)
             max_investment = base_capital * self.max_position_ratio * score_factor / risk_factor
             
-            lot_size = self._get_lot_size(code)
+            # 获取手数，优先使用参数传入的
+            if lot_size is None or lot_size <= 0:
+                lot_size = self._get_lot_size(code)
             
             if atr and atr > 0:
                 # 每笔交易最大可承受亏损额度 = 总资产 * 自定义的风险承受度 (如总资产2%)
@@ -238,7 +242,7 @@ class RiskManager:
             
             if shares > 0:
                 logger.info(f"仓位计算 - {code}: 基础资产={base_capital:.2f}, 可用现金={available_funds:.2f}, 价格={current_price:.2f}, "
-                           f"建议买入额度={shares * current_price:.2f}, 建议股数={shares}")
+                           f"手数={lot_size}, 建议买入额度={shares * current_price:.2f}, 建议股数={shares}")
             
             return shares
     

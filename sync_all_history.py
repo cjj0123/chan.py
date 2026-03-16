@@ -64,8 +64,10 @@ async def main():
 
     logger.info(f"🚀 开始全量同步，共计 {len(total_stocks)} 只股票，深度 {args.days} 天，周期 {args.timeframes}...")
     
-    # 模拟 stop_check 结构
-    stop_check_obj = type('StopCheck', (), {'is_set': lambda self: False})()
+    # 修复：stop_check 必须是可调用的 (callable)
+    def stop_check_func():
+        return False
+        
     log_cb = make_log_callback()
 
     try:
@@ -74,7 +76,7 @@ async def main():
             days=args.days,
             timeframes=args.timeframes,
             log_callback=log_cb,
-            stop_check=stop_check_obj,
+            stop_check=stop_check_func,
             ib_client=None  # 将自动连接 IB (美股优先使用)
         )
         logger.info("🎉 恭喜！全市场数据历史同步已完成。")

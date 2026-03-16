@@ -799,6 +799,7 @@ class TraderGUI(QMainWindow):
         """添加美股自动交易日志"""
         from datetime import datetime
         now = datetime.now().strftime("%H:%M:%S")
+        print(f"[DEBUG_GUI_LOG] {now} {text}") # 增加控制台辅助对账
         self.us_auto_log_text.append(f"[{now}] {text}")
         # 自动滚动到底部
         self.us_auto_log_text.moveCursor(QTextCursor.MoveOperation.End)

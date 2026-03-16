@@ -12,6 +12,7 @@ class DATA_SRC(Enum):
     YFINANCE = auto()
     FINNHUB = auto()
     IB = auto()
+    SCHWAB = auto()
 
 
 class KL_TYPE(Enum):

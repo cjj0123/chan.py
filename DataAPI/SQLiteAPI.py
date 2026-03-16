@@ -240,11 +240,19 @@ def download_and_save_all_stocks(stock_codes, days=365, log_callback=None):
             if kl_data:
                 # Save to database
                 df = pd.DataFrame(kl_data)
-                # Insert or replace data in kline_day table
+                df = df.drop_duplicates(subset=['date'], keep='last')
+                
+                # Use non-destructive INSERT OR REPLACE (consistent with intraday logic)
                 with sqlite3.connect(db.db_path) as conn:
-                    # 先删除该股票的旧数据
-                    conn.execute("DELETE FROM kline_day WHERE code = ?", (code,))
-                    df.to_sql('kline_day', conn, if_exists='append', index=False)
+                    columns = df.columns.tolist()
+                    placeholders = ', '.join(['?' for _ in columns])
+                    columns_str = ', '.join(columns)
+                    sql = f"INSERT OR REPLACE INTO kline_day ({columns_str}) VALUES ({placeholders})"
+                    
+                    # Convert to records for faster executemany
+                    records = df.to_records(index=False)
+                    conn.executemany(sql, records)
+                    conn.commit()
                 if log_callback:
                     log_callback(f"✅ 成功下载 {code} ({len(kl_data)} 条数据) - 数据源: {source_used}")
                 else:
@@ -475,13 +483,20 @@ async def download_and_save_all_stocks_async(stock_codes, days=365, timeframes=[
     us_stocks = [c for c in stock_codes if c.startswith("US.")]
     other_stocks = [c for c in stock_codes if not c.startswith("US.")]
     
-    # Process US Stocks Async
-    if us_stocks and os.getenv("IB_HOST"):
+    # Check if Schwab API is configured (Token in Project Root)
+    has_schwab = os.path.exists(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'schwab_token.json'))
+
+    # Process US Stocks Async via IB only if Schwab is not configured
+    if us_stocks and os.getenv("IB_HOST") and not has_schwab:
         await _download_us_stocks_async_batch(
             us_stocks, days, timeframes, log_callback, start_date, end_date, stop_check, ib_client
         )
     
     # Process Other Stocks Sync (falling back to the standard loop)
+    # If Schwab is configured, US stocks will also be processed here (fast HTTP calls)
+    if has_schwab:
+        other_stocks.extend(us_stocks)
+        
     if other_stocks:
         # We can just call the synchronous version for others
         # To avoid blocking the event loop too much, we could use run_in_executor, 
@@ -514,26 +529,36 @@ async def _download_us_stocks_async_batch(stock_codes, days, timeframes, log_cal
             if log_callback: log_callback(msg)
             await asyncio.wait_for(ib.connectAsync(host, port, clientId=client_id), timeout=10)
         
-        # Batch Qualify
-        msg = f"🚀 [IB-Sync] Qualifying {len(stock_codes)} US contracts..."
+        # Batch Qualify in smaller chunks (e.g., 50) to avoid timeouts
+        qualified = []
+        batch_size = 50
+        symbol_map = {}
+        
+        for i in range(0, len(stock_codes), batch_size):
+            batch_codes = stock_codes[i:i+batch_size]
+            batch_contracts = [Stock(c.split(".")[1], 'SMART', 'USD') for c in batch_codes]
+            try:
+                msg = f"🚀 [IB-Sync] Qualifying batch {i//batch_size + 1}/{ (len(stock_codes)-1)//batch_size + 1} ({len(batch_contracts)} stocks)..."
+                print(msg)
+                if log_callback: log_callback(msg)
+                
+                batch_qualified = await asyncio.wait_for(ib.qualifyContractsAsync(*batch_contracts), timeout=20)
+                qualified.extend(batch_qualified)
+                for q in batch_qualified:
+                    symbol_map[q.symbol] = q
+                
+                # Small gap between batches to be safe
+                await asyncio.sleep(1)
+            except Exception as e:
+                msg = f"⚠️ [IB-Sync] Batch qualification failed partially: {e}"
+                print(msg)
+                if log_callback: log_callback(msg)
+        
+        msg = f"✅ [IB-Sync] {len(qualified)}/{len(stock_codes)} contracts qualified."
         print(msg)
         if log_callback: log_callback(msg)
         
-        contracts = [Stock(c.split(".")[1], 'SMART', 'USD') for c in stock_codes]
-        try:
-            # Add timeout to qualification
-            qualified = await asyncio.wait_for(ib.qualifyContractsAsync(*contracts), timeout=15)
-            symbol_map = {q.symbol: q for q in qualified}
-            msg = f"✅ [IB-Sync] {len(qualified)}/{len(contracts)} contracts qualified."
-            print(msg)
-            if log_callback: log_callback(msg)
-        except asyncio.TimeoutError:
-            msg = "⚠️ [IB-Sync] Contract qualification timed out, trying limited symbols"
-            print(msg)
-            if log_callback: log_callback(msg)
-            symbol_map = {} # Will fallback to single qualification if needed or skip
-        
-        semaphore = asyncio.Semaphore(5) # Strict for DB sync to avoid pacing
+        semaphore = asyncio.Semaphore(2) # Reduced for extreme stability and to avoid pacing violations
         
         db = CChanDB()
         
@@ -614,8 +639,31 @@ async def _download_single_us_tf_async(ib, code, contract, tf_name, days, start_
             _ib_local.ib = ib
             
             kl_units = await api.get_kl_data_async()
+            kl_data = []
+            source_used = "IB"
+            
             if kl_units:
                 kl_data = _extract_kl_data_from_units(kl_units, code, k_type)
+            else:
+                # Fallback to YFinance if IB returns nothing (common for minute data without subscription)
+                try:
+                    from DataAPI.YFinanceAPI import CYFinanceAPI
+                    if log_callback: log_callback(f"🔄 [Sync] IB 无数据, 尝试 YFinance 备选: {code} {tf_name}...")
+                    api_yf = CYFinanceAPI(code, k_type=k_type, begin_date=begin_time, end_date=end_time)
+                    # YFinance is sync, run in executor
+                    loop = asyncio.get_running_loop()
+                    yf_units = await loop.run_in_executor(None, lambda: list(api_yf.get_kl_data()))
+                    if yf_units:
+                        # Map YFinance units back to dict format (CYFinanceAPI already yields CKLine_Unit but we need it here)
+                        # Actually CYFinanceAPI.get_kl_data yields CKLine_Unit, so we can use _extract_kl_data_from_units if needed
+                        # or just extract them directly. 
+                        # Let's use the same extraction logic.
+                        kl_data = _extract_kl_data_from_units(yf_units, code, k_type)
+                        source_used = "YFinance"
+                except Exception as yf_err:
+                    if log_callback: log_callback(f"⚠️ [Sync] YFinance 备选也失败: {yf_err}")
+
+            if kl_data:
                 df = pd.DataFrame(kl_data)
                 df = df.drop_duplicates(subset=['date'], keep='last')
                 
@@ -626,19 +674,25 @@ async def _download_single_us_tf_async(ib, code, contract, tf_name, days, start_
                             # Manual replacement to be safe and handle existing data
                             columns = df.columns.tolist()
                             placeholders = ', '.join(['?' for _ in columns])
-                            sql = f"INSERT OR REPLACE INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders})"
-                            conn.executemany(sql, list(df.itertuples(index=False, name=None)))
+                            columns_str = ', '.join(columns)
+                            sql = f"INSERT OR REPLACE INTO {table_name} ({columns_str}) VALUES ({placeholders})"
+                            conn.executemany(sql, [tuple(x) for x in df.values])
                             conn.commit()
                         break 
                     except sqlite3.OperationalError as e:
                         if "locked" in str(e) or "busy" in str(e):
-                            time.sleep(1)
+                            await asyncio.sleep(1)
                             continue
                         raise e
                 
-                if log_callback: log_callback(f"✅ [IB-Sync] {code} {tf_name} updated ({len(kl_data)} bars)")
+                if log_callback: log_callback(f"✅ [{source_used}-Sync] {code} {tf_name} updated ({len(kl_data)} bars)")
+            
+            # Pacing delay: IB has strict limits for historical data (e.g., 50 requests per 10 mins)
+            # Adding a conservative 2s delay here to ensure we don't slam the connection.
+            await asyncio.sleep(2)
         except Exception as e:
-            if log_callback: log_callback(f"❌ [IB-Sync] {code} {tf_name} error: {e}")
+            if log_callback: log_callback(f"❌ [Sync-Error] {code} {tf_name}: {e}")
+            await asyncio.sleep(5) # Delay on error as well
 
 def _extract_kl_data_from_units(kl_units, code, k_type):
     from Common.CEnum import KL_TYPE
@@ -676,7 +730,20 @@ def _download_us_stock_data_with_timeframe(code, begin_time, end_time, k_type, l
             log_callback(msg)
         print(msg)
 
-    # 1. 优先使用 Interactive Brokers
+    # 1. 优先使用 Charles Schwab API (Token in Project Root)
+    if os.path.exists(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'schwab_token.json')):
+        _log(f"  🚀  正在通过 Charles Schwab API 下载 {code} {k_type}...")
+        try:
+            from DataAPI.SchwabAPI import CSchwabAPI
+            api = CSchwabAPI(code, k_type=k_type, begin_date=begin_time, end_date=end_time, autype=AUTYPE.QFQ)
+            kl_data = _extract_kl_data_from_units(list(api.get_kl_data()), code, k_type)
+            if kl_data and len(kl_data) > 0:
+                return kl_data, "Schwab"
+            _log(f"  ℹ️  Schwab API 无数据返回，跌落备选方案...")
+        except Exception as e:
+            _log(f"  ⚠️  Schwab API 下载失败: {e}")
+
+    # 2. 次级别使用 Interactive Brokers
     if os.getenv("IB_HOST"):
         _log(f"  🚀  正在通过 Interactive Brokers 下载 {code} {k_type}...")
         try:

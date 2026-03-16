@@ -15,14 +15,22 @@ class CChanDB:
     """
     
     
-    def __init__(self, db_path: str = "chan_trading.db"):
+    def __init__(self, db_path: str = None):
         """
         初始化数据库连接
         
         Args:
-            db_path (str): 数据库文件路径
+            db_path (str): 可选，手动指定数据库文件路径。默认为项目根目录下的 chan_trading.db
         """
-        self.db_path = db_path
+        if db_path is None:
+            # 找到项目根目录 (db_util.py 在 Trade 目录下，上一级就是根目录)
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            self.db_path = os.path.join(base_dir, "chan_trading.db")
+        else:
+            self.db_path = db_path
+        
+        # 打印一下实际使用的路径，方便调试
+        # print(f"[DB] Using database: {self.db_path}")
         self.init_db()
     
     def init_db(self):

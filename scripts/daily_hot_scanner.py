@@ -1,5 +1,6 @@
 import sys
 import logging
+import time
 from futu import (OpenQuoteContext, Market, SortField, 
                   RET_OK, ModifyUserSecurityOp)
 
@@ -130,8 +131,90 @@ def final_get_hot_stocks(ctx: OpenQuoteContext, market: str, top_n: int) -> list
 # 排序在 python-api 不是直接传，而是隐式的或没有的。
 # 为了绝对可靠，直接拉取该市场成分股列表，分批抓快照排序。
 
+def get_schwab_movers(top_n: int) -> list:
+    """从嘉信理财 (Schwab) 获取美股热门 Active 股票 (根据成交量)"""
+    logger.info("📥 正在从 嘉信理财 (Schwab) 调取美股 Active 异动榜...")
+    symbol_volumes = {} # symbol -> volume 字典用于全局去重并按Volume排序
+    try:
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from DataAPI.SchwabAPI import CSchwabAPI
+        import requests
+        
+        api = CSchwabAPI("US.AAPL")
+        access_token = api._get_access_token()
+        
+        headers = {'Authorization': f'Bearer {access_token}', 'Accept': 'application/json'}
+        # 纳斯达克, 标普, 道指
+        indices = ['%24COMPX', '%24SPX', '%24DJI'] 
+        
+        for idx in indices:
+            url = f"https://api.schwabapi.com/marketdata/v1/movers/{idx}"
+            resp = requests.get(url, headers=headers, params={'sort': 'VOLUME'})
+            if resp.status_code == 401:
+                access_token = api._refresh_access_token()
+                headers['Authorization'] = f'Bearer {access_token}'
+                resp = requests.get(url, headers=headers, params={'sort': 'VOLUME'})
+                
+            if resp.status_code == 200:
+                data = resp.json()
+                if isinstance(data, dict) and 'screeners' in data:
+                    for item in data['screeners']:
+                        sym = item.get('symbol')
+                        vol = item.get('volume', 0)
+                        if sym:
+                            if sym not in symbol_volumes or vol > symbol_volumes[sym]:
+                                symbol_volumes[sym] = vol
+                                
+        if not symbol_volumes:
+            return []
+            
+        # 🔗 批量查询报价，获取 sharesOutstanding 来计算总市值
+        ticker_list = list(symbol_volumes.keys())
+        quotes_url = "https://api.schwabapi.com/marketdata/v1/quotes"
+        # 嘉信接口支持 symbols=AAPL,MSFT 逗号分隔
+        all_syms_str = ",".join(ticker_list)
+        
+        filtered_symbol_volumes = {}
+        logger.info(f"🔗 正在分批拉取 {len(ticker_list)} 只美股的 fundamental 组合并计算市值...")
+        quotes_resp = requests.get(quotes_url, headers=headers, params={'symbols': all_syms_str, 'fields': 'all'})
+        if quotes_resp.status_code == 200:
+            quotes_data = quotes_resp.json()
+            for sym in ticker_list:
+                item_quote = quotes_data.get(sym, {})
+                fundamental = item_quote.get('fundamental', {})
+                quote = item_quote.get('quote', {})
+                shares = fundamental.get('sharesOutstanding', 0)
+                price = quote.get('lastPrice', 0)
+                
+                market_cap = float(shares) * float(price)
+                if market_cap >= 100_000_000:  # 1亿美元 阈值
+                    filtered_symbol_volumes[sym] = symbol_volumes[sym]
+                else:
+                    logger.warning(f"⏭️ 剔除 {sym} (总市值 ${market_cap:,.0f} < $100,000,000)")
+                    
+        if not filtered_symbol_volumes:
+            logger.warning("全部美股市值过滤后为空或接口失败，尝试使用原数据...")
+            filtered_symbol_volumes = symbol_volumes # fallback
+            
+        # 按交易量从大到小排序
+        sorted_items = sorted(filtered_symbol_volumes.items(), key=lambda x: x[1], reverse=True)
+        return [f"US.{item[0]}" for item in sorted_items]
+    except Exception as e:
+        logger.error(f"❌ 从 Schwab 调取 Movers 异常: {e}")
+        return []
+
 def robust_get_hot_stocks(ctx: OpenQuoteContext, market: str, top_n: int) -> list:
     """采用抓取市场全列表+并发分批快照+本地排序的方式，百分百可靠找出真实热点"""
+    if market == Market.US:
+        # 用户需求优先：美股强行限制只取前 25 只
+        actual_top = 25
+        schwab_codes = get_schwab_movers(actual_top)
+        if schwab_codes:
+            logger.info(f"✅ 从 Schwab 获取并排序完成，截取成交量前 {actual_top} 只美股。")
+            return schwab_codes[:actual_top]
+        logger.warning("⚠️ 从 Schwab 未能获取到数据，降级回 Futu 板块模式")
+
     plate_code = {
         Market.HK: "HK.BK1910",    # 港股主板
         Market.US: "US.BK2999",    # 美股股票 (如果美股太大，下面仅抽样)
@@ -191,6 +274,38 @@ def robust_get_hot_stocks(ctx: OpenQuoteContext, market: str, top_n: int) -> lis
     logger.info(f"✅ 从 {market} 筛选出 Top {len(top_codes)} 强势活跃股。")
     return top_codes
 
+def get_akshare_a_hot(sh_n: int, sz_n: int) -> tuple:
+    """利用 AkShare 获取 A 股成交额排行榜并分流到 SH/SZ"""
+    logger.info("📥 [AkShare] 正在从 AkShare 调取 A 股成交额排行榜...")
+    try:
+        import akshare as ak
+        df = ak.stock_zh_a_spot_em()
+        if not df.empty:
+            col = '成交额'
+            if col in df.columns:
+                df[col] = df[col].astype(float)
+                # 全局按 成交额 降序
+                df = df.sort_values(by=col, ascending=False)
+                
+                sh_codes = []
+                sz_codes = []
+                for _, row in df.iterrows():
+                    code = row['代码']
+                    prefix = 'SH' if code.startswith(('60', '68', '900')) else 'SZ'
+                    futu_code = f"{prefix}.{code}"
+                    
+                    if prefix == 'SH' and len(sh_codes) < sh_n:
+                         sh_codes.append(futu_code)
+                    elif prefix == 'SZ' and len(sz_codes) < sz_n:
+                         sz_codes.append(futu_code)
+                         
+                    if len(sh_codes) >= sh_n and len(sz_codes) >= sz_n:
+                         break
+                return sh_codes, sz_codes
+    except Exception as e:
+        logger.warning(f"⚠️ AkShare 排行榜调取中断 ({e})，安全降级回 Futu 控制板。")
+    return [], []
+
 def main():
     logger.info(f"=== 日常热点股票选股器启动 ===")
     ctx = OpenQuoteContext(host=FUTU_HOST, port=FUTU_PORT)
@@ -207,10 +322,18 @@ def main():
         hot_codes.extend(us_hot)
         
         # 3. 扫描A股 (沪/深 各 Top 25)
-        sh_hot = robust_get_hot_stocks(ctx, Market.SH, TOP_N_PER_MARKET // 2)
-        sz_hot = robust_get_hot_stocks(ctx, Market.SZ, TOP_N_PER_MARKET // 2)
-        hot_codes.extend(sh_hot)
-        hot_codes.extend(sz_hot)
+        logger.info("📡 正在获取 A 股成交排行...")
+        ak_sh, ak_sz = get_akshare_a_hot(TOP_N_PER_MARKET // 2, TOP_N_PER_MARKET // 2)
+        if ak_sh and ak_sz:
+            logger.info(f"✅ 从 AkShare 加速获取 A 股 Top 25. SH: {len(ak_sh)} 只, SZ: {len(ak_sz)} 只.")
+            hot_codes.extend(ak_sh)
+            hot_codes.extend(ak_sz)
+        else:
+            logger.info("⚠️ AkShare 失败，降级使用 Futu 慢速分批快照...")
+            sh_hot = robust_get_hot_stocks(ctx, Market.SH, TOP_N_PER_MARKET // 2)
+            sz_hot = robust_get_hot_stocks(ctx, Market.SZ, TOP_N_PER_MARKET // 2)
+            hot_codes.extend(sh_hot)
+            hot_codes.extend(sz_hot)
         
         logger.info(f"🔥 共挑选出全球 {len(hot_codes)} 只高活跃核心股票。")
         logger.info(f"股票列表预览: {hot_codes[:10]} ...")

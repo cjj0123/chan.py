@@ -159,8 +159,8 @@ class BacktestDataLoader:
         filepath = os.path.join(self.cache_dir, filename)
         
         if not os.path.exists(filepath):
-            logger.warning(f"Data file not found: {filepath}")
-            return []
+            logger.info(f"Parquet file not found, attempting to load {code} from SQLite...")
+            return self._load_from_sqlite(code, freq, start_date, end_date)
         
         try:
             # 读取Parquet文件
@@ -232,18 +232,69 @@ class BacktestDataLoader:
             logger.error(f"Error loading data from {filepath}: {e}")
             return []
     
-    def get_all_codes(self) -> List[str]:
-        """获取所有可用的股票代码"""
-        if not os.path.exists(self.cache_dir):
+    def _load_from_sqlite(self, code: str, freq: str, start_date: str = None, end_date: str = None) -> List[BacktestKLineUnit]:
+        """从 SQLite 数据库加载数据"""
+        from DataAPI.SQLiteAPI import SQLiteAPI
+        from Common.CEnum import KL_TYPE
+        
+        freq_map = {
+            '30M': KL_TYPE.K_30M,
+            '5M': KL_TYPE.K_5M,
+            '1M': KL_TYPE.K_1M,
+            'DAY': KL_TYPE.K_DAY
+        }
+        
+        try:
+            k_type = freq_map.get(freq.upper(), KL_TYPE.K_DAY)
+            api = SQLiteAPI(code, k_type=k_type, begin_date=start_date, end_date=end_date)
+            kline_units = []
+            for i, klu in enumerate(api.get_kl_data()):
+                backtest_klu = BacktestKLineUnit(
+                    timestamp=pd.to_datetime(str(klu.time)),
+                    open_p=klu.open,
+                    high_p=klu.high,
+                    low_p=klu.low,
+                    close_p=klu.close,
+                    volume=int(klu.volume),
+                    kl_type=freq
+                )
+                backtest_klu.set_idx(i)
+                kline_units.append(backtest_klu)
+            
+            if kline_units:
+                logger.info(f"Loaded {len(kline_units)} {freq} K-lines for {code} from SQLite")
+            return kline_units
+        except Exception as e:
+            logger.error(f"Error loading {code} from SQLite: {e}")
             return []
-        
-        files = os.listdir(self.cache_dir)
+
+    def get_all_codes(self) -> List[str]:
+        """获取所有可用的股票代码 (兼顾 Parquet 缓存与 SQLite 数据源)"""
         codes = set()
-        for file in files:
-            if file.endswith('_K_30M.parquet'):
-                code = file.replace('_K_30M.parquet', '')
-                codes.add(code)
         
+        # 1. 尝试从 Parquet 缓存加载
+        if os.path.exists(self.cache_dir):
+            files = os.listdir(self.cache_dir)
+            for file in files:
+                if file.endswith('_K_30M.parquet'):
+                    codes.add(file.replace('_K_30M.parquet', ''))
+        
+        # 2. 尝试从 SQLite 数据库补偿加载
+        try:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            db_path = os.path.join(base_dir, "chan_trading.db")
+            if os.path.exists(db_path):
+                import sqlite3
+                conn = sqlite3.connect(db_path)
+                cursor = conn.cursor()
+                cursor.execute("SELECT DISTINCT code FROM kline_30m")
+                for row in cursor.fetchall():
+                    if row[0]:
+                        codes.add(row[0])
+                conn.close()
+        except Exception as e:
+            logger.warning(f"从 SQLite 加举股票列表失败: {e}")
+            
         return sorted(list(codes))
     
     def get_available_frequencies(self, code: str) -> List[str]:

@@ -19,3 +19,4 @@ email_config.env
 # 忽略数据库文件
 *.db
 chan_trading.db
+pipeline_post_sync.out

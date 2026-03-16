@@ -90,6 +90,7 @@ class CChan:
             self.kl_datas[self.lv_list[idx]] = CKLine_List(self.lv_list[idx], conf=self.conf)
 
     def load_stock_data(self, stockapi_instance: CCommonStockApi, lv) -> Iterable[CKLine_Unit]:
+        print(f"\n[Chan.py DEBUG] load_stock_data for {self.code} {lv} using {stockapi_instance.__class__.__name__}")
         for KLU_IDX, klu in enumerate(stockapi_instance.get_kl_data()):
             klu.set_idx(KLU_IDX)
             klu.kl_type = lv
@@ -199,6 +200,9 @@ class CChan:
         elif self.data_src == DATA_SRC.IB:
             from DataAPI.InteractiveBrokersAPI import CInteractiveBrokersAPI
             return CInteractiveBrokersAPI
+        elif self.data_src == DATA_SRC.SCHWAB:
+            from DataAPI.SchwabAPI import CSchwabAPI
+            return CSchwabAPI
         if self.data_src in _dict:
             return _dict[self.data_src]
         assert isinstance(self.data_src, str)

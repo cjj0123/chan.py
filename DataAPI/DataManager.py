@@ -127,8 +127,14 @@ class DataManager:
             # 美股特殊处理
             if code.upper().startswith("US."):
                 from config import API_CONFIG
-                # 优先使用 Interactive Brokers (Phase 2 Integration)
-                if os.getenv("IB_HOST"):
+                # 优先使用 Schwab API
+                import os
+                schwab_token_path = os.path.join(os.path.dirname(__file__), 'schwab_token.json')
+                if os.path.exists(schwab_token_path):
+                    from DataAPI.SchwabAPI import CSchwabAPI
+                    api_cls = CSchwabAPI
+                # 其次使用 Interactive Brokers
+                elif os.getenv("IB_HOST"):
                     from DataAPI.InteractiveBrokersAPI import CInteractiveBrokersAPI
                     api_cls = CInteractiveBrokersAPI
                 elif API_CONFIG.get('POLYGON_API_KEY'):
@@ -233,15 +239,35 @@ class DataManager:
             except Exception as e:
                 print(f"⚠️ [DataManager] 富途实时价格获取失败: {e}")
         
-        # 美股特殊处理 (Interactive Brokers)
-        if code.upper().startswith("US.") and os.getenv("IB_HOST"):
-            try:
-                from ib_insync import IB, Stock
-                import asyncio
-                import random
-                import nest_asyncio
-                
-                # Use a different client ID range for real-time prices to avoid conflicts with download
+        # 美股特殊处理: Schwab API > Interactive Brokers 
+        if code.upper().startswith("US."):
+            import os
+            schwab_token_path = os.path.join(os.path.dirname(__file__), 'schwab_token.json')
+            if os.path.exists(schwab_token_path):
+                try:
+                    from DataAPI.SchwabAPI import CSchwabAPI
+                    from Common.CEnum import KL_TYPE
+                    import datetime
+                    
+                    # 取最近一天的1分钟线，最后一条即最新价
+                    api = CSchwabAPI(code, k_type=KL_TYPE.K_1M, 
+                                     begin_date=(datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y-%m-%d"), 
+                                     end_date=datetime.datetime.now().strftime("%Y-%m-%d"))
+                    kl_data = list(api.get_kl_data())
+                    if kl_data and len(kl_data) > 0:
+                        return kl_data[-1].close
+                except Exception as e:
+                    print(f"⚠️ [DataManager] Schwab实时价格获取失败: {e}")
+            
+            # 回退到 IB 
+            elif os.getenv("IB_HOST"):
+                try:
+                    from ib_insync import IB, Stock
+                    import asyncio
+                    import random
+                    import nest_asyncio
+                    
+                    # Use a different client ID range for real-time prices to avoid conflicts with download
                 realtime_client_id = int(os.getenv("IB_CLIENT_ID_RT", str(random.randint(2000, 2999))))
                 
                 async def fetch_ib_price():

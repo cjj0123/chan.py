@@ -355,7 +355,7 @@ class USTradingController(QObject):
         """异步指令处理器"""
         try:
             if cmd_type == 'FORCE_SCAN':
-                asyncio.create_task(self._perform_strategy_scan_async())
+                asyncio.create_task(self._perform_strategy_scan_async(is_force_scan=True))
             elif cmd_type == 'QUERY_FUNDS':
                 available, total, positions = await asyncio.wait_for(self.get_account_assets_async(), timeout=15)
                 self.funds_updated.emit(available, total, positions)
@@ -368,7 +368,7 @@ class USTradingController(QObject):
         except asyncio.TimeoutError:
             self.log_message.emit(f"⚠️ [指令] 指令 {cmd_type} 执行超时")
 
-    async def _perform_strategy_scan_async(self):
+    async def _perform_strategy_scan_async(self, is_force_scan: bool = False):
         """执行异步策略扫描"""
         self.log_message.emit(f"🔍 [美股] 正在获取分组 '{self.watchlist_group}' 代码...")
         us_watchlist = {} # code -> name
@@ -459,28 +459,28 @@ class USTradingController(QObject):
             # except Exception as e:
             #     self.log_message.emit(f"⚠️ [美股] 批量同步异常: {e}")
 
-            # 3. 并行分析 (使用同步后的本地数据)
+            # 3. 串行分析 (依照港股逻辑，稳定可靠)
             scan_start = time.perf_counter()
-            self.log_message.emit(f"🚀 [美股] 开始异步并行扫描 (共 {len(us_codes)} 只)...")
-            async def semaphore_analyze(code, idx, total):
-                async with self.scan_semaphore:
-                    try:
-                        symbol = code.split(".")[1] if "." in code else code
-                        contract = symbol_to_contract.get(symbol)
-                        name = us_watchlist.get(code, "")
-                        await self._analyze_stock_async(code, name=name, index=idx, total=total, contract=contract)
-                    except Exception as e:
-                        self.log_message.emit(f"❌ [美股] 分析 {code} 报错: {e}")
-
-            tasks = [semaphore_analyze(code, i + 1, len(us_codes)) for i, code in enumerate(us_codes)]
-            await asyncio.gather(*tasks)
-
+            self.log_message.emit(f"🚀 [美股] 开始策略扫描 (共 {len(us_codes)} 只)...")
+            
+            for i, code in enumerate(us_codes, 1):
+                if not self._is_running: break
+                try:
+                    symbol = code.split(".")[1] if "." in code else code
+                    contract = symbol_to_contract.get(symbol)
+                    name = us_watchlist.get(code, "")
+                    await self._analyze_stock_async(code, name=name, index=i, total=len(us_codes), contract=contract, is_force_scan=is_force_scan)
+                    # 适当频控，避免触发 API 熔断 (嘉信/IB均适用)
+                    await asyncio.sleep(0.5)
+                except Exception as e:
+                    self.log_message.emit(f"❌ [美股] 分析 {code} 报错: {e}")
+            
             total_scan_time = time.perf_counter() - scan_start
-            self.log_message.emit(f"✅ [美股] 异步并行扫描完成, 总耗时: {total_scan_time:.2f}s")
+            self.log_message.emit(f"✅ [美股] 策略扫描完成, 总耗时: {total_scan_time:.2f}s")
         except Exception as e:
             self.log_message.emit(f"❌ [美股] 扫描过程异常: {e}")
 
-    async def _analyze_stock_async(self, code: str, name: str = "", index: int = 0, total: int = 0, contract=None):
+    async def _analyze_stock_async(self, code: str, name: str = "", index: int = 0, total: int = 0, contract=None, is_force_scan: bool = False):
         """异步分析单只股票"""
         if contract is None: return
         prefix = f"[{index}/{total}] "
@@ -500,14 +500,14 @@ class USTradingController(QObject):
             
             analysis_start = time.perf_counter()
             local_chan_config = CHAN_CONFIG.copy()
-            local_chan_config['trigger_step'] = True
+            # 💡 trigger_step = True 会禁用 CChan 初始化时加载数据，导致 0 根 K线。需移除！
             
             loop = asyncio.get_running_loop()
             def create_chan_30m():
                 try:
                     from Common.CEnum import DATA_SRC, KL_TYPE, AUTYPE
                     from Chan import CChan, CChanConfig
-                    from ChanConfig import CHAN_CONFIG
+                    from config import CHAN_CONFIG
                     return CChan(
                         code=code, 
                         begin_time=start_30m_str, 
@@ -518,13 +518,16 @@ class USTradingController(QObject):
                         autype=AUTYPE.QFQ
                     )
                 except Exception as e:
+                    print(f"❌ create_chan_30m 异常 ({code}): {e}")
+                    import traceback
+                    print(traceback.format_exc())
                     return None
 
             chan_30m = await loop.run_in_executor(None, create_chan_30m)
             analysis_time = time.perf_counter() - analysis_start
             
-            await asyncio.sleep(0.01)
-            self.log_message.emit(f"📊 {prefix}{code} [在线 Schwab, 分析: {analysis_time:.2f}s]")
+            # 💡 依照港股规范，不打印耗时和点位信息，仅在发现信号时打印 
+            # self.log_message.emit(f"📊 {prefix}{code} [在线 Schwab, 分析: {analysis_time:.2f}s]")
 
             if chan_30m is None or len(chan_30m[0]) == 0: return
 
@@ -542,7 +545,7 @@ class USTradingController(QObject):
         for bsp in bsp_list:
             bsp_dt = datetime(bsp.klu.time.year, bsp.klu.time.month, bsp.klu.time.day, 
                               bsp.klu.time.hour, bsp.klu.time.minute, bsp.klu.time.second)
-            if (us_now - bsp_dt).total_seconds() <= window_sec: 
+            if is_force_scan or (us_now - bsp_dt).total_seconds() <= window_sec: 
                 sig_key = f"{code}_{str(bsp.klu.time)}_{bsp.type2str()}"
                 if sig_key in self.notified_signals: continue
                 
@@ -776,7 +779,7 @@ class USTradingController(QObject):
             else: limit_price = round(price * 0.99, 2)
             
             order = LimitOrder(action, qty, limit_price)
-            await self.ib.placeOrderAsync(contract, order)
+            self.ib.placeOrder(contract, order)
             self.log_message.emit(f"🚀 [美股-IB] 限价单提交成功: {symbol} {action} {qty} @ ${limit_price:.2f}")
         except Exception as e:
             self.log_message.emit(f"❌ [美股-IB] 下单失败: {e}")
@@ -862,7 +865,7 @@ class USTradingController(QObject):
                 for p in positions:
                     qty = int(p.position)
                     if qty == 0: continue
-                    await self.ib.placeOrderAsync(p.contract, MarketOrder("SELL" if qty > 0 else "BUY", abs(qty)))
+                    self.ib.placeOrder(p.contract, MarketOrder("SELL" if qty > 0 else "BUY", abs(qty)))
                     count += 1
                 self.log_message.emit(f"🔥 [美股-IB] 已提交 {count} 个清仓订单 (市价单)")
             except Exception as e:
@@ -918,7 +921,6 @@ class USTradingController(QObject):
             # --- 0. ML 优先审查 & 一票否决 (P1 加强) ---
             ml_res = {}
             if is_buy:
-                from config import TRADING_CONFIG
                 ml_threshold = TRADING_CONFIG.get('ml_threshold', 0.70)
                 
                 ml_res = self.ml_validator.validate_signal(chan_30m, bsp)
@@ -1081,6 +1083,8 @@ class USTradingController(QObject):
                 else:
                     stop_price = entry_price - (atr * atr_init)
                     stop_type = "固定止损"
+                
+                self.log_message.emit(f"🛡️ [ATR监测] {code}: 现价 ${current_price:.2f}, 止损位 ${stop_price:.2f} ({stop_type}) [最高价 ${highest:.2f}, ATR ${atr:.4f}]")
                 
                 # 5. 触发则立刻下平仓单
                 if current_price < stop_price:
