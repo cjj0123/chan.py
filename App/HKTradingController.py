@@ -782,10 +782,9 @@ class HKTradingController(QObject):
 
         self.log_message.emit("🚀 启动港股双速自动化监控进程 (60s 风险监测 / 30m 策略扫描)...")
         
-        # 初始化扫描时间为当前 Bar，避免启动时立即触发不完整的 Bar 分析
+        # 避免启动时立即触发全量扫描，初始化为当前 30M Bar 时间，等待下一个周期再触发
         now = datetime.now()
-        # 初始化扫描时间为过去，确保启动后在交易时段内能立即触发扫描
-        last_strategy_scan_time = datetime.now() - timedelta(minutes=31)
+        last_strategy_scan_time = now.replace(minute=(now.minute // 30) * 30, second=0, microsecond=0)
         
         # 0. 初始化现有持仓的风险监控
         self._initialize_position_trackers()
