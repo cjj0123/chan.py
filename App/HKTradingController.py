@@ -975,14 +975,14 @@ class HKTradingController(QObject):
             logger.debug(f"[去重] {code} 严格去重跳过: {sig_key_strict}")
             return False
             
+        # 2.2 宽松去重 (针对交易系统，仅进行日志记录，不拦截执行，防止漏下单)
         if sig_key_loose in self.discovered_signals:
             last_notify_info = self.discovered_signals[sig_key_loose]
             try:
                 last_time = datetime.strptime(last_notify_info, "%Y-%m-%d %H:%M:%S")
                 diff_sec = (now - last_time).total_seconds()
                 if diff_sec < 14400: # 4小时保护期
-                    self.log_message.emit(f"⏭️ {code} {bsp_type_display} 宽松去重跳过 (4h保护期内)")
-                    return False
+                    self.log_message.emit(f"ℹ️ {code} {bsp_type_display} 在 4h 宽松去重保护期内，但交易系统继续执行校验")
             except Exception as e:
                 logger.error(f"解析信号记录时间报错: {e}")
 
