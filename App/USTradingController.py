@@ -875,10 +875,13 @@ class USTradingController(QObject):
             # --- 0. ML 优先审查 & 一票否决 (P1 加强) ---
             ml_res = {}
             if is_buy:
+                from config import TRADING_CONFIG
+                ml_threshold = TRADING_CONFIG.get('ml_threshold', 0.70)
+                
                 ml_res = self.ml_validator.validate_signal(chan_30m, bsp)
                 prob = ml_res.get('prob', 0) if ml_res else 0
-                if prob < 0.60: # 严格 60% 门限
-                    self.log_message.emit(f"🤖 [美股] {code} {bsp.type2str()} ML 未达标 ({prob*100:.1f}% < 60%) -> 一票否决，跳过视觉检查与绘图")
+                if prob < ml_threshold:
+                    self.log_message.emit(f"🤖 [美股] {code} {bsp.type2str()} ML 未达标 ({prob*100:.1f}% < {ml_threshold*100:.0f}%) -> 一票否决，跳过视觉检查与绘图")
                     return
                 self.log_message.emit(f"🤖 [美股] {code} {bsp.type2str()} ML 校验通过 ({prob*100:.1f}%) -> 继续触发视觉评估")
 
