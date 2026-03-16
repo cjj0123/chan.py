@@ -1077,18 +1077,30 @@ class USTradingController(QObject):
              logger.error(f"浮动止损检查异常: {e}")
 
     async def _get_futu_assets_async(self) -> Tuple[float, float, list]:
-        """通过 Futu API 获取美股账户资产及持仓"""
+        """通过 Futu API 获取美股账户资产及持仓 (支持模拟与真实自适应)"""
         try:
-            # 1. 查询账户资金
-            ret, data = self.trd_ctx.accinfo_query()
+            # 1. 自动探查账户环境
+            acc_id = 0
+            actual_env = 'REAL'
+            ret_list, account_list = self.trd_ctx.get_acc_list()
+            
+            if ret_list == RET_OK and not account_list.empty:
+                row = account_list.iloc[0]
+                acc_id = row['acc_id']
+                actual_env = 'SIMULATE' if row['trd_env'] == 'SIMULATE' else 'REAL'
+
+            # 2. 查询账户资金
+            ret, data = self.trd_ctx.accinfo_query(acc_id=acc_id, trd_env=actual_env)
             available, total = 0.0, 0.0
             if ret == RET_OK and not data.empty:
                 available = float(data.iloc[0]['cash'])
-                total = float(data.iloc[0]['power'])
+                total = float(data.iloc[0].get('total_assets', data.iloc[0].get('power', 0.0)))
+            else:
+                self.log_message.emit(f"⚠️ [美股-Futu] 资金查询反馈 [{ret}]: {data}")
             
-            # 2. 查询持仓
+            # 3. 查询持仓
             positions = []
-            ret_pos, pos_data = self.trd_ctx.position_list_query()
+            ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=acc_id, trd_env=actual_env)
             if ret_pos == RET_OK and not pos_data.empty:
                 for _, row in pos_data.iterrows():
                     qty = int(row['qty'])
