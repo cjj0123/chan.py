@@ -368,15 +368,6 @@ class TraderGUI(QMainWindow):
         if idx >= 0: self.hk_watchlist_combo.setCurrentIndex(idx)
         hk_btns_layout.addWidget(self.hk_watchlist_combo)
         
-        # 附加分组 (可选，用于合并扫描热点_实盘等)
-        hk_btns_layout.addWidget(QLabel("+"))
-        self.hk_extra_combo = QComboBox()
-        self.hk_extra_combo.addItem("无")
-        for i in range(self.watchlist_combo.count()):
-            self.hk_extra_combo.addItem(self.watchlist_combo.itemText(i))
-        idx2 = self.hk_extra_combo.findText("热点_实盘")
-        if idx2 >= 0: self.hk_extra_combo.setCurrentIndex(idx2)
-        hk_btns_layout.addWidget(self.hk_extra_combo)
         
         hk_btns_layout.addStretch()
         hk_layout.addLayout(hk_btns_layout)
@@ -433,15 +424,6 @@ class TraderGUI(QMainWindow):
         if idx >= 0: self.us_watchlist_combo.setCurrentIndex(idx)
         us_btns_layout.addWidget(self.us_watchlist_combo)
         
-        # 美股附加分组
-        us_btns_layout.addWidget(QLabel("+"))
-        self.us_extra_combo = QComboBox()
-        self.us_extra_combo.addItem("无")
-        for i in range(self.watchlist_combo.count()):
-            self.us_extra_combo.addItem(self.watchlist_combo.itemText(i))
-        idx2 = self.us_extra_combo.findText("热点_实盘")
-        if idx2 >= 0: self.us_extra_combo.setCurrentIndex(idx2)
-        us_btns_layout.addWidget(self.us_extra_combo)
 
         us_btns_layout.addStretch()
         us_layout.addLayout(us_btns_layout)
@@ -494,14 +476,6 @@ class TraderGUI(QMainWindow):
         if idx >= 0: self.schwab_watchlist_combo.setCurrentIndex(idx)
         schwab_btns_layout.addWidget(self.schwab_watchlist_combo)
         
-        schwab_btns_layout.addWidget(QLabel("+"))
-        self.schwab_extra_combo = QComboBox()
-        self.schwab_extra_combo.addItem("无")
-        for i in range(self.watchlist_combo.count()):
-            self.schwab_extra_combo.addItem(self.watchlist_combo.itemText(i))
-        idx2 = self.schwab_extra_combo.findText("热点_实盘")
-        if idx2 >= 0: self.schwab_extra_combo.setCurrentIndex(idx2)
-        schwab_btns_layout.addWidget(self.schwab_extra_combo)
         
         schwab_btns_layout.addStretch()
         schwab_layout.addLayout(schwab_btns_layout)
@@ -565,15 +539,6 @@ class TraderGUI(QMainWindow):
         monitor_ctrl_layout.addWidget(QLabel(" 📊 监控分组:"))
         monitor_ctrl_layout.addWidget(self.monitor_watchlist_combo)
         
-        # A股附加分组
-        monitor_ctrl_layout.addWidget(QLabel("+"))
-        self.monitor_extra_combo = QComboBox()
-        self.monitor_extra_combo.addItem("无")
-        for i in range(self.watchlist_combo.count()):
-            self.monitor_extra_combo.addItem(self.watchlist_combo.itemText(i))
-        idx2 = self.monitor_extra_combo.findText("热点_实盘")
-        if idx2 >= 0: self.monitor_extra_combo.setCurrentIndex(idx2)
-        monitor_ctrl_layout.addWidget(self.monitor_extra_combo)
         
         self.monitor_scan_btn = QPushButton("立刻执行扫描")
         self.monitor_scan_btn.clicked.connect(self.on_monitor_force_scan_clicked)
@@ -612,10 +577,6 @@ class TraderGUI(QMainWindow):
             try:
                 # 使用 A股专用分组和附加分组
                 group_name = self.monitor_watchlist_combo.currentText()
-                if hasattr(self, 'monitor_extra_combo'):
-                    extra = self.monitor_extra_combo.currentText()
-                    if extra and extra != "无" and extra != group_name:
-                        group_name = f"{group_name},{extra}"
                 
                 if group_name == "加载中..." or group_name == "":
                     self.append_monitor_log("❌ 启动监控失败: 未选择自选股分组")
@@ -706,9 +667,6 @@ class TraderGUI(QMainWindow):
             try:
                 # 从港股专用下拉框获取分组名
                 group_name = self.hk_watchlist_combo.currentText()
-                extra_group = self.hk_extra_combo.currentText()
-                if extra_group and extra_group != "无":
-                    group_name = f"{group_name},{extra_group}"
                 
                 # 共享 Discord Bot
                 from App.DiscordBot import DiscordBot
@@ -802,11 +760,6 @@ class TraderGUI(QMainWindow):
             try:
                 # 使用美股专用分组
                 group_name = self.us_watchlist_combo.currentText()
-                # 支持附加分组 (如有 "热点_实盘")
-                if hasattr(self, 'us_extra_combo'):
-                    extra = self.us_extra_combo.currentText()
-                    if extra and extra != "无" and extra != group_name:
-                        group_name = f"{group_name},{extra}"
                 
                 # 共享 Discord Bot
                 bot = self._get_shared_discord_bot(controller=None)
@@ -897,10 +850,6 @@ class TraderGUI(QMainWindow):
                 return
             try:
                 group_name = self.schwab_watchlist_combo.currentText()
-                if hasattr(self, 'schwab_extra_combo'):
-                    extra = self.schwab_extra_combo.currentText()
-                    if extra and extra != "无" and extra != group_name:
-                        group_name = f"{group_name},{extra}"
                 
                 bot = self._get_shared_discord_bot(controller=None)
 
@@ -1734,17 +1683,9 @@ class TraderGUI(QMainWindow):
                     idx = self.monitor_watchlist_combo.findText("沪深")
                     if idx >= 0: self.monitor_watchlist_combo.setCurrentIndex(idx)
                     
-                if hasattr(self, 'monitor_extra_combo'):
-                    self.monitor_extra_combo.clear()
-                    self.monitor_extra_combo.addItem("无")
-                    self.monitor_extra_combo.addItems(group_names)
-                    idx = self.monitor_extra_combo.findText("热点_实盘")
-                    if idx >= 0: self.monitor_extra_combo.setCurrentIndex(idx)
-                
                 if hasattr(self, 'us_watchlist_combo'):
                     self.us_watchlist_combo.clear()
                     self.us_watchlist_combo.addItems(group_names)
-                    # 尝试再次默认选中“美股”
                     idx = self.us_watchlist_combo.findText("美股")
                     if idx >= 0: self.us_watchlist_combo.setCurrentIndex(idx)
                 
@@ -1753,20 +1694,7 @@ class TraderGUI(QMainWindow):
                     self.hk_watchlist_combo.addItems(group_names)
                     idx = self.hk_watchlist_combo.findText("港股")
                     if idx >= 0: self.hk_watchlist_combo.setCurrentIndex(idx)
-                
-                if hasattr(self, 'hk_extra_combo'):
-                    self.hk_extra_combo.clear()
-                    self.hk_extra_combo.addItem("无")
-                    self.hk_extra_combo.addItems(group_names)
-                    idx = self.hk_extra_combo.findText("热点_实盘")
-                    if idx >= 0: self.hk_extra_combo.setCurrentIndex(idx)
-                
-                if hasattr(self, 'us_extra_combo'):
-                    self.us_extra_combo.clear()
-                    self.us_extra_combo.addItem("无")
-                    self.us_extra_combo.addItems(group_names)
-                    idx = self.us_extra_combo.findText("热点_实盘")
-                    if idx >= 0: self.us_extra_combo.setCurrentIndex(idx)
+                    
                 
                 # 安全地写入日志
                 if hasattr(self, 'log_text'):
