@@ -371,43 +371,54 @@ class USTradingController(QObject):
     async def _perform_strategy_scan_async(self):
         """执行异步策略扫描"""
         self.log_message.emit(f"🔍 [美股] 正在获取分组 '{self.watchlist_group}' 代码...")
-        us_codes_set = set()
+        us_watchlist = {} # code -> name
         
         try:
             from futu import OpenQuoteContext, RET_OK
             
-            def get_futu_codes():
+            def get_futu_watchlist():
                 """支持逗号分隔的多分组合并 (如 '美股,热点_实盘')"""
+                all_dict = {}
                 try:
                     ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
                     groups = [g.strip() for g in self.watchlist_group.split(',') if g.strip()]
-                    all_codes = []
                     for grp in groups:
                         ret, data = ctx.get_user_security(group_name=grp)
                         if ret == RET_OK and not data.empty:
-                            all_codes.extend([c for c in data['code'].tolist() if c.startswith("US.")])
+                            name_col = 'name' if 'name' in data.columns else 'stock_name'
+                            for _, row in data.iterrows():
+                                c = row['code']
+                                if c.startswith("US."):
+                                    all_dict[c] = row.get(name_col, c)
                     ctx.close()
-                    return list(set(all_codes))  # 去重
                 except:
                     pass
-                return []
+                return all_dict
 
             # 1. Fetch from Futu via executor (Sync -> Async)
             loop = asyncio.get_running_loop()
-            futu_codes = await loop.run_in_executor(self.executor, get_futu_codes)
-            us_codes_set.update(futu_codes)
+            futu_watchlist = await loop.run_in_executor(self.executor, get_futu_watchlist)
+            us_watchlist.update(futu_watchlist)
 
             if self.venue == "IB" and self.ib and self.ib.isConnected():
-                us_codes_set.update([f"US.{p.contract.symbol}" for p in self.ib.positions() if p.contract.secType == 'STK'])
+                for p in self.ib.positions():
+                    if p.contract.secType == 'STK':
+                        c = f"US.{p.contract.symbol}"
+                        if c not in us_watchlist:
+                            us_watchlist[c] = p.contract.symbol
             elif self.venue == "SCHWAB" and self.schwab_account_hash:
                  await self._update_schwab_cache_async()
-                 # 将持仓代码加入扫描列表
                  for p in self.schwab_positions_cache:
                       if p.get('instrument', {}).get('assetType') == 'EQUITY':
-                           us_codes_set.add(f"US.{p['instrument']['symbol']}")
+                           c = f"US.{p['instrument']['symbol']}"
+                           if c not in us_watchlist:
+                               us_watchlist[c] = p['instrument']['symbol']
 
-            us_codes = sorted(list(us_codes_set))
-            if not us_codes: us_codes = ['US.AAPL', 'US.TSLA', 'US.NVDA']
+            # 取出所有的股票代码列表
+            us_codes = sorted(list(us_watchlist.keys()))
+            if not us_codes: 
+                us_codes = ['US.AAPL', 'US.TSLA', 'US.NVDA']
+                us_watchlist = {'US.AAPL': 'AAPL', 'US.TSLA': 'TSLA', 'US.NVDA': 'NVDA'}
             
             self.log_message.emit(f"📡 [美股] 异步并行扫描开始 (共 {len(us_codes)} 只, 并发: 5)...")
             
@@ -456,7 +467,8 @@ class USTradingController(QObject):
                     try:
                         symbol = code.split(".")[1] if "." in code else code
                         contract = symbol_to_contract.get(symbol)
-                        await self._analyze_stock_async(code, index=idx, total=total, contract=contract)
+                        name = us_watchlist.get(code, "")
+                        await self._analyze_stock_async(code, name=name, index=idx, total=total, contract=contract)
                     except Exception as e:
                         self.log_message.emit(f"❌ [美股] 分析 {code} 报错: {e}")
 
@@ -468,10 +480,12 @@ class USTradingController(QObject):
         except Exception as e:
             self.log_message.emit(f"❌ [美股] 扫描过程异常: {e}")
 
-    async def _analyze_stock_async(self, code: str, index: int = 0, total: int = 0, contract=None):
+    async def _analyze_stock_async(self, code: str, name: str = "", index: int = 0, total: int = 0, contract=None):
         """异步分析单只股票"""
         if contract is None: return
         prefix = f"[{index}/{total}] "
+        await asyncio.sleep(0.01)
+        self.log_message.emit(f"🔍 [策略扫描] 正在分析 {code} {name} {prefix}...")
         # 让出事件循环控制权，防阻塞 GUI 操作（重要！）
         await asyncio.sleep(0.01)
         
