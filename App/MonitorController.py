@@ -77,6 +77,7 @@ class MarketMonitorController(QObject):
         self.ml_validator = SignalValidator()
         
         self._force_scan = False  # 强制扫描标志
+        self._current_bar_scanned = False  # 状态锁，解决启动后首个30M周期被跳过的漏洞
 
     def _load_notified_signals(self) -> Dict:
         """加载已通知信号记录"""
@@ -211,6 +212,12 @@ class MarketMonitorController(QObject):
                         self.log_message.emit(f"🔍 [监控] 触发定时扫描 ({current_bar.strftime('%H:%M')})...")
                         self._perform_scan()
                         last_scan_bar = current_bar
+                elif not getattr(self, '_current_bar_scanned', False):
+                    # 补偿刚启动时当前 30M 周期还未跑过扫描的情况
+                    if now.minute % 30 >= 5:
+                        self.log_message.emit(f"🔍 [监控] 触发首个周期补偿扫描 ({current_bar.strftime('%H:%M')})...")
+                        self._perform_scan()
+                        self._current_bar_scanned = True
                 
                 # 每分钟检查一次
                 for _ in range(60):

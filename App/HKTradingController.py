@@ -128,6 +128,7 @@ class HKTradingController(QObject):
         # 用于停止和暂停扫描的标志
         self._is_running = False
         self._is_paused = False
+        self._current_bar_scanned = False  # 状态锁，解决刚启动后首个30M周期静默期被跳过的漏洞
         self._force_scan = False  # 标志是否需要强制执行下一次扫描
         
         # 视觉评分缓存 (code_time_type -> score_dict)
@@ -839,9 +840,13 @@ class HKTradingController(QObject):
                     is_force_scan = True
                     self._force_scan = False  # 重置标志
                 elif last_strategy_scan_time != current_bar_time:
-                    # 额外等待 3 分钟让 30M 棒线在富途后端稳定
                     if now.minute % 30 >= 3: 
                         should_scan_strategy = True
+                elif not getattr(self, '_current_bar_scanned', False):
+                    # 补偿刚启动时当前 30M 周期还未跑过扫描的情况
+                    if now.minute % 30 >= 3:
+                        should_scan_strategy = True
+                        self._current_bar_scanned = True
                 
                 if should_scan_strategy:
                     if last_strategy_scan_time == current_bar_time:
