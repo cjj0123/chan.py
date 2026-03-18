@@ -1388,13 +1388,18 @@ class BaseUSTradingController(QObject):
         await asyncio.sleep(3)  # ⏳ 给 3 秒缓冲时间，让 IB 充分同步底层 positions 缓存
         try:
             available, total, positions = await self.get_account_assets_async()
-            if not positions: return
+            
+            # --- 💡 [仓位校准] 遍历当前持仓，挂载/更新止损监控 ---
+            if positions:
+                for p in positions:
+                    await self._initialize_single_tracker_async(p)
             
             # --- 💡 [补偿买入自愈] 清除今天已发出通知、但实际上「未持仓」的标的，让其可被重新扫描触发 ---
             now_et_str = self.get_us_now().strftime("%Y-%m-%d")
             cleanup_keys = []
             for sig_key, sig_time in list(self.notified_signals.items()):
                 if sig_time.startswith(now_et_str):
+                    # 如果标的不在当前持仓监控池里，说明报警了但没买入，释放它
                     if sig_key not in self.position_trackers:
                         cleanup_keys.append(sig_key)
             
