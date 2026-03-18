@@ -17,25 +17,31 @@ class FutuUSTradingController(BaseUSTradingController):
         from config import TRADING_CONFIG
         is_dry_run = TRADING_CONFIG.get('us_dry_run', True)
         self.trd_env = TrdEnv.SIMULATE if is_dry_run else TrdEnv.REAL
+        self.futu_acc_id = 0
 
     async def get_account_assets_async(self) -> Tuple[float, float, list]:
         """异步获取账户资产 - 纯净 Futu 通道"""
         try:
             # 1. 自动探查账户环境
-            acc_id = 0
-            actual_env_str = 'SIMULATE' if self.trd_env == TrdEnv.SIMULATE else 'REAL'
-            ret_list, account_list = self.trd_ctx.get_acc_list()
-            
-            if ret_list == RET_OK and not account_list.empty:
-                matched = account_list[account_list['trd_env'] == actual_env_str]
-                if not matched.empty:
-                    row = matched.iloc[0]
-                else:
-                    row = account_list.iloc[0]
-                acc_id = row['acc_id']
+            if self.futu_acc_id == 0:
+                actual_env_str = 'SIMULATE' if self.trd_env == TrdEnv.SIMULATE else 'REAL'
+                ret_list, account_list = self.trd_ctx.get_acc_list()
+                
+                if ret_list == RET_OK and not account_list.empty:
+                    matched = account_list[account_list['trd_env'] == actual_env_str]
+                    if self.trd_env == TrdEnv.SIMULATE:
+                        # 确保选中【美股】模拟账户 (sim_acc_type == 2)
+                        us_matched = matched[matched['sim_acc_type'] == 2]
+                        if not us_matched.empty:
+                            matched = us_matched
+                    
+                    if not matched.empty:
+                        self.futu_acc_id = matched.iloc[0]['acc_id']
+                    else:
+                        self.futu_acc_id = account_list.iloc[0]['acc_id']
 
             # 2. 查询账户资金
-            ret, data = self.trd_ctx.accinfo_query(acc_id=acc_id, trd_env=self.trd_env)
+            ret, data = self.trd_ctx.accinfo_query(acc_id=self.futu_acc_id, trd_env=self.trd_env)
             available, total = 0.0, 0.0
             if ret == RET_OK and not data.empty:
                 available = float(data.iloc[0]['cash'])
@@ -43,7 +49,7 @@ class FutuUSTradingController(BaseUSTradingController):
             
             # 3. 查询持仓
             positions = []
-            ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=acc_id, trd_env=self.trd_env)
+            ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=self.futu_acc_id, trd_env=self.trd_env)
             if ret_pos == RET_OK and not pos_data.empty:
                 for _, row in pos_data.iterrows():
                     qty = int(row['qty'])
@@ -77,7 +83,8 @@ class FutuUSTradingController(BaseUSTradingController):
                 code=code,
                 trd_side=side,
                 order_type=OrderType.NORMAL,
-                trd_env=self.trd_env
+                trd_env=self.trd_env,
+                acc_id=self.futu_acc_id
             )
             if ret == RET_OK:
                 order_id = data.iloc[0]['order_id']

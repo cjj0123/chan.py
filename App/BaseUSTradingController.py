@@ -957,8 +957,9 @@ class BaseUSTradingController(QObject):
 
                 if venue == "FUTU":
                     from futu import OrderStatus, RET_OK
+                    futu_acc_id = getattr(self, 'futu_acc_id', 0)
                     ret, data = self.trd_ctx.order_list_query(
-                        order_id=order_id, trd_env=self.trd_env
+                        order_id=order_id, trd_env=self.trd_env, acc_id=futu_acc_id
                     )
                     if ret != RET_OK or data.empty: continue
                     
