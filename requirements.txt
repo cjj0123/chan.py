@@ -10,4 +10,5 @@ google-generativeai
 dashscope
 discord.py
 PyQt6
-pycryptodome
+pycryptodomeib-insync
+nest-asyncio

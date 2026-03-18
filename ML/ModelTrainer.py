@@ -50,8 +50,7 @@ if torch is not None:
                 nn.Dropout(0.2),
                 nn.Linear(64, 32),
                 nn.ReLU(),
-                nn.Linear(32, 1),
-                nn.Sigmoid()
+                nn.Linear(32, 1)
             )
 
         def forward(self, x):
@@ -109,11 +108,67 @@ class ModelTrainer:
             "print_warning": False,
         })
 
+    def _get_market_index(self, code: str) -> str:
+        """根据标的代码识别所属大盘指数 (Phase 7: 使用 ETF 替代指数以绕过 API 限制)"""
+        if code.startswith("HK."): return "HK.02800"  # 盈富基金 (HSI Proxy)
+        if code.startswith("US."): return "US.QQQ"    # 纳指 100 ETF (Nasdaq Proxy)
+        if code.startswith("SH.") or code.startswith("SZ."): return "SH.510300" # 沪深 300 ETF (CSI 300 Proxy)
+        return None
+
+    def _prepare_index_data(self, freq: str, s_date: str, e_date: str):
+        """预先缓存全市场大盘指数数据，避免循环中重复 IO"""
+        self.index_data = {}
+        target_indexes = ["HK.02800", "US.QQQ", "SH.510300"]
+        logger.info(f"💾 正在预热指数缓存: {target_indexes} ({freq})")
+        for idx_code in target_indexes:
+            idx_klines = self.loader.load_kline_data(idx_code, freq, s_date, e_date)
+            if idx_klines:
+                # 建立 时间 -> KLine 的映射便于极速对齐
+                self.index_data[idx_code] = {str(k.time): k for k in idx_klines}
+        logger.info(f"✅ 指数缓存加载完成")
+
+    def _extract_market_context(self, code: str, bsp_time_str: str) -> Dict[str, float]:
+        """从预热的指数数据中提取指定时间的市场特征"""
+        idx_code = self._get_market_index(code)
+        if not idx_code or idx_code not in self.index_data:
+            return {}
+        
+        target_map = self.index_data[idx_code]
+        # 寻找对齐或最接近的指数 K 线
+        idx_k = target_map.get(bsp_time_str)
+        if not idx_k:
+            return {}
+            
+        context = {}
+        # 特征 1: 指数动量 (ROC_5)
+        pre_5 = idx_k
+        for _ in range(5):
+            if pre_5.pre_klu: pre_5 = pre_5.pre_klu
+            else: break
+        if pre_5 != idx_k:
+            context["index_roc_5"] = (idx_k.close - pre_5.close) / pre_5.close
+            
+        # 特征 2: 指数波动率相对均值 (ATR_10 模拟)
+        # 这里为了简化，直接计算最近 10 根的平均震幅
+        amps = []
+        curr = idx_k
+        for _ in range(10):
+            if curr.low > 0: amps.append((curr.high - curr.low) / curr.low)
+            if curr.pre_klu: curr = curr.pre_klu
+            else: break
+        if amps:
+            context["index_volatility"] = sum(amps) / len(amps)
+            
+        return context
+
     def collect_samples(self, target_watchlist: List[str] = None, start_date: str = None, end_date: str = None, freq: str = '30M'):
-        """收集指定列表或默认列表的买点样本"""
+        """收集指定列表或默认列表的买点样本 (Phase 7: 加入市场大背景特征)"""
         coins = target_watchlist if target_watchlist else self.watchlist
         s_date = start_date if start_date else self.start_date
         e_date = end_date if end_date else self.end_date
+        
+        # 预加载指数数据
+        self._prepare_index_data(freq, s_date, e_date)
         
         logger.info(f"🚀 开始为 {len(coins)} 只股票收集 {freq} 买点样本 ({s_date} -> {e_date})...")
         samples = []
@@ -143,7 +198,11 @@ class ModelTrainer:
                         idx_in_klines = bsp.klu.idx
                         if idx_in_klines >= len(klines): continue
                         
-                        features = self.extractor.extract_bsp_features(chan, bsp)
+                        # Phase 7: 提取大盘上下文
+                        bsp_time_str = str(bsp.klu.time)
+                        market_context = self._extract_market_context(code, bsp_time_str)
+                        
+                        features = self.extractor.extract_bsp_features(chan, bsp, market_context=market_context)
                         labels = self._generate_labels(klines, idx_in_klines, bsp.klu.close, freq=freq)
                         if not labels: continue
                         
@@ -176,7 +235,7 @@ class ModelTrainer:
         logger.info(f"✅ 样本采集全部完成。")
 
     def _generate_labels(self, klines, start_idx, buy_price, freq='30M') -> Dict[str, int]:
-        """为单个买点生成多个维度的标签 (P1: ATR 自适应支撑)"""
+        """为单个买点生成多个维度的标签 (Phase 7: 严苛 MAE 惩罚机制)"""
         scale = 6 if freq == '5M' else 1
         
         # 1. 计算买点前 10 根 K 线的平均振幅 (ATR 比例)
@@ -188,10 +247,11 @@ class ModelTrainer:
         atr_ratio = sum(amps) / len(amps) if amps else 0.02 # 兜底 2% 振幅
         
         # 2. 基于 ATR 动态设定 止盈 & 止损 空间
-        target_3p = max(0.02, 1.5 * atr_ratio)   # 下限 2%，正常 1.5倍 振幅
-        target_5p = max(0.035, 2.5 * atr_ratio)  # 下限 3.5%
-        target_10p = max(0.05, 5.0 * atr_ratio)  # 下限 5%
-        stop_ratio = max(0.015, 0.8 * atr_ratio) # 止损至少 1.5%，或 0.8倍 ATR
+        # 止损逻辑：严苛化，防止模型推荐“垃圾时间”波动票
+        target_3p = max(0.02, 1.5 * atr_ratio)   
+        target_5p = max(0.035, 2.5 * atr_ratio)  
+        target_10p = max(0.05, 5.0 * atr_ratio)  
+        stop_ratio = max(0.015, 0.8 * atr_ratio) # 止损至少 1.5%
         
         configs = [
             (target_3p, int(15 * scale), "label_3p_15d"),
@@ -207,14 +267,20 @@ class ModelTrainer:
                 continue
             
             target_px = buy_price * (1 + target)
-            stop_px = buy_price * (1 - stop_ratio) # P1: 使用动态止损
+            stop_px = buy_price * (1 - stop_ratio)
             
             hit_target = False
             for fkl in future:
-                if fkl.low <= stop_px: break
+                # 严苛判定：如果在同一根 K 线或更早的时间触及了止损位，则该样本一票否决
+                # 为了保守起见，哪怕这根 K 线高点过了止盈，只要低点破了止损，就认为已“死”
+                if fkl.low <= stop_px:
+                    hit_target = False
+                    break
+                
                 if fkl.high >= target_px:
                     hit_target = True
                     break
+            
             res[name] = 1 if hit_target else 0
         return res
 
@@ -225,11 +291,74 @@ class ModelTrainer:
         self.train_lightgbm(target_label)
         self.train_mlp(target_label)
 
-    def train_all_with_optuna(self, target_label="label_3p_15d"):
-        """P1: 顺序 Optuna 调优所有支持的模型"""
-        logger.info(f"🛠 [Optuna 调优] 基于标签 {target_label} 开启全模型超参搜索...")
-        self.train_xgboost_with_optuna(target_label)
-        self.train_lightgbm_with_optuna(target_label)
+    def train_walk_forward(self, target_label="label_3p_15d", window_size_months=6, step_months=1):
+        """
+        实施滚动前向训练 (Walk-Forward Optimization)
+        模拟实盘中的“定期微调”逻辑，并评估模型在不同行情周期下的真实表现。
+        """
+        if not os.path.exists(self.train_data_file):
+            logger.error("❌ 训练数据文件不存在，请先执行 collect_samples")
+            return
+
+        df = pd.read_csv(self.train_data_file)
+        df['time'] = pd.to_datetime(df['time'])
+        df = df.sort_values('time')
+        
+        start_time = df['time'].min()
+        end_time = df['time'].max()
+        
+        logger.info(f"📊 启动滚动前向训练: {start_time.date()} -> {end_time.date()}")
+        
+        current_train_end = start_time + pd.DateOffset(months=window_size_months)
+        
+        results = []
+        while current_train_end + pd.DateOffset(months=step_months) <= end_time:
+            test_end = current_train_end + pd.DateOffset(months=step_months)
+            
+            # 划分为训练集和测试集
+            train_df = df[(df['time'] >= start_time) & (df['time'] < current_train_end)]
+            test_df = df[(df['time'] >= current_train_end) & (df['time'] < test_end)]
+            
+            if len(train_df) < 100 or len(test_df) < 20:
+                current_train_end += pd.DateOffset(months=step_months)
+                continue
+                
+            logger.info(f"⏳ 正在演练窗口: Train 直至 {current_train_end.date()}, Test 直至 {test_end.date()}...")
+            
+            # 构建 X, y
+            label_cols = ["label_3p_15d", "label_5p_30d", "label_10p_60d"]
+            feature_cols = [c for c in df.columns if c not in ["code", "time"] + label_cols]
+            
+            X_train, y_train = train_df[feature_cols], train_df[target_label]
+            X_test, y_test = test_df[feature_cols], test_df[target_label]
+            
+            # 使用 XGBoost 作为评估基准
+            import xgboost as xgb
+            model = xgb.XGBClassifier(n_estimators=100, max_depth=5, learning_rate=0.1, random_state=42)
+            model.fit(X_train, y_train)
+            
+            # 评估测试集
+            y_prob = model.predict_proba(X_test)[:, 1]
+            auc = roc_auc_score(y_test, y_prob) if len(np.unique(y_test)) > 1 else 0.5
+            precision = precision_score(y_test, (y_prob > 0.7).astype(int)) if any(y_prob > 0.7) else 0.0
+            
+            results.append({
+                "test_period": f"{current_train_end.date()}~{test_end.date()}",
+                "auc": auc,
+                "precision_70": precision,
+                "samples": len(test_df)
+            })
+            
+            current_train_end += pd.DateOffset(months=step_months)
+            
+        if results:
+            res_df = pd.DataFrame(results)
+            logger.info(f"\n📈 滚动前向训练报告:\n{res_df.to_string(index=False)}")
+            logger.info(f"⭐ 平均精度 (Prec@0.7): {res_df['precision_70'].mean():.2%}")
+            
+        # 最后使用全部数据训练一个生产模型
+        logger.info("🚀 正在使用全量数据训练最终生产模型...")
+        self.train_all(target_label)
 
     def get_cal_score(self, y_true, y_prob, threshold=0.5) -> float:
         """
@@ -499,7 +628,7 @@ class ModelTrainer:
             logger.info(f"MLP Device: {device}")
             
             model = MLPModel(X_train.shape[1]).to(device)
-            criterion = nn.BCELoss()
+            criterion = nn.BCEWithLogitsLoss()
             optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
             
             # 确保转换为 numpy 再转为 tensor
@@ -536,6 +665,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--collect", action="store_true", help="收集样本数据")
     parser.add_argument("--train", action="store_true", help="训练模型(全家桶)")
+    parser.add_argument("--walk_forward", action="store_true", help="执行滚动前向演练与训练")
     parser.add_argument("--label", type=str, default="label_3p_15d", help="指定训练用的目标标签")
     parser.add_argument("--freq", type=str, default="30M", help="指定数据频率 (30M, 5M)")
     args = parser.parse_args()
@@ -545,5 +675,7 @@ if __name__ == "__main__":
         trainer.collect_samples(freq=args.freq)
     if args.train: 
         trainer.train_all(target_label=args.label)
-    if not args.collect and not args.train:
+    if args.walk_forward:
+        trainer.train_walk_forward(target_label=args.label)
+    if not args.collect and not args.train and not args.walk_forward:
         parser.print_help()

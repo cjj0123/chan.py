@@ -14,18 +14,24 @@ class FeatureExtractor:
     def __init__(self):
         pass
 
-    def extract_bsp_features(self, chan: CChan, bsp: CBS_Point) -> Dict[str, float]:
+    def extract_bsp_features(self, chan: CChan, bsp: CBS_Point, market_context: Dict[str, float] = None) -> Dict[str, float]:
         """
         提取特定买卖点发生时的特征
         
         Args:
             chan: 包含上下文的 CChan 对象
             bsp: 触发的买卖点对象
+            market_context: 可选的大盘/市场环境特征 (Phase 7)
             
         Returns:
             Dict[str, float]: 特征字典
         """
         features = {}
+        
+        # 0. 载入大盘环境特征 (如果提供)
+        if market_context:
+            for mk, mv in market_context.items():
+                features[f"mkt_{mk}"] = float(mv)
         
         # 1. 基础开仓K线特征
         klu = bsp.klu

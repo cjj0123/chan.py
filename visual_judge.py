@@ -234,9 +234,9 @@ class ModelDispatcher:
     """模型调度员：负责分工、频率控制和回退"""
     def __init__(self):
         # 模型角色配置
-        self.primary_model = "gemini-2.5-flash"        # 主攻手：快且便宜，支持缓存
-        self.verifier_model = "qwen3.5-plus-2026-02-15"  # 复核员：不同厂家的视角
-        self.expert_model = "gemini-2.5-pro"           # 终审专家：逻辑最强
+        self.primary_model = "gemini-2.5-pro-preview-05-06"  # 2.5 Pro: 视觉分析能力最强
+        self.verifier_model = "qwen-vl-max-latest"     # 通义千问顶配版，擅长视觉
+        self.expert_model = "gemini-2.5-flash-preview-04-17"  # 2.5 Flash: 快速回退
         
         # 初始化组件
         self.cache_mgr = GeminiCacheManager(GOOGLE_API_KEY) if GOOGLE_API_KEY else None
@@ -360,13 +360,27 @@ class VisualJudge:
             )
             response = model.generate_content(contents, generation_config=generation_config)
             
+            # 记录原始返回以便调试
+            debug_info = {
+                "timestamp": datetime.datetime.now().isoformat(),
+                "model": model_id,
+                "signal": signal_type,
+                "image_count": len(image_paths),
+                "raw_text": response.text
+            }
+            try:
+                os.makedirs("logs", exist_ok=True)
+                with open("logs/visual_judge_debug.json", "w", encoding="utf-8") as f:
+                    json.dump(debug_info, f, ensure_ascii=False, indent=2)
+            except: pass
+
             result = self._parse_llm_response(response.text)
             if result:
                 return self._post_process_result(result, model_id)
         except Exception as e:
             print(f"⚠️ Gemini API 调用异常: {e}")
             import traceback
-            print(traceback.format_exc())
+            traceback.print_exc()
         return None
 
     def call_qwen_api(self, image_paths, signal_type):
@@ -424,32 +438,48 @@ class VisualJudge:
             primary_result = self.call_gemini_api(images, signal_type, "PRIMARY")
             
         # 【阶段二：异构大模型交叉验收审计】
-        if primary_result and self.qwen_available:
-            score = primary_result.get('score', 0)
-            is_critical = signal_type in ['b1', 's1', '1']
+        # 优化判断逻辑：若 Gemini 返回 0 且 signal_type 存在（非空扫描），或者处于 60-85 模糊带，则必须审计
+        score = primary_result.get('score', 0) if primary_result else 0
+        needs_audit = False
+        
+        if primary_result:
+            # 1. 处于不确定性区间 (60-85)
+            if 60 <= score <= 85:
+                needs_audit = True
+            # 2. 极端结论 (0分) 且信号存在，为了防止幻觉导致的误伤，进行审计
+            elif score == 0 and signal_type:
+                needs_audit = True
+            # 3. 关键大买点
+            elif signal_type in ['b1', 's1', '1']:
+                needs_audit = True
+                
+        if (needs_audit or not primary_result) and self.qwen_available:
+            reason = "得分处于模糊带" if (60 <= score <= 85) else "得分极端(0)需复核"
+            if not primary_result: reason = "主模型失效回退"
             
-            # 若处于模棱两可区间，或者重大买卖点结构，呼叫另一个大厂的模型审阅防幻觉！
-            if (60 <= score <= 85) or is_critical:
-                print(f"   ⚖️  启动审计机制! 信号 {signal_type} 主裁判得分 {score}，存在不确定性，呼唤异构模型审计...")
-                verifier_result = self.call_qwen_api(images, signal_type)
-                if verifier_result:
-                    verifier_score = verifier_result.get('score', 0)
-                    # 综合裁定：当意见分歧超过定界，取最小安全分，或者直接均值
-                    if abs(score - verifier_score) > 30:
-                        final_score = min(score, verifier_score)
-                        print(f"   🚨  审计爆出严重分歧！Flash: {score}, Qwen: {verifier_score}。出于风控考虑，取最低分 {final_score}")
+            print(f"   ⚖️  启动审计/回退机制! 原因: {reason}。呼唤异构模型审计...")
+            verifier_result = self.call_qwen_api(images, signal_type)
+            
+            if verifier_result:
+                v_score = verifier_result.get('score', 0)
+                if not primary_result:
+                    return verifier_result
+                
+                # 综合决策
+                if abs(score - v_score) > 35:
+                    # 分歧过大时，如果 Qwen 认为很好(>80)，Gemini 认为很差(0)，尝试取中间偏保守
+                    if v_score > 80 and score == 0:
+                        final_score = (v_score + score) // 2 
+                        print(f"   📢  分歧巨大！Gemini判死，Qwen力挺。取折中方案: {final_score}")
                     else:
-                        final_score = (score + verifier_score) // 2
-                    
-                    primary_result['score'] = final_score
-                    primary_result['analysis'] = f"【综合决策】原判定:{primary_result['analysis']} \n 【复核意见】:{verifier_result['analysis']}"
-            return primary_result
+                        final_score = min(score, v_score)
+                        print(f"   🚨  审计爆出严重分歧！Flash: {score}, Qwen: {v_score}。取低分 {final_score}")
+                else:
+                    final_score = (score + v_score) // 2
+                
+                primary_result['score'] = final_score
+                primary_result['analysis'] = f"【综合决策】原判定:{primary_result['analysis']} \n 【复核意见】:{verifier_result['analysis']}"
 
-        # 【阶段三：回退保底】若 Gemini 挂了而 Qwen 活着
-        if not primary_result and self.qwen_available:
-            print("-> Gemini 不可用或返回为空，全量回退至备用模型...")
-            return self.call_qwen_api(images, signal_type)
-            
         if not primary_result:
             return self._return_error("全部模型调用失败")
         return primary_result

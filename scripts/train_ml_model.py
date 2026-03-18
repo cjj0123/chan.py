@@ -30,6 +30,8 @@ def run_training_pipeline(market="HK", limit=20, tune=False):
     market_upper = market.upper()
     if market_upper == 'A':
         watchlist = [c for c in all_codes if c.startswith('SH.') or c.startswith('SZ.')]
+    elif market_upper == 'GLOBAL':
+        watchlist = all_codes
     else:
         watchlist = [c for c in all_codes if c.startswith(market_upper + ".")]
     

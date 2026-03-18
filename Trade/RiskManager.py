@@ -178,7 +178,8 @@ class RiskManager:
                              signal_score: int, risk_factor: float = 1.0, 
                              atr: Optional[float] = None, atr_multiplier: float = 2.0,
                              total_assets: float = 0.0,
-                             lot_size: Optional[int] = None) -> int:
+                             lot_size: Optional[int] = None,
+                             ml_prob: Optional[float] = None) -> int:
         """
         计算建议的仓位大小
         
@@ -214,8 +215,19 @@ class RiskManager:
             # 基础额度使用总资产计算（如果未提供，退回到可用资金）
             base_capital = total_assets if total_assets > 0 else available_funds
             
+            # Phase 7: 引入凯利公式 (Kelly Criterion) 动态调节
+            # 如果提供了 ML 胜率 p，计算一个调节因子 (假设盈亏比 b=2)
+            kelly_factor = 1.0
+            if ml_prob is not None:
+                p = max(0.01, ml_prob)
+                b = 2.0
+                f_star = p - (1.0 - p) / b
+                # 归一化：以 0.5 胜率为 1.0 倍基准，限制范围 [0.5, 1.5]
+                kelly_factor = max(0.5, min(1.5, f_star / 0.25)) 
+                logger.debug(f"🔍 Kelly 调节 - {code}: p={p:.2f}, factor={kelly_factor:.2f}")
+
             # 计算最大投入金额 (如 20% * 100万元 = 20万)
-            max_investment = base_capital * self.max_position_ratio * score_factor / risk_factor
+            max_investment = base_capital * self.max_position_ratio * score_factor * kelly_factor / risk_factor
             
             # 获取手数，优先使用参数传入的
             if lot_size is None or lot_size <= 0:
@@ -223,7 +235,7 @@ class RiskManager:
             
             if atr and atr > 0:
                 # 每笔交易最大可承受亏损额度 = 总资产 * 自定义的风险承受度 (如总资产2%)
-                max_loss_amount = base_capital * 0.02 * score_factor
+                max_loss_amount = base_capital * 0.02 * score_factor * kelly_factor
                 stop_distance = atr * atr_multiplier
                 max_shares = int(max_loss_amount / stop_distance)
                 
