@@ -81,6 +81,16 @@ class FutuUSTradingController(BaseUSTradingController):
             if ret == RET_OK:
                 order_id = data.iloc[0]['order_id']
                 self.log_message.emit(f"🚀 [美股-Futu] 限价单提交成功: {code} {action} {qty} @ ${limit_price:.2f} (ID: {order_id})")
+                
+                # 记录交易
+                self._record_trade_to_db(code, action, qty, price, **kwargs)
+                # 启动订单跟踪
+                import threading
+                threading.Thread(
+                    target=self._track_order_status,
+                    args=(order_id, code, action, qty, limit_price, "FUTU"),
+                    daemon=True
+                ).start()
                 return True
             else:
                 self.log_message.emit(f"❌ [美股-Futu] 下单失败: {data}")

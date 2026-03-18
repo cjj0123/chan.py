@@ -303,7 +303,7 @@ class BaseUSTradingController(QObject):
                             self.log_message.emit(f"🔄 [美股] 发起连接 ({self.host}:{self.port}, ID:{target_client_id})...")
                             await asyncio.wait_for(self.ib.connectAsync(self.host, self.port, clientId=target_client_id), timeout=12)
                             self.log_message.emit(f"🔌 [美股] IB 连接成功 (ID:{target_client_id})")
-                            self.ib.reqAccountUpdates(True)
+                            self.ib.reqAccountUpdates() # 修复 reqAccountUpdates 的传参
                             # 异步进行仓位风控初始化 (方案丙)
                             asyncio.create_task(self._initialize_position_trackers())
                         except asyncio.TimeoutError:
@@ -1347,21 +1347,37 @@ class BaseUSTradingController(QObject):
             start_time = (now_t - timedelta(days=20)).strftime("%Y-%m-%d")
             
             local_chan_config = CHAN_CONFIG.copy()
+            # 💡 [数据源自适应] IB 模式用 IB 查 K线，否则用 SCHWAB / FUTU
+            try:
+                from Common.CEnum import DATA_SRC
+                if self.venue == "IB":
+                    d_src = DATA_SRC.IB
+                elif self.venue == "FUTU":
+                    d_src = DATA_SRC.FUTU
+                else:
+                    d_src = DATA_SRC.SCHWAB
+            except:
+                d_src = DATA_SRC.SCHWAB
+
             chan = CChan(
                 code=code,
                 begin_time=start_time,
                 end_time=end_time,
-                data_src=DATA_SRC.SCHWAB, 
+                data_src=d_src, 
                 lv_list=[KL_TYPE.K_30M],
-                config=CChanConfig(local_chan_config)
+                config=CChanConfig(local_chan_config),
+                autype=1 # 默认前复权
             )
             
             if chan[0]:
                 kl_list = list(chan[0].klu_iter())
-                if len(kl_list) > 0:
-                    close_prices = [k.close for k in kl_list]
-                    high_prices = [k.high for k in kl_list]
-                    low_prices = [k.low for k in kl_list]
+                if len(kl_list) == 0:
+                    self.log_message.emit(f"⚠️ {code} 历史 K线数据为空，无法初始化 ATR")
+                    return
+                    
+                close_prices = [k.close for k in kl_list]
+                high_prices = [k.high for k in kl_list]
+                low_prices = [k.low for k in kl_list]
                 
                 tr_list = []
                 for i in range(1, len(close_prices)):
@@ -1370,6 +1386,7 @@ class BaseUSTradingController(QObject):
                     lc = abs(low_prices[i] - close_prices[i-1])
                     tr_list.append(max(hl, hc, lc))
                 
+                # 安全均值
                 atr_val = sum(tr_list[-10:]) / 10 if len(tr_list) >= 10 else (current * 0.02)
                 
                 self.position_trackers[code] = {
@@ -1384,9 +1401,9 @@ class BaseUSTradingController(QObject):
 
     async def _initialize_position_trackers(self):
         """为现有持仓初始化追踪止损器 (方案丙)"""
-        self.log_message.emit("🛡️ 正在为当前美股持仓初始化风险监控...")
-        await asyncio.sleep(3)  # ⏳ 给 3 秒缓冲时间，让 IB 充分同步底层 positions 缓存
         try:
+            self.log_message.emit("🛡️ 正在为当前美股持仓拉取快照并初始化风险监控...")
+            await asyncio.sleep(3)  # ⏳ 给 3 秒缓冲时间，让 IB 充分同步底层 positions 缓存
             available, total, positions = await self.get_account_assets_async()
             
             # --- 💡 [仓位校准] 遍历当前持仓，挂载/更新止损监控 ---
@@ -1411,12 +1428,20 @@ class BaseUSTradingController(QObject):
 
             # 📊 [增强逻辑] 初始化完毕后，自动向面板汇总报告全部监控清单
             if self.position_trackers:
-                 summary_lines = ["🛡️ **[美股持仓风控监控中]**"]
-                 for code, tr in self.position_trackers.items():
-                     summary_lines.append(f" 📍 **{code}**: 成本价=${tr['entry_price']:.2f} | 止损ATR=${tr['atr']:.3f}")
-                 self.log_message.emit("\n".join(summary_lines))
+                summary_lines = ["🛡️ **[美股持仓风控监控中]**"]
+                for code, tr in self.position_trackers.items():
+                    summary_lines.append(f"   • {code}: 成本价 ${tr['entry_price']:.2f}, 当前最高价 ${tr['highest_price']:.2f}, ATR ${tr['atr']:.3f}/股")
+                self.log_message.emit("\n".join(summary_lines))
+            else:
+                self.log_message.emit("🛡️ 当前账户无活跃美股持仓，ATR 止损监控模块暂歇。")
+                
+            # 自动查询资金以刷新 GUI
+            self.cmd_queue.put(('QUERY_FUNDS', None))
+                
         except Exception as e:
-            print(f"初始化持仓风控失败: {e}")
+            self.log_message.emit(f"🚨 [美股] ATR/持仓监控初始化引发致命异常: {e}")
+            import traceback
+            print(traceback.format_exc())
 
     async def _check_trailing_stops(self):
         """活性持仓止损检查算法 (方案丙) - 异步高频安全哨兵"""

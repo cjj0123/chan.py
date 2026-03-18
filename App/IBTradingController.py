@@ -109,6 +109,13 @@ class IBTradingController(BaseUSTradingController):
             
             # 记录交易
             self._record_trade_to_db(code, action, qty, price, **kwargs)
+            # 启动订单跟踪
+            import threading
+            threading.Thread(
+                target=self._track_order_status,
+                args=(None, code, action, qty, limit_price, "IB", trade),
+                daemon=True
+            ).start()
             return True
 
         except Exception as e:

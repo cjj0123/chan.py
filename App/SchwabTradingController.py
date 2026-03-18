@@ -95,6 +95,8 @@ class SchwabTradingController(BaseUSTradingController):
 
             if resp.status_code in (200, 201):
                 self.log_message.emit(f"🚀 [美股-Schwab] 限价单提交成功: {symbol} {action} {qty} @ ${limit_price:.2f}")
+                # 记录交易
+                self._record_trade_to_db(code, action, qty, price, **kwargs)
                 return True
             else:
                 self.log_message.emit(f"❌ [美股-Schwab] 下单失败: {resp.status_code} {resp.text}")
