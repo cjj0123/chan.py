@@ -13,20 +13,21 @@ class FutuUSTradingController(BaseUSTradingController):
     """
     def __init__(self, us_watchlist_group="美股", discord_bot=None):
         super().__init__(venue="FUTU", us_watchlist_group=us_watchlist_group, discord_bot=discord_bot)
-        # 💡 [业务对齐] Futu 通道强制降级为模拟盘
-        self.trd_env = TrdEnv.SIMULATE
+        # 💡 [业务对齐] 读取实盘配置
+        from config import TRADING_CONFIG
+        is_dry_run = TRADING_CONFIG.get('us_dry_run', True)
+        self.trd_env = TrdEnv.SIMULATE if is_dry_run else TrdEnv.REAL
 
     async def get_account_assets_async(self) -> Tuple[float, float, list]:
         """异步获取账户资产 - 纯净 Futu 通道"""
         try:
             # 1. 自动探查账户环境
             acc_id = 0
-            actual_env = 'SIMULATE' # 强行锁定
+            actual_env_str = 'SIMULATE' if self.trd_env == TrdEnv.SIMULATE else 'REAL'
             ret_list, account_list = self.trd_ctx.get_acc_list()
             
             if ret_list == RET_OK and not account_list.empty:
-                target_env_str = 'SIMULATE'
-                matched = account_list[account_list['trd_env'] == target_env_str]
+                matched = account_list[account_list['trd_env'] == actual_env_str]
                 if not matched.empty:
                     row = matched.iloc[0]
                 else:
@@ -34,7 +35,7 @@ class FutuUSTradingController(BaseUSTradingController):
                 acc_id = row['acc_id']
 
             # 2. 查询账户资金
-            ret, data = self.trd_ctx.accinfo_query(acc_id=acc_id, trd_env=actual_env)
+            ret, data = self.trd_ctx.accinfo_query(acc_id=acc_id, trd_env=self.trd_env)
             available, total = 0.0, 0.0
             if ret == RET_OK and not data.empty:
                 available = float(data.iloc[0]['cash'])
@@ -42,7 +43,7 @@ class FutuUSTradingController(BaseUSTradingController):
             
             # 3. 查询持仓
             positions = []
-            ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=acc_id, trd_env=actual_env)
+            ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=acc_id, trd_env=self.trd_env)
             if ret_pos == RET_OK and not pos_data.empty:
                 for _, row in pos_data.iterrows():
                     qty = int(row['qty'])
