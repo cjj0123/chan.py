@@ -80,12 +80,16 @@ from Common.StockUtils import get_futu_stock_name, get_futu_watchlist_stocks, ge
 from App.ScannerThreads import ScanThread, SingleAnalysisThread, UpdateDatabaseThread, RepairSingleStockThread
 try:
     from App.HKTradingController import HKTradingController
-    from App.MonitorController import MarketMonitorController
-    from App.USTradingController import USTradingController
 except ImportError:
     HKTradingController = None
+
+try:
+    from App.MonitorController import MarketMonitorController
+except ImportError:
     MarketMonitorController = None
-    USTradingController = None
+
+except ImportError:
+    pass # 🗂️ 异步控制器按需在各自的 toggle 方法中局部导入，避免循环引用
 
 from App.BacktestTab import BacktestTab
 
@@ -98,6 +102,60 @@ class TraderGUI(QMainWindow):
         # --- Main Layout ---
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
+        self.apply_styles()
+
+    def apply_styles(self):
+        """应用现代化的 QSS 样式表"""
+        self.setStyleSheet("""
+            /* 全局文字颜色保障 */
+            QWidget { color: #202124; }
+            
+            QMainWindow { background-color: #f0f2f5; }
+            QTabWidget::pane { border: 1px solid #cfd8dc; border-top: 0; background-color: #ffffff; border-radius: 4px; }
+            QTabBar::tab { 
+                background: #e1e4e8; padding: 10px 20px; border-top-left-radius: 4px; border-top-right-radius: 4px;
+                margin-right: 2px; color: #586069; 
+            }
+            QTabBar::tab:selected { background: #ffffff; color: #007aff; font-weight: bold; border-bottom: 2px solid #007aff; }
+            
+            QGroupBox { 
+                border: 1px solid #cfd8dc; border-radius: 6px; 
+                margin-top: 1.2em; font-weight: bold; background-color: #ffffff; color: #202124;
+            }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; color: #1a73e8; }
+            
+            QLabel { color: #202124; }
+            
+            QPushButton { 
+                background-color: #1a73e8; color: #ffffff; border-radius: 4px; 
+                padding: 6px 12px; font-weight: 500; border: none;
+            }
+            QPushButton:hover { background-color: #1557b0; }
+            QPushButton:pressed { background-color: #0d47a1; }
+            QPushButton:disabled { background-color: #bdc1c6; color: #ffffff; }
+            
+            QLineEdit, QComboBox, QDateTimeEdit { 
+                border: 1px solid #dadce0; border-radius: 4px; padding: 4px; background: #ffffff; color: #202124;
+            }
+            
+            QTableWidget { border: none; alternate-background-color: #f8f9fa; selection-background-color: #e8f0fe; color: #202124; }
+            QHeaderView::section { background-color: #f1f3f4; padding: 6px; border: none; font-weight: bold; color: #202124; }
+            
+            QTextEdit { 
+                border: 1px solid #dadce0; border-radius: 4px; background-color: #fafafa; 
+                color: #202124; font-family: 'Consolas', 'Monaco', monospace; 
+            }
+            
+            /* 弹出框与对话框样式优化 */
+            QMessageBox, QDialog { background-color: #ffffff; }
+            QMessageBox QLabel { color: #202124; font-size: 13px; }
+            QMessageBox QPushButton { min-width: 80px; }
+            
+            QToolTip { 
+                background-color: #323232; color: #ffffff; 
+                border: 1px solid #454545; border-radius: 4px; padding: 4px;
+            }
+        """)
         self.layout = QVBoxLayout(self.central_widget)
 
         # --- Tab Widget ---
@@ -126,6 +184,7 @@ class TraderGUI(QMainWindow):
         self.schwab_trading_controller = None
         self.market_monitor_controller = None
         self.discord_bot = None
+        self._cn_trading_enabled = False
         # 确保按钮在界面显示后是可见的
         self.ensure_buttons_visible()
         
@@ -558,28 +617,37 @@ class TraderGUI(QMainWindow):
         
         futu_us_group.setLayout(futu_us_layout)
         
-        # 组装美股列
-        us_column.addWidget(us_group)
-        us_column.addWidget(schwab_group)
-        us_column.addWidget(futu_us_group)
-        
-        # 将港股和美股模块并排显示
-        market_layout = QHBoxLayout()
-        market_layout.addWidget(hk_group)
-        market_layout.addLayout(us_column)
-        layout.addLayout(market_layout)
-
         # --- 多市场监控模块 (A股市场监控) ---
         monitor_group = QGroupBox("🔍 A股市场监控")
         monitor_main_layout = QVBoxLayout()
         
         # 监控控制行
         monitor_ctrl_layout = QHBoxLayout()
-        self.monitor_status = QLabel("监控状态: [未启动]")
+        self.monitor_status = QLabel("⚪ 监控状态: [停止]")
+        self.monitor_status.setStyleSheet("font-weight: bold; color: #5f6368;")
         self.monitor_btn = QPushButton("开启监控")
+        self.monitor_btn.setToolTip("开启缠论全自动监控扫描 (A股/美股)")
         self.monitor_btn.clicked.connect(self.toggle_market_monitor)
         monitor_ctrl_layout.addWidget(self.monitor_status)
         monitor_ctrl_layout.addWidget(self.monitor_btn)
+        
+        # --- 新增: A股自动交易开关 ---
+        self.cn_trade_btn = QPushButton("开启A股交易 (Sim)")
+        self.cn_trade_btn.setToolTip("启用后，监控到信号将自动在Futu CN模拟盘下单")
+        self.cn_trade_btn.setFixedWidth(120)
+        self.cn_trade_btn.clicked.connect(self.toggle_cn_trading)
+        monitor_ctrl_layout.addWidget(self.cn_trade_btn)
+        
+        self.cn_funds_btn = QPushButton("刷新资金")
+        self.cn_funds_btn.setFixedWidth(80)
+        self.cn_funds_btn.clicked.connect(self.on_cn_query_funds_clicked)
+        monitor_ctrl_layout.addWidget(self.cn_funds_btn)
+
+        self.cn_liquidate_btn = QPushButton("一键清仓")
+        self.cn_liquidate_btn.setFixedWidth(80)
+        self.cn_liquidate_btn.setStyleSheet("color: red; font-weight: bold;")
+        self.cn_liquidate_btn.clicked.connect(self.on_cn_liquidate_clicked)
+        monitor_ctrl_layout.addWidget(self.cn_liquidate_btn)
         
         self.monitor_watchlist_combo = QComboBox()
         # 复用已加载的分组
@@ -590,7 +658,6 @@ class TraderGUI(QMainWindow):
         
         monitor_ctrl_layout.addWidget(QLabel(" 📊 监控分组:"))
         monitor_ctrl_layout.addWidget(self.monitor_watchlist_combo)
-        
         
         self.monitor_scan_btn = QPushButton("立刻执行扫描")
         self.monitor_scan_btn.clicked.connect(self.on_monitor_force_scan_clicked)
@@ -607,8 +674,25 @@ class TraderGUI(QMainWindow):
         monitor_main_layout.addWidget(self.monitor_log_text)
         
         monitor_group.setLayout(monitor_main_layout)
-        layout.addWidget(monitor_group)
 
+        # 创建左右两列主布局
+        main_config_layout = QHBoxLayout()
+        
+        # --- 第一列：港股 & A股 ---
+        left_column = QVBoxLayout()
+        left_column.addWidget(hk_group)
+        left_column.addWidget(monitor_group)
+        
+        # --- 第二列：美股 (IB / Schwab / Futu) ---
+        right_column = QVBoxLayout()
+        right_column.addWidget(us_group)
+        right_column.addWidget(schwab_group)
+        right_column.addWidget(futu_us_group)
+        
+        main_config_layout.addLayout(left_column, 1)
+        main_config_layout.addLayout(right_column, 1)
+        
+        layout.addLayout(main_config_layout)
         layout.addStretch()
         
     def append_auto_log(self, text):
@@ -619,24 +703,24 @@ class TraderGUI(QMainWindow):
 
     def append_monitor_log(self, text):
         """添加日志到 A/US 监控专属日志区域"""
-        import datetime
-        now = datetime.datetime.now().strftime("%H:%M:%S")
+        from datetime import datetime as _dt
+        now = _dt.now().strftime("%H:%M:%S")
         self.monitor_log_text.append(f"[{now}] {text}")
 
     def toggle_market_monitor(self):
         """切换多市场监控状态"""
         if self.market_monitor_controller is None:
+            global MarketMonitorController
+            if MarketMonitorController is None:
+                try:
+                    from App.MonitorController import MarketMonitorController as MC
+                    MarketMonitorController = MC
+                except ImportError as e:
+                    self.append_monitor_log(f"❌ 无法加载监控模块: {e}")
+                    return
             try:
                 # 使用 A股专用分组和附加分组
                 group_name = self.monitor_watchlist_combo.currentText()
-                
-                if group_name == "加载中..." or group_name == "":
-                    self.append_monitor_log("❌ 启动监控失败: 未选择自选股分组")
-                    return
-                
-                if MarketMonitorController is None:
-                    self.append_monitor_log("❌ 无法导入 MarketMonitorController")
-                    return
 
                 # 共享 Discord Bot
                 from App.DiscordBot import DiscordBot
@@ -644,6 +728,10 @@ class TraderGUI(QMainWindow):
                 
                 self.market_monitor_controller = MarketMonitorController(watchlist_group=group_name, discord_bot=bot)
                 self.market_monitor_controller.log_message.connect(self.append_monitor_log)
+                self.market_monitor_controller.funds_updated.connect(self.update_cn_funds_display)
+                
+                # 初始状态
+                self.market_monitor_controller.trading_enabled = self._cn_trading_enabled
                 
                 import threading
                 def run_monitor():
@@ -652,8 +740,10 @@ class TraderGUI(QMainWindow):
                 self.monitor_thread = threading.Thread(target=run_monitor, daemon=True)
                 self.monitor_thread.start()
                 
-                self.monitor_status.setText(f"监控: [运行中 - {group_name}]")
+                self.monitor_status.setText(f"🟢 监控: [运行中 - {group_name}]")
+                self.monitor_status.setStyleSheet("font-weight: bold; color: #34a853;")
                 self.monitor_btn.setText("停止监控")
+                self.monitor_btn.setStyleSheet("background-color: #ea4335;")
                 self.append_monitor_log(f"✅ 多市场监控已启动，监听分组: {group_name} (避让逻辑已激活)。")
             except Exception as e:
                 self.append_monitor_log(f"❌ 启动监控失败: {e}")
@@ -663,9 +753,11 @@ class TraderGUI(QMainWindow):
                 self.discord_bot.controller = None
             self.market_monitor_controller.stop()
             self.market_monitor_controller = None
-            self.monitor_status.setText("监控状态: [已停止]")
+            self.monitor_status.setText("🔴 监控: [已停止]")
+            self.monitor_status.setStyleSheet("font-weight: bold; color: #ea4335;")
             self.monitor_btn.setText("开启监控")
-            self.append_monitor_log("ℹ️ 多市场监控已停止")
+            self.monitor_btn.setStyleSheet("background-color: #1a73e8;")
+            self.append_monitor_log("🛑 多市场监控已停止。")
 
     def toggle_futu_monitor(self):
         """切换富途实时监控状态"""
@@ -713,9 +805,14 @@ class TraderGUI(QMainWindow):
     def toggle_hk_trading(self):
         """切换港股自动交易状态"""
         if self.hk_trading_controller is None:
+            global HKTradingController
             if HKTradingController is None:
-                self.append_auto_log("❌ 无法导入 HKTradingController，可能缺少依赖")
-                return
+                try:
+                    from App.HKTradingController import HKTradingController as HC
+                    HKTradingController = HC
+                except ImportError as e:
+                    self.append_auto_log(f"❌ 无法加载港股交易模块: {e}")
+                    return
             try:
                 # 从港股专用下拉框获取分组名
                 group_name = self.hk_watchlist_combo.currentText()
@@ -807,9 +904,12 @@ class TraderGUI(QMainWindow):
     def toggle_us_trading(self):
         """切换美股自动交易状态 (IB)"""
         if self.us_trading_controller is None:
-            if USTradingController is None:
-                self.append_us_auto_log("❌ 无法导入 USTradingController，可能缺少依赖")
+            try:
+                from App.IBTradingController import IBTradingController
+            except ImportError as e:
+                self.append_us_auto_log(f"❌ 无法加载 IB 交易模块: {e}")
                 return
+
             try:
                 # 使用美股专用分组
                 group_name = self.us_watchlist_combo.currentText()
@@ -817,7 +917,7 @@ class TraderGUI(QMainWindow):
                 # 共享 Discord Bot
                 bot = self._get_shared_discord_bot(controller=None)
 
-                self.us_trading_controller = USTradingController(us_watchlist_group=group_name, discord_bot=bot)
+                self.us_trading_controller = IBTradingController(us_watchlist_group=group_name, discord_bot=bot)
                 self.us_trading_controller.log_message.connect(self.append_us_auto_log)
                 self.us_trading_controller.funds_updated.connect(self.update_us_funds_display)
                 
@@ -901,11 +1001,13 @@ class TraderGUI(QMainWindow):
         
         if self.futu_us_trading_controller is None:
             try:
+                from App.FutuUSTradingController import FutuUSTradingController
+                
                 # 使用选中的美股分组
                 group_name = self.futu_us_watchlist_combo.currentText()
                 bot = self._get_shared_discord_bot(controller=None)
 
-                self.futu_us_trading_controller = USTradingController(us_watchlist_group=group_name, discord_bot=bot, venue="FUTU")
+                self.futu_us_trading_controller = FutuUSTradingController(us_watchlist_group=group_name, discord_bot=bot)
                 self.futu_us_trading_controller.log_message.connect(self.append_futu_us_auto_log)
                 self.futu_us_trading_controller.funds_updated.connect(self.update_futu_us_funds_display)
                 
@@ -985,16 +1087,14 @@ class TraderGUI(QMainWindow):
     def toggle_schwab_trading(self):
         """切换 Schwab 自动交易状态"""
         if self.schwab_trading_controller is None:
-            if USTradingController is None:
-                self.append_schwab_auto_log("❌ 无法导入 USTradingController，可能缺少依赖")
-                return
             try:
+                from App.SchwabTradingController import SchwabTradingController
                 group_name = self.schwab_watchlist_combo.currentText()
                 
                 bot = self._get_shared_discord_bot(controller=None)
 
-                self.schwab_trading_controller = USTradingController(
-                    us_watchlist_group=group_name, discord_bot=bot, venue="SCHWAB"
+                self.schwab_trading_controller = SchwabTradingController(
+                    us_watchlist_group=group_name, discord_bot=bot
                 )
                 self.schwab_trading_controller.log_message.connect(self.append_schwab_auto_log)
                 self.schwab_trading_controller.funds_updated.connect(self.update_schwab_funds_display)
@@ -1062,6 +1162,58 @@ class TraderGUI(QMainWindow):
             self.schwab_trading_controller.close_all_positions()
 
             
+    # --- A股自动交易相关方法 (Phase 1) ---
+
+    def toggle_cn_trading(self):
+        """联动切换 A 股自动交易模式"""
+        # 检查控制器是否存在且属性是否可写
+        if not hasattr(self, 'market_monitor_controller') or self.market_monitor_controller is None:
+            QMessageBox.warning(self, "操作提示", "请先点击【开启监控】启动扫描进程，再开启自动交易。")
+            return
+            
+        if not self._cn_trading_enabled:
+            # 开启
+            self.market_monitor_controller.trading_enabled = True
+            self._cn_trading_enabled = True
+            self.cn_trade_btn.setText("停止A股交易")
+            self.cn_trade_btn.setStyleSheet("background-color: #34a853; color: white; font-weight: bold;")
+            self.append_monitor_log("🟢 A股 Futu 模拟盘自动交易已【启用】。监测到信号后将自动下单。")
+            # 初始刷新一次资金
+            self.on_cn_query_funds_clicked()
+        else:
+            # 关闭
+            self.market_monitor_controller.trading_enabled = False
+            self._cn_trading_enabled = False
+            self.cn_trade_btn.setText("开启A股交易 (Sim)")
+            self.cn_trade_btn.setStyleSheet("")
+            self.append_monitor_log("⚪ A股 自动交易已【停用】。")
+
+    def on_cn_query_funds_clicked(self):
+        """刷新 A 股模拟盘资金"""
+        if self.market_monitor_controller and self._cn_trading_enabled:
+            self.market_monitor_controller.query_account_funds()
+        else:
+            self.append_monitor_log("⚠️ 请先开启 A股 自动交易模式。")
+
+    def on_cn_liquidate_clicked(self):
+        """A 股一键清仓"""
+        if self.market_monitor_controller and self._cn_trading_enabled:
+            reply = QMessageBox.critical(self, '高危操作', '确定要卖出所有 A股 模拟盘可卖持仓吗？', 
+                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if reply == QMessageBox.StandardButton.Yes:
+                self.market_monitor_controller.close_all_positions()
+        else:
+            self.append_monitor_log("⚠️ 请先开启 A股 自动交易模式。")
+
+    def update_cn_funds_display(self, available, total, positions):
+        """更新 A 股资金持仓显示到监控日志"""
+        self.append_monitor_log(f"💰 [A股模拟盘] 可用: {available:,.2f} | 总资产: {total:,.2f}")
+        if positions:
+            pos_msg = "🏛️ [当前持仓]:"
+            for p in positions:
+                pos_msg += f"\n   • {p['symbol']}: {p['qty']} 股, 市值 {p['mkt_value']:.2f}, 可卖 {p['can_sell_qty']}"
+            self.append_monitor_log(pos_msg)
+
     def on_monitor_force_scan_clicked(self):
         """异步/定时监控：手动触发一次扫描"""
         if self.market_monitor_controller is None or getattr(self.market_monitor_controller, '_is_running', False) == False:
