@@ -141,6 +141,7 @@ class HKTradingController(QObject):
         
         # 记录持仓的追踪止损状态: { 'HK.00700': {'highest_price': 300.5, 'atr': 5.2, 'atr_multiplier': 2.0} }
         self.position_trackers = {}
+        self.structure_barrier = {}  # 🛡️ [风控锁区 Phase 8] 用于防止同一大下行笔延续段多次止损重复下单损耗
         
         # --- ML Validation ---
         self.signal_validator = SignalValidator()
@@ -283,15 +284,20 @@ class HKTradingController(QObject):
         Returns:
             包含分析结果的字典，如果失败则返回 None
         """
+        # [风控加固 Phase 8] 拦截模块平移至下方 K线 chan[0].zs_list 判定中提高判定精度
+
         try:
             # 获取30分钟和5分钟K线数据（分别获取，使用不同的时间范围）
             end_time = datetime.now()
             
-            # 标准化结束时间到最近的5分钟边界，以提高缓存命中率
-            # 例如：10:34:23 -> 10:35:00
-            minutes = (end_time.minute // 5) * 5
-            end_time_rounded = end_time.replace(minute=minutes, second=0, microsecond=0)
-            end_time_str = end_time_rounded.strftime("%Y-%m-%d %H:%M:%S")
+            # ⚓ 对应 30M 和 5M 周期自适应对账，多端共享绝不动摇
+            minutes_30m = (end_time.minute // 30) * 30
+            end_time_30m = end_time.replace(minute=minutes_30m, second=0, microsecond=0)
+            end_time_30m_str = end_time_30m.strftime("%Y-%m-%d %H:%M:%S")
+
+            minutes_5m = (end_time.minute // 5) * 5
+            end_time_5m = end_time.replace(minute=minutes_5m, second=0, microsecond=0)
+            end_time_5m_str = end_time_5m.strftime("%Y-%m-%d %H:%M:%S")
             
             # 30M数据使用30天范围（历史数据充足）
             start_time_30m = end_time - timedelta(days=30)
@@ -313,7 +319,7 @@ class HKTradingController(QObject):
                     chan_30m = CChan(
                         code=code,
                         begin_time=start_time_30m_str,
-                        end_time=end_time_str,
+                        end_time=end_time_30m_str,
                         data_src=data_src,
                         lv_list=[KL_TYPE.K_30M],
                         config=self.chan_config
@@ -341,14 +347,48 @@ class HKTradingController(QObject):
             if not latest_bsps:
                 return None  # 无信号，不再继续获取 5M 数据
             
-            # ====== 发现买卖点，按需获取 5M 数据（用于后续图表生成） ======
+            # 🛡️ [风控加固 Phase 8] 结构锁区检查 (防下探拉锯)
+            if hasattr(self, 'structure_barrier') and code in self.structure_barrier:
+                barrier_ts = self.structure_barrier[code]['lock_time_ts']
+                has_new_pivot = False
+                if hasattr(chan_30m[0], 'zs_list'):
+                    for zs in chan_30m[0].zs_list:
+                        if zs.begin.time.ts > barrier_ts:
+                            has_new_pivot = True
+                            break
+                if not has_new_pivot:
+                    return None
+                else:
+                    self.log_message.emit(f"🔓 [HK-风控] {code} 脱离旧止损笔段，发现新中枢结构，解锁准入。")
+                    del self.structure_barrier[code]
+            
+            bsp = latest_bsps[0]
+            bsp_type = bsp.type2str()
+            is_buy = bsp.is_buy  # 信任 CChan 的 is_buy 判断
+            price = bsp.klu.close
+            
+            # ====== 时间过滤【优化前置】：只交易最近配置小时内的信号 ======
+            bsp_ctime = bsp.klu.time
+            bsp_time = datetime(bsp_ctime.year, bsp_ctime.month, bsp_ctime.day,
+                               bsp_ctime.hour, bsp_ctime.minute, bsp_ctime.second)
+            
+            now = datetime.now()
+            trading_hours = self.calculate_trading_hours(bsp_time, now)
+            
+            if trading_hours > TRADING_CONFIG['max_signal_age_hours']:
+                # 超时信号，直接丢弃，不加载5M
+                return None
+            
+            self.log_message.emit(f"{code} {bsp_type} {'买入' if is_buy else '卖出'}信号在有效窗口内 ({trading_hours:.1f}小时前)，按需加载 5M")
+
+            # ====== 条件达标，按需获取 5M 数据（用于后续图表生成） ======
             chan_5m = None
             try:
                 with self.futu_api_lock:
                     chan_5m = CChan(
                         code=code,
                         begin_time=start_time_5m_str,
-                        end_time=end_time_str,
+                        end_time=end_time_5m_str,
                         data_src=DATA_SRC.FUTU,
                         lv_list=[KL_TYPE.K_5M],
                         config=self.chan_config
@@ -363,33 +403,6 @@ class HKTradingController(QObject):
                         chan_5m = None
             except Exception as e:
                 self.log_message.emit(f"{code} 获取5M次级别数据失败 (非致命): {e}")
-            
-            # 从30M级别获取最新的买卖点（主分析基于30M）
-            latest_bsps = chan_30m.get_latest_bsp(idx=0, number=1)
-            if not latest_bsps:
-                # self.log_message.emit(f"{code} 未发现买卖点")
-                return None
-            
-            bsp = latest_bsps[0]
-            bsp_type = bsp.type2str()
-            is_buy = bsp.is_buy  # 信任 CChan 的 is_buy 判断
-            price = bsp.klu.close
-            
-            # ====== 时间过滤：只交易最近4个交易小时内的信号 ======
-            # 将CTime转换为datetime
-            bsp_ctime = bsp.klu.time
-            bsp_time = datetime(bsp_ctime.year, bsp_ctime.month, bsp_ctime.day,
-                               bsp_ctime.hour, bsp_ctime.minute, bsp_ctime.second)
-            
-            now = datetime.now()
-            trading_hours = self.calculate_trading_hours(bsp_time, now)
-            
-            if trading_hours > TRADING_CONFIG['max_signal_age_hours']:
-                self.log_message.emit(f"{code} {bsp_type} {'买入' if is_buy else '卖出'}信号产生于 {bsp_time.strftime('%Y-%m-%d %H:%M')}，"
-                                   f"距今 {trading_hours:.1f} 个交易小时，超过{TRADING_CONFIG['max_signal_age_hours']}小时窗口，跳过")
-                return None
-            
-            self.log_message.emit(f"{code} {bsp_type} {'买入' if is_buy else '卖出'}信号在{TRADING_CONFIG['max_signal_age_hours']}小时窗口内（{trading_hours:.1f}个交易小时前），继续分析")
             
             result = {
                 'code': code,
@@ -719,7 +732,7 @@ class HKTradingController(QObject):
                     OrderStatus.SUBMITTING, 
                     OrderStatus.SUBMITTED, 
                     OrderStatus.WAITING_SUBMIT,
-                    OrderStatus.PART_FILLED
+                    OrderStatus.FILLED_PART
                 ]
                 pending_orders = data[data['status'].isin(pending_states)]
                 
@@ -746,21 +759,55 @@ class HKTradingController(QObject):
         # 1. 撤销当日挂单
         cancelled_count = self.cancel_all_pending_orders()
         
-        # 2. 生成结算报告摘要
+        # 🟢 [风控加固 Phase 9] 优化收盘总帐报告
         pnl_msg = ""
+        report = []
+        report.append("\n================== [港股] 每日收盘结算报告 ==================")
+
+        total_assets = 0
+        available_cash = 0
+        try:
+            # 1. 资产全貌
+            ret_a, acct_data = self.get_account_assets() # Wait, get_account_assets returns (cash, total_assets)
+            if hasattr(self, 'get_account_assets'):
+                 available_cash, total_assets = self.get_account_assets()
+        except:
+             pass
+
+        report.append(f"📊 1. 资产全貌")
+        report.append(f"   • 总资产水位: HKD {total_assets:.2f}")
+        report.append(f"   • 剩余可用资金: HKD {available_cash:.2f}")
+        report.append(f"   • 活跃止损追踪舱: {len(getattr(self, 'position_trackers', {}))} 只标的 ")
+
+        report.append(f"\n📈 2. 今日交易清单 (Filled Trades)")
         try:
             from futu import OrderStatus
-            ret, data = self.trd_ctx.history_order_list_query(trd_env=self.trd_env)
-            if ret == RET_OK and not data.empty:
-                filled = data[data['status'] == OrderStatus.FILLED_ALL]
-                total_filled = len(filled)
-                pnl_msg = f"• 今日成交单数: {total_filled}\n"
-            else:
-                pnl_msg = "• 今日无成交记录。\n"
-        except:
-             pnl_msg = "• 自动盘点盈亏失败。\n"
+            import sqlite3
+            conn = sqlite3.connect(self.db.db_path)
+            cursor = conn.cursor()
+            today_str = datetime.now().strftime('%Y-%m-%d')
+
+            # 查买入单
+            cursor.execute("SELECT code, name, entry_price, quantity FROM live_trades WHERE date(entry_time) = ?", (today_str,))
+            buys = cursor.fetchall()
+            for b in buys:
+                 report.append(f"   • [买入] {b[0]} ({b[1]}) | 成交: HKD {b[2]:.2f} | 数量: {b[3]}股")
+
+            # 查卖出单
+            cursor.execute("SELECT code, exit_price, exit_reason, pnl_pct FROM live_trades WHERE date(exit_time) = ?", (today_str,))
+            sells = cursor.fetchall()
+            for s in sells:
+                 report.append(f"   • [卖出/止损] {s[0]} | 出场: HKD {s[1]:.2f} | 理由: {s[2]} | PnL损耗: {s[3]:.2f}%")
+        except Exception as e_db:
+             report.append(f"   • 获取本地数据库报表异常: {e_db}")
+
+        report.append(f"\n🛑 3. 系统除耗")
+        report.append(f"   • 自动撤销挂单: {cancelled_count} 笔")
+        report.append(f"   • 处于结构止损锁舱数: {len(getattr(self, 'structure_barrier', {}))} 个")
+        report.append("==========================================================")
         
-        pnl_msg += f"• 自动撤销挂单: {cancelled_count} 笔\n"
+        pnl_msg = "\n".join(report)
+        self.log_message.emit(pnl_msg)
         
         # 3. Discord 推送收盘战报表
         if self.discord_bot:
@@ -1167,7 +1214,7 @@ class HKTradingController(QObject):
             if bsp:
                 # 1.1 买入信号 ML 验证
                 if signal.get('is_buy'):
-                    ml_res = self.signal_validator.validate_signal(chan_30m, bsp, threshold=self.ml_threshold)
+                    ml_res = self.signal_validator.validate_signal(chan_30m, bsp, threshold=self.ml_threshold, market_context=getattr(self, 'market_context', {}))
                     prob = ml_res.get('prob', 0)
                     signal['ml_prob'] = prob
                     if prob < self.ml_threshold:
@@ -1175,7 +1222,7 @@ class HKTradingController(QObject):
                         continue
                 # 1.2 卖出信号 ML 验证
                 else:
-                    ml_res = self.signal_validator.validate_signal(chan_30m, bsp, threshold=0.60)
+                    ml_res = self.signal_validator.validate_signal(chan_30m, bsp, threshold=0.60, market_context=getattr(self, 'market_context', {}))
                     prob = ml_res.get('prob', 0)
                     signal['ml_prob'] = prob
                     if prob < 0.60:
@@ -1283,7 +1330,7 @@ class HKTradingController(QObject):
             if bsp:
                 # 1.1 买入信号 ML 验证 (严格阈值)
                 if signal.get('is_buy'):
-                    ml_res = self.signal_validator.validate_signal(chan_30m, bsp, threshold=self.ml_threshold)
+                    ml_res = self.signal_validator.validate_signal(chan_30m, bsp, threshold=self.ml_threshold, market_context=getattr(self, 'market_context', {}))
                     prob = ml_res.get('prob', 0)
                     signal['ml_prob'] = prob
                     
@@ -1294,7 +1341,7 @@ class HKTradingController(QObject):
                         self.log_message.emit(f"🤖 {signal['code']} {bsp_type_display} ML 校验通过 ({prob*100:.1f}%)")
                 # 1.2 卖出信号 ML 验证 (优化 D: 增加 0.4 阈值过滤，防止假卖点)
                 else:
-                    ml_res = self.signal_validator.validate_signal(chan_30m, bsp, threshold=0.60)
+                    ml_res = self.signal_validator.validate_signal(chan_30m, bsp, threshold=0.60, market_context=getattr(self, 'market_context', {}))
                     prob = ml_res.get('prob', 0)
                     signal['ml_prob'] = prob
                     if prob < 0.60:
@@ -1569,7 +1616,13 @@ class HKTradingController(QObject):
         # 简单移动平均计算 ATR
         if not tr_list:
             return 0.0
-        return float(np.mean(tr_list))
+            
+        mean_atr = float(np.mean(tr_list))
+        # 💡 [保底风控] 强制 1.5% 安全垫底限，屏蔽自然点差产生的秒卖
+        current_price = kline_list[-1].close if kline_list else 0
+        if current_price > 0:
+            return max(mean_atr, current_price * 0.015)
+        return mean_atr
 
     def _check_trailing_stops(self):
         """
@@ -1620,6 +1673,12 @@ class HKTradingController(QObject):
                     self.log_message.emit(f"🕒 [HK-风控] {code} 触发时间止损 (持仓 {tracker['bars_held']} 根 K线仍未突破)，离场释放资金。")
                     if self.execute_trade(code, 'SELL', qty, current_price, urgent=True):
                         del self.position_trackers[code]
+                        from Common.CTime import CTime
+                        from datetime import datetime
+                        now = datetime.now()
+                        self.structure_barrier[code] = {
+                            'lock_time_ts': CTime(now.year, now.month, now.day, now.hour, now.minute).ts
+                        }
                         self.risk_manager.record_trade(code, 'SELL', qty, current_price, signal_score=0, pnl=0)
                     continue
 
@@ -1630,14 +1689,21 @@ class HKTradingController(QObject):
                     tracker['trail_active'] = True
                     self.log_message.emit(f"🔓 {code} 已达获利门槛(${current_price:.2f} >= +{atr_profit_threshold}*ATR)，切换为移动止损模式")
                     
+            bsp_type_str = tracker.get('signal_type', '未知')
             if tracker.get('trail_active', False):
                 # 移动止损：最高价回撤 atr_stop_trail * ATR
                 stop_price = tracker['highest_price'] - (atr * atr_stop_trail)
                 stop_type = "移动止损"
             else:
-                # 固定止损：买入价下方 atr_stop_init * ATR
-                stop_price = entry_price - (atr * atr_stop_init)
-                stop_type = "固定止损"
+                # 🛡️ [分档式止损 Phase 8] 1买放大至 1.5x 防穿针
+                current_stop_init = atr_stop_init
+                if "1买" in bsp_type_str:
+                    current_stop_init = 1.5
+                elif "2买" in bsp_type_str or "3买" in bsp_type_str:
+                    current_stop_init = 1.2
+                    
+                stop_price = entry_price - (atr * current_stop_init)
+                stop_type = f"预计止损({current_stop_init:.1f}xATR)"
                 
             if current_price < stop_price:
                 self.log_message.emit(f"🚨 [HK-风控] {code} 触发{stop_type}! 最高价={highest:.2f}, 现价={current_price:.2f}, 止损位={stop_price:.2f}")
@@ -1646,6 +1712,12 @@ class HKTradingController(QObject):
                 if self.execute_trade(code, 'SELL', qty, current_price, urgent=True):
                     self.log_message.emit(f"✅ {code} 止损抛售成功: {qty} 股")
                     del self.position_trackers[code]
+                    from Common.CTime import CTime
+                    from datetime import datetime
+                    now = datetime.now()
+                    self.structure_barrier[code] = {
+                        'lock_time_ts': CTime(now.year, now.month, now.day, now.hour, now.minute).ts
+                    }
                     self.risk_manager.record_trade(code, 'SELL', qty, current_price, signal_score=0, pnl=0)
                 else:
                     self.log_message.emit(f"❌ {code} 止损抛售失败，将在此后循环继续尝试。")
@@ -1657,6 +1729,12 @@ class HKTradingController(QObject):
                  self.log_message.emit(f"⚡ [HK-风控] {code} 触发快速回撤保护(回撤 > 1.0 ATR)，提前止盈。")
                  if self.execute_trade(code, 'SELL', qty, current_price, urgent=True):
                     del self.position_trackers[code]
+                    from Common.CTime import CTime
+                    from datetime import datetime
+                    now = datetime.now()
+                    self.structure_barrier[code] = {
+                        'lock_time_ts': CTime(now.year, now.month, now.day, now.hour, now.minute).ts
+                    }
                     self.risk_manager.record_trade(code, 'SELL', qty, current_price, signal_score=0, pnl=0)
                  continue
 
@@ -1733,8 +1811,9 @@ class HKTradingController(QObject):
                     
                     # 获取数据计算 ATR
                     try:
-                        end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        start_time = (datetime.now() - timedelta(days=15)).strftime("%Y-%m-%d")
+                        now_t = datetime.now()
+                        end_time = now_t.replace(minute=(now_t.minute // 30) * 30, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+                        start_time = (now_t - timedelta(days=15)).strftime("%Y-%m-%d")
                         chan = CChan(
                             code=code,
                             begin_time=start_time,

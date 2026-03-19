@@ -37,6 +37,7 @@ from Common.CTime import CTime
 from KLine.KLine_Unit import CKLine_Unit
 from DataAPI.SQLiteAPI import SQLiteAPI, download_and_save_all_stocks_multi_timeframe, download_and_save_all_stocks_async
 from Trade.db_util import CChanDB
+from Trade.RiskManager import get_risk_manager
 from Plot.PlotDriver import CPlotDriver
 import matplotlib
 matplotlib.use('Agg')
@@ -60,7 +61,7 @@ from DataAPI.SchwabAPI import CSchwabAPI
 from Common.SchwabRateLimiter import get_schwab_limiter
 
 # 导入 Futu US 交易
-from futu import OpenUSTradeContext, TrdMarket, TrdSide, OrderType, RET_OK, TrdEnv
+from futu import OpenSecTradeContext, TrdMarket, TrdSide, OrderType, RET_OK, TrdEnv
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,7 @@ class BaseUSTradingController(QObject):
         self.signal_validator = SignalValidator()
         self.visual_judge = VisualJudge()
         self.db = CChanDB()
+        self.risk_manager = get_risk_manager()
         self.discord_bot = discord_bot or None
         # 💡 [架构解耦] 支持按渠道进行独立参数覆盖：如 TRADING_CONFIG = {"FUTU": {"us_dry_run": True}}
         venue_cfg = TRADING_CONFIG.get(self.venue, {}) if isinstance(TRADING_CONFIG.get(self.venue), dict) else {}
@@ -138,7 +140,8 @@ class BaseUSTradingController(QObject):
              
         # 风险属性：本地活性止损跟踪器 {code: {entry_price, highest_price, atr, trail_active}}
         self.position_trackers = {}
-        self.retry_orders = {}  # 🚨 [补漏专用] 下单异常重试池，防崩溃漏单
+        self.retry_orders = {}             # 🚨 [补漏专用] 下单异常重试池，防崩溃漏单
+        self.structure_barrier = {}        # 🛡️ [风控锁区 Phase 8] 挂载止损隔离舱，防止重复进出损耗
         self._trd_ctx = None
         self._last_close_date = None
 
@@ -146,7 +149,7 @@ class BaseUSTradingController(QObject):
     def trd_ctx(self):
         """延迟初始化 Futu 交易上下文，确保在使用线程上创建"""
         if self._trd_ctx is None:
-            self._trd_ctx = OpenUSTradeContext(host='127.0.0.1', port=11111)
+            self._trd_ctx = OpenSecTradeContext(filter_trdmarket=TrdMarket.US, host='127.0.0.1', port=11111)
         return self._trd_ctx
 
     def _load_notified_signals(self) -> dict:
@@ -340,18 +343,20 @@ class BaseUSTradingController(QObject):
                 if not hasattr(self, '_last_stop_check_time'):
                     self._last_stop_check_time = time.time()
                 elif time.time() - self._last_stop_check_time >= 60: # 60秒一检
-                    await self._check_trailing_stops()
                     self._last_stop_check_time = time.time()
                     
-                    # --- 🚨 [自动促成机制] 对暂存在重试池里的故障单进行全自动二次补救 ---
-                    if getattr(self, 'retry_orders', {}):
-                        for code, data in list(self.retry_orders.items()):
-                            try:
-                                self.log_message.emit(f"🔄 [下单自愈] 正在重推之前异常的订单: {code}")
-                                await self._execute_trade_async(**data)
-                                del self.retry_orders[code]
-                            except Exception as er:
-                                self.log_message.emit(f"⚠️ [下单自愈] {code} 依旧失败: {er}")
+                    if self.is_trading_time():
+                        await self._check_trailing_stops()
+                        
+                        # --- 🚨 [自动促成机制] 对暂存在重试池里的故障单进行全自动二次补救 ---
+                        if getattr(self, 'retry_orders', {}):
+                            for code, data in list(self.retry_orders.items()):
+                                try:
+                                    self.log_message.emit(f"🔄 [下单自愈] 正在重推之前异常的订单: {code}")
+                                    await self._execute_trade_async(**data)
+                                    del self.retry_orders[code]
+                                except Exception as er:
+                                    self.log_message.emit(f"⚠️ [下单自愈] {code} 依旧失败: {er}")
 
                 if self._is_paused:
                     continue
@@ -466,8 +471,10 @@ class BaseUSTradingController(QObject):
                            if c not in us_watchlist:
                                us_watchlist[c] = p['instrument']['symbol']
 
-            # 取出所有的股票代码列表
-            us_codes = sorted(list(us_watchlist.keys()))
+            # [风控加固 Phase 8] 冷却隔离舱平移至后置 chan_30m K线计算内，以提高结构阻点判定精度
+            filtered_codes = list(us_codes)
+            us_codes = sorted(filtered_codes)
+
             if not us_codes: 
                 us_codes = ['US.AAPL', 'US.TSLA', 'US.NVDA']
                 us_watchlist = {'US.AAPL': 'AAPL', 'US.TSLA': 'TSLA', 'US.NVDA': 'NVDA'}
@@ -587,6 +594,21 @@ class BaseUSTradingController(QObject):
             # self.log_message.emit(f"📊 {prefix}{code} [在线 Schwab, 分析: {analysis_time:.2f}s]")
 
             if chan_30m is None or len(chan_30m[0]) == 0: return
+
+            # 🛡️ [风控加固 Phase 8] 结构锁区检查 (美股防下探拉锯)
+            if hasattr(self, 'structure_barrier') and code in self.structure_barrier:
+                barrier_ts = self.structure_barrier[code]['lock_time_ts']
+                has_new_pivot = False
+                if hasattr(chan_30m[0], 'zs_list'):
+                    for zs in chan_30m[0].zs_list:
+                        if zs.begin.time.ts > barrier_ts:
+                            has_new_pivot = True
+                            break
+                if not has_new_pivot:
+                    return
+                else:
+                    self.log_message.emit(f"🔓 [美股-风控] {code} 脱离旧有止损结构，已刷新中枢，解锁准入。")
+                    del self.structure_barrier[code]
 
             bsp_list = chan_30m.get_latest_bsp(number=0)
             if bsp_list:
@@ -866,16 +888,42 @@ class BaseUSTradingController(QObject):
         
         # 2. 生成结算摘要报告
         available, total, positions = await self.get_account_assets_async()
-        report = (
-            f"🌆 **美股收盘日报 ({self.venue})**\n"
-            f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
-            f"账户净值: ${total:,.2f}\n"
-            f"可用资金: ${available:,.2f}\n"
-            f"当日自动撤单: {cancelled} 笔\n"
-            f"当前持仓数量: {len(positions)}\n"
-            f"----------------------------------\n"
-            f"US 交易模块已进入夜间休眠模式。"
-        )
+        report_list = []
+        report_list.append(f"\n================== [美股] 每日收盘结算报告 ({self.venue}) ==================")
+        
+        report_list.append(f"📊 1. 资产全貌")
+        report_list.append(f"   • 总资产水位: ${total:,.2f}")
+        report_list.append(f"   • 剩余可用资金: ${available:,.2f}")
+        report_list.append(f"   • 活跃止损追踪舱: {len(getattr(self, 'position_trackers', {}))} 只标的")
+        
+        report_list.append(f"\n📈 2. 今日交易清单 (Filled Trades)")
+        try:
+            import sqlite3
+            conn = sqlite3.connect(self.db.db_path)
+            cursor = conn.cursor()
+            today_str = datetime.now().strftime('%Y-%m-%d')
+            
+            # 查买入单
+            cursor.execute("SELECT code, name, entry_price, quantity FROM live_trades WHERE date(entry_time) = ?", (today_str,))
+            buys = cursor.fetchall()
+            for b in buys:
+                report_list.append(f"   • [买入] {b[0]} ({b[1]}) | 成交: ${b[2]:.2f} | 数量: {b[3]}股")
+                
+            # 查卖出单
+            cursor.execute("SELECT code, exit_price, exit_reason, pnl_pct FROM live_trades WHERE date(exit_time) = ?", (today_str,))
+            sells = cursor.fetchall()
+            for s in sells:
+                report_list.append(f"   • [卖出/止损] {s[0]} | 出场: ${s[1]:.2f} | 理由: {s[2]} | PnL损耗: {s[3]:.2f}%")
+        except Exception as e_db:
+             report_list.append(f"   • 获取本地数据库报表异常: {e_db}")
+
+        report_list.append(f"\n🛑 3. 系统除耗")
+        report_list.append(f"   • 当日自动撤单: {cancelled} 笔")
+        report_list.append(f"   • 处于结构止损锁舱数: {len(getattr(self, 'structure_barrier', {}))} 个")
+        report_list.append("==========================================================")
+        
+        report = "\n".join(report_list)
+        self.log_message.emit(report)
         
         # 3. Discord 推送
         if self.discord_bot:
@@ -887,10 +935,28 @@ class BaseUSTradingController(QObject):
         """异步下单 - 根据 self.venue 执行"""
         symbol = code.split('.')[-1]
         qty = kwargs.get('qty', 0)
-        if qty == 0:
-            # 默认单笔 1W 美金 (优化B将改进此策略)
+        if qty == 0 and action.upper() == "BUY":
+            # 🟢 [风控加固 Phase 9] 对齐港股，使用风险管理器计算动态仓位
             available, total, _ = await self.get_account_assets_async()
-            qty = max(1, int(10000 / price))
+            score = kwargs.get('visual_score', 0)
+            ml_prob = kwargs.get('ml_prob', 0)
+            atr_value = kwargs.get('atr_value', 1.0)
+            
+            qty = self.risk_manager.calculate_position_size(
+                code=code,
+                available_funds=available,
+                current_price=price,
+                signal_score=score,
+                risk_factor=1.0,
+                atr=atr_value,
+                atr_multiplier=2.0,
+                total_assets=total,
+                lot_size=1, # 美股一手为1股
+                ml_prob=ml_prob
+            )
+            if qty <= 0:
+                self.log_message.emit(f"⚠️ [美股] 计算出的买入数量为 0，跳过下单。")
+                return
         
         # 预先检查并标准化动作
         action = action.upper()
@@ -990,6 +1056,10 @@ class BaseUSTradingController(QObject):
                     ib_status = trade_obj.orderStatus.status
                     filled_qty = int(trade_obj.orderStatus.filled)
                     filled_avg = float(trade_obj.orderStatus.avgFillPrice)
+                    
+                    # 💡 [DEBUG] 打印 IB 实时状态，帮助排查日志缺失问题
+                    if attempt % 3 == 0:
+                         print(f"[DEBUG-IB-Track] {code} Status: {ib_status}, Filled: {filled_qty}/{qty}")
                     
                     ib_map = {
                         "ApiPending": "等待提交",
@@ -1157,6 +1227,27 @@ class BaseUSTradingController(QObject):
                 self.log_message.emit(f"🔥 [美股-IB] 已提交 {count} 个清仓订单 (市价单)")
             except Exception as e:
                 self.log_message.emit(f"❌ [美股-IB] 清仓失败: {e}")
+        elif self.venue == "FUTU":
+            try:
+                # 重新拉取一次持仓以确保准确
+                available, total, positions = await self.get_account_assets_async()
+                count = 0
+                for p in positions:
+                    qty = int(p['qty'])
+                    if qty == 0: continue
+                    symbol = p['symbol']
+                    code = f"US.{symbol}"
+                    # 调用已平稳运行的 _execute_trade_async 执行卖出
+                    await self._execute_trade_async(
+                        code=code, 
+                        action="SELL" if qty > 0 else "BUY", 
+                        price=p['mkt_price'],
+                        qty=abs(qty)
+                    )
+                    count += 1
+                self.log_message.emit(f"🔥 [美股-Futu] 已提交 {count} 个清仓平仓单")
+            except Exception as e:
+                self.log_message.emit(f"❌ [美股-Futu] 一键清仓异常: {e}")
         elif self.venue == "SCHWAB":
             try:
                 count = 0
@@ -1167,11 +1258,7 @@ class BaseUSTradingController(QObject):
                     if qty == 0: continue
                     symbol = p['instrument']['symbol']
                     action = "SELL" if qty > 0 else "BUY"
-                    # 这里为了安全和组件复用，调用 Schwab 的限价单逻辑，价格设为 0 (触发下单逻辑里的价格计算或报错)
-                    # 实际上可能需要查实时价，但一键清仓在 Schwab 上通常需要市价单。
-                    # 为了不让用户承担过高风险，暂不支持 Schwab 一键清仓，或提示手动操作。
                     self.log_message.emit(f"⚠️ [美股-Schwab] 暂不支持自动一键清仓，请手动处理 {symbol}")
-                    # count += 1
                 self.log_message.emit(f"🔥 [美股-Schwab] 一键清仓功能受限")
             except Exception as e:
                 self.log_message.emit(f"❌ [美股-Schwab] 清仓异常: {e}")
@@ -1180,9 +1267,9 @@ class BaseUSTradingController(QObject):
         """同步包装下单"""
         asyncio.run_coroutine_threadsafe(self._execute_trade_async(code, action, price), self.loop)
 
-    def _close_all_positions(self):
-        """同步包装清仓"""
-        asyncio.run_coroutine_threadsafe(self._close_all_positions_async(), self.loop)
+    def close_all_positions(self):
+        """主入口：向底层异步队列提交清仓指令"""
+        self.cmd_queue.put(('CLOSE_ALL', None))
 
     def _handle_signal_sync(self, code: str, bsp, chan_30m, chan_5m=None, name: str = "",
                            pos_qty: int = 0, has_pending: bool = False, current_total_pos: int = 0,
@@ -1211,7 +1298,7 @@ class BaseUSTradingController(QObject):
                 bsp_5m_list = chan_5m.get_latest_bsp(number=0)
                 us_now = self.get_us_now()
                 if not bsp_5m_list:
-                    self.log_message.emit(f"⚠️ [美股] {code} {bsp.type2str()} 30M 信号未获得 5M 共振确认 (5M无任何信号)，拦截")
+                    logger.debug(f"[美股] {code} {bsp.type2str()} 30M 信号未获得 5M 共振确认 (5M无任何信号)，拦截")
                     return
 
                 # 获取绝对最新的 5M 信号进行验证
@@ -1238,7 +1325,7 @@ class BaseUSTradingController(QObject):
             ml_threshold = TRADING_CONFIG.get('ml_threshold', 0.70)
             
             if is_buy:
-                ml_res = self.signal_validator.validate_signal(chan_30m, bsp)
+                ml_res = self.signal_validator.validate_signal(chan_30m, bsp, market_context=getattr(self, 'market_context', {}))
                 prob = ml_res.get('prob', 0) if ml_res else 0
                 if prob < ml_threshold:
                     self.log_message.emit(f"🤖 [美股] {code} {bsp.type2str()} ML 未达标 ({prob*100:.1f}% < {ml_threshold*100:.0f}%) -> 一票否决")
@@ -1246,7 +1333,7 @@ class BaseUSTradingController(QObject):
                 self.log_message.emit(f"🤖 [美股] {code} {bsp.type2str()} ML 校验通过 ({prob*100:.1f}%)")
             else:
                 # 优化 D 类似逻辑，同步应用到美股：卖点 0.4 阈值
-                ml_res = self.signal_validator.validate_signal(chan_30m, bsp)
+                ml_res = self.signal_validator.validate_signal(chan_30m, bsp, market_context=getattr(self, 'market_context', {}))
                 prob = ml_res.get('prob', 0) if ml_res else 0
                 if prob < 0.60:
                     self.log_message.emit(f"🤖 [美股] {code} {bsp.type2str()} ML 概率过低 ({prob*100:.1f}% < 60%) -> 拦截假卖点")
@@ -1314,6 +1401,19 @@ class BaseUSTradingController(QObject):
                 elif not self.is_trading_time():
                     self.log_message.emit(f"⏳ [美股] {code} {bsp.type2str()} 信号满足，但当前非交易时间，仅通告跳过下单。")
                 else:
+                    # 计算 ATR 辅助动态头寸
+                    atr_value = 1.0
+                    try:
+                        kl_list = list(chan_30m[0].klu_iter())
+                        if len(kl_list) >= 14:
+                            tr_list = []
+                            for i in range(1, len(kl_list)):
+                                h, l, pc = kl_list[i].high, kl_list[i].low, kl_list[i-1].close
+                                tr_list.append(max(h - l, abs(h - pc), abs(l - pc)))
+                            atr_value = sum(tr_list[-14:]) / 14
+                    except:
+                        pass
+
                     self.cmd_queue.put(('EXECUTE_TRADE', {
                         'code': code, 
                         'action': "BUY" if is_buy else "SELL", 
@@ -1321,7 +1421,8 @@ class BaseUSTradingController(QObject):
                         'name': name,
                         'signal_type': bsp.type2str(),
                         'ml_prob': ml_res.get('prob', 0),
-                        'visual_score': score
+                        'visual_score': score,
+                        'atr_value': atr_value
                     }))
                     self.log_message.emit(f"📩 [美股] {code} 下单指令已发送主线程")
         except Exception as e:
@@ -1352,9 +1453,11 @@ class BaseUSTradingController(QObject):
             try:
                 from Common.CEnum import DATA_SRC
                 if self.venue == "IB":
+                    # 💡 [策略修正] 优先用 IB，如果没有订阅行情，后续 chan[0] 会判定为空，触发下方的兜底
                     d_src = DATA_SRC.IB
                 elif self.venue == "FUTU":
-                    d_src = DATA_SRC.FUTU
+                    # 🔥 [强制转接] Futu API 对美股历史 K 线有严格订阅卡控 (会抛 ret=-1)，降级使用免费的 SCHWAB 源算 ATR
+                    d_src = DATA_SRC.SCHWAB
                 else:
                     d_src = DATA_SRC.SCHWAB
             except:
@@ -1369,6 +1472,20 @@ class BaseUSTradingController(QObject):
                 config=CChanConfig(local_chan_config),
                 autype=1 # 默认前复权
             )
+            
+            # --- 💡 [补救逻辑] 如果 IB 报错或由于订阅问题导致数据为空，在此强制切换 Schwab 数据源重试 ---
+            if not chan[0] or len(list(chan[0].klu_iter())) == 0:
+                if self.venue == "IB":
+                    self.log_message.emit(f"📡 [IB-ATR补救] {code} 行情数据获取失败（可能无订阅），尝试切换 Schwab 源...")
+                    chan = CChan(
+                        code=code,
+                        begin_time=start_time,
+                        end_time=end_time,
+                        data_src=DATA_SRC.SCHWAB, 
+                        lv_list=[KL_TYPE.K_30M],
+                        config=CChanConfig(local_chan_config),
+                        autype=1
+                    )
             
             if chan[0]:
                 kl_list = list(chan[0].klu_iter())
@@ -1385,10 +1502,9 @@ class BaseUSTradingController(QObject):
                     hl = high_prices[i] - low_prices[i]
                     hc = abs(high_prices[i] - close_prices[i-1])
                     lc = abs(low_prices[i] - close_prices[i-1])
-                    tr_list.append(max(hl, hc, lc))
-                
-                # 安全均值
+            # 安全均值（加入保底：防止极端平盘或买卖点差造成的秒抛）
                 atr_val = sum(tr_list[-10:]) / 10 if len(tr_list) >= 10 else (current * 0.02)
+                atr_val = max(atr_val, current * 0.015)  # 🛡️ 强制 1.5% 现价的安全垫底限
                 
                 self.position_trackers[code] = {
                     'entry_price': p['avg_cost'],
@@ -1479,7 +1595,14 @@ class BaseUSTradingController(QObject):
                 highest = tracker['highest_price']
                 atr = tracker['atr']
                 
+                # 🛡️ [分档式自适应止损 Phase 8]
                 atr_init = TRADING_CONFIG.get('atr_stop_init', 1.2)
+                bsp_type_str = tracker.get('signal_type', '未知')
+                if "1买" in bsp_type_str:
+                    atr_init = 1.5
+                elif "2买" in bsp_type_str or "3买" in bsp_type_str:
+                    atr_init = 1.2
+                    
                 atr_trail = TRADING_CONFIG.get('atr_stop_trail', 2.5)
                 atr_profit = TRADING_CONFIG.get('atr_profit_threshold', 1.5)
                 
@@ -1508,6 +1631,14 @@ class BaseUSTradingController(QObject):
                         'exit_reason': stop_type
                     }))
                     del self.position_trackers[code]
+                    
+                    from Common.CTime import CTime
+                    from datetime import datetime
+                    now = datetime.now()
+                    self.structure_barrier[code] = {
+                        'lock_time_ts': CTime(now.year, now.month, now.day, now.hour, now.minute).ts
+                    }
+                    self.log_message.emit(f"🛡️ [美股-风控] {code} 止损出局，锁入结构防护舱。")
         except Exception as e:
              logger.error(f"浮动止损检查异常: {e}")
 

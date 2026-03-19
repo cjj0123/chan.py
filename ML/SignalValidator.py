@@ -232,7 +232,7 @@ class SignalValidator:
         if code.startswith("SH.") or code.startswith("SZ."): return "A"
         return "GLOBAL"
 
-    def validate_signal(self, chan: CChan, bsp: CBS_Point, threshold: float = 0.5) -> Dict[str, Any]:
+    def validate_signal(self, chan: CChan, bsp: CBS_Point, threshold: float = 0.5, market_context: Dict[str, float] = None) -> Dict[str, Any]:
         """
         通过多个模型的平均概率来验证信号。支持市场匹配。
         """
@@ -256,7 +256,7 @@ class SignalValidator:
 
         try:
             # 1. 提取特征
-            features = self.extractor.extract_bsp_features(chan, bsp)
+            features = self.extractor.extract_bsp_features(chan, bsp, market_context=market_context)
             
             # 2. 对齐特征名 (优先用该市场的特征对齐规则，降级到全局规则)
             market_meta = self.market_features.get(market, self.feature_meta)
@@ -285,7 +285,8 @@ class SignalValidator:
                     std_vec = np.array([mlp_norm.get('std', {}).get(name, 1e-7) for name in feat_names])
                     x_norm = (x - mean_vec) / std_vec
                     tensor_x = torch.FloatTensor(x_norm).unsqueeze(0)
-                    probs['MLP'] = float(models['MLP'](tensor_x).item())
+                    logits = models['MLP'](tensor_x)
+                    probs['MLP'] = float(torch.sigmoid(logits).item())
             
             # 3. 集成决策策略
             avg_prob = sum(probs.values()) / len(probs)
