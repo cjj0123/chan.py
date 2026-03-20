@@ -87,6 +87,7 @@ class BaseUSTradingController(QObject):
         
         # 指令队列，用于处理 GUI 线程发来的请求 (线程安全)
         self.cmd_queue = queue.Queue()
+        self._pending_execute_codes = set() # 🟢 [风控加固] 用于队列内指令去重
         
         self.ib = None
         self.host = os.getenv("IB_HOST", "127.0.0.1")
@@ -142,6 +143,7 @@ class BaseUSTradingController(QObject):
         self.position_trackers = {}
         self.retry_orders = {}             # 🚨 [补漏专用] 下单异常重试池，防崩溃漏单
         self.structure_barrier = {}        # 🛡️ [风控锁区 Phase 8] 挂载止损隔离舱，防止重复进出损耗
+        self.trade_cooldown = {}           # 🛡️ [风控锁区 Phase 9] 冷却期记录，防止高频震荡进出
         self._trd_ctx = None
         self._last_close_date = None
 
@@ -210,6 +212,8 @@ class BaseUSTradingController(QObject):
         """主线程入口 - 设置异步环境并运行 async_main"""
         print(f"\n[DEBUG] {datetime.now()} US Trading Thread START for group {self.watchlist_group}")
         self._is_running = True
+        # 🟢 [极早期排障] 验证 PyQt 信号通道和线程入口是否正常打通
+        self.log_message.emit("🔌 [美股] 线程启动入口点触发 (run_trading_loop)...")
         
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
@@ -222,6 +226,8 @@ class BaseUSTradingController(QObject):
         except Exception as e:
             err_msg = f"🚨 [美股] 异步主循环崩溃: {e}\n{traceback.format_exc()}"
             print(err_msg)
+            # 💡 [排障加固] 异常同步输出到 PyQt 的 log_message 通道，避免后台线程静默挂掉
+            self.log_message.emit(err_msg)
             self.log_message.emit(err_msg)
         finally:
             self._is_running = False
@@ -237,15 +243,22 @@ class BaseUSTradingController(QObject):
 
     def on_ib_error(self, reqId, errorCode, errorString, contract):
         """IB 错误事件回调"""
-        # 常见重连相关错误代码:
-        # 1100: Connectivity between IB and TWS has been lost.
-        # 1101: Connectivity between IB and TWS has been restored- data maintained.
-        # 1102: Connectivity between IB and TWS has been restored- data lost.
         if errorCode in (1100, 1101, 1102):
             icon = "📡" if errorCode >= 1101 else "🚨"
             self.log_message.emit(f"{icon} [IB-网络状态] {errorCode}: {errorString}")
-        elif errorCode == 2100: # New connection established
+        elif errorCode == 2100: 
              self.log_message.emit(f"✅ [IB-系统] {errorString}")
+
+    def _on_exec_details(self, trade, fill):
+        """IB 成交细节回调，同步推送至 GUI"""
+        try:
+            symbol = trade.contract.symbol if hasattr(trade, 'contract') else "Unknown"
+            exec_price = fill.execution.price
+            shares = fill.execution.shares
+            side = fill.execution.side
+            self.log_message.emit(f"💰 [IB-成交录得] {symbol} {side} {shares:g}股 @ ${exec_price:.2f} (佣金约等结算)")
+        except Exception as e:
+            print(f"[_on_exec_details Exception] {e}")
 
     async def _poll_gui_commands(self):
         """高速轮询 GUI 指令的独立协程，保证响应极速"""
@@ -261,13 +274,16 @@ class BaseUSTradingController(QObject):
 
     async def _async_main(self):
         """真正的异步主循环"""
+        self.log_message.emit("🔌 [美股] 异步中枢启动成功，准备初始化 IB...")
         self._poll_task = asyncio.create_task(self._poll_gui_commands())
         self.ib = IB()
         self.ib.errorEvent += self.on_ib_error
+        self.ib.execDetailsEvent += self._on_exec_details  # 💡 挂载成交触发，同步推送至 GUI
         
         # 避免启动时立即触发全量扫描，初始化为当前 30M Bar 时间，等待下一个周期再触发
         now_et = self.get_us_now()
-        last_scan_bar = now_et.replace(minute=(now_et.minute // 30) * 30, second=0, microsecond=0)
+        # 💡 [策略修正] 引导启动时立即触发首次全量扫描（减去30分钟），不等待下一个周期
+        last_scan_bar = now_et.replace(minute=(now_et.minute // 30) * 30, second=0, microsecond=0) - timedelta(minutes=30)
         last_heartbeat_min = -1
         last_reconnect_time = 0
         
@@ -307,6 +323,9 @@ class BaseUSTradingController(QObject):
                             await asyncio.wait_for(self.ib.connectAsync(self.host, self.port, clientId=target_client_id), timeout=12)
                             self.log_message.emit(f"🔌 [美股] IB 连接成功 (ID:{target_client_id})")
                             self.ib.reqAccountUpdates() # 修复 reqAccountUpdates 的传参
+                            # 💡 [数据源自适应] 允许没有订阅的情况下，通过 API 拉取 15-20分钟免费延迟行情，用以计算 ATR
+                            try: self.ib.reqMarketDataType(3)
+                            except: pass
                             # 异步进行仓位风控初始化 (方案丙)
                             asyncio.create_task(self._initialize_position_trackers())
                         except asyncio.TimeoutError:
@@ -334,6 +353,11 @@ class BaseUSTradingController(QObject):
                     await asyncio.sleep(1)
                     continue
 
+                if self.venue == "IB" and self.ib.isConnected():
+                    if not getattr(self, '_trackers_initialized', False):
+                        setattr(self, '_trackers_initialized', True)
+                        asyncio.create_task(self._initialize_position_trackers())
+
                 # (指令处理已迁移至 _poll_gui_commands 后台协程)
 
                 # 3. 驱动的心跳
@@ -352,8 +376,8 @@ class BaseUSTradingController(QObject):
                         if getattr(self, 'retry_orders', {}):
                             for code, data in list(self.retry_orders.items()):
                                 try:
-                                    self.log_message.emit(f"🔄 [下单自愈] 正在重推之前异常的订单: {code}")
-                                    await self._execute_trade_async(**data)
+                                    self.log_message.emit(f"🔄 [下单自愈] 正在重推异常订单至主队列: {code}")
+                                    self.cmd_queue.put(('EXECUTE_TRADE', data))
                                     del self.retry_orders[code]
                                 except Exception as er:
                                     self.log_message.emit(f"⚠️ [下单自愈] {code} 依旧失败: {er}")
@@ -418,10 +442,15 @@ class BaseUSTradingController(QObject):
                 try:
                     self.log_message.emit(f"🚀 [美股] 发起指令执行: {c}")
                     await asyncio.wait_for(self._execute_trade_async(**data), timeout=20)
+                    # 🟢 [风控加固] 强制睡眠 1.5s，确保整体频率控制在每 30 秒 15 次安全红线内
+                    await asyncio.sleep(1.5)
                 except Exception as ex:
                     self.log_message.emit(f"⚠️ [指令下单异常] {c} 执行失败: {ex}，已安全载入重试队列。")
                     if not hasattr(self, 'retry_orders'): self.retry_orders = {}
                     self.retry_orders[c] = data
+                finally:
+                    if hasattr(self, '_pending_execute_codes') and c in self._pending_execute_codes:
+                        self._pending_execute_codes.remove(c)
         except asyncio.TimeoutError:
             self.log_message.emit(f"⚠️ [指令] 指令 {cmd_type} 执行超时")
 
@@ -437,6 +466,24 @@ class BaseUSTradingController(QObject):
                 """支持逗号分隔的多分组合并 (如 '美股,热点_实盘')"""
                 all_dict = {}
                 try:
+                    import socket
+                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock.settimeout(2)
+                    result = sock.connect_ex(('127.0.0.1', 11111))
+                    sock.close()
+                    if result != 0:
+                        # 🟢 [IB-补救] Futu 关停时，支持从本地目录 Config/us_watchlist.txt 加载扫描股票池
+                        import os
+                        local_path = "Config/us_watchlist.txt"
+                        if os.path.exists(local_path):
+                            with open(local_path, 'r', encoding='utf-8') as f:
+                                for line in f:
+                                    line = line.strip()
+                                    if line and not line.startswith('#'):
+                                        c = line if line.startswith("US.") else f"US.{line}"
+                                        all_dict[c] = c.split('.')[-1]
+                        return all_dict
+
                     ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
                     groups = [g.strip() for g in self.watchlist_group.split(',') if g.strip()]
                     for grp in groups:
@@ -472,7 +519,7 @@ class BaseUSTradingController(QObject):
                                us_watchlist[c] = p['instrument']['symbol']
 
             # [风控加固 Phase 8] 冷却隔离舱平移至后置 chan_30m K线计算内，以提高结构阻点判定精度
-            filtered_codes = list(us_codes)
+            filtered_codes = list(us_watchlist.keys())
             us_codes = sorted(filtered_codes)
 
             if not us_codes: 
@@ -522,6 +569,14 @@ class BaseUSTradingController(QObject):
             scan_start = time.perf_counter()
             self.log_message.emit(f"🚀 [美股] 开始策略扫描 (共 {len(us_codes)} 只)...")
             
+            # 💡 [持仓防重买] 在批量扫描前，做一次全量持仓快照预载
+            all_pos = {}
+            try:
+                _, _, positions = await self.get_account_assets_async()
+                all_pos = {p['symbol']: p['qty'] for p in positions}
+            except Exception as pos_e:
+                 self.log_message.emit(f"⚠️ [扫描前置] 持仓预载失败: {pos_e}")
+            
             tasks = []
             for i, code in enumerate(us_codes, 1):
                 if not self._is_running: break
@@ -529,7 +584,7 @@ class BaseUSTradingController(QObject):
                     symbol = code.split(".")[1] if "." in code else code
                     contract = symbol_to_contract.get(symbol)
                     name = us_watchlist.get(code, "")
-                    tasks.append(self._analyze_stock_async(code, name=name, index=i, total=len(us_codes), contract=contract, is_force_scan=is_force_scan))
+                    tasks.append(self._analyze_stock_async(code, name=name, index=i, total=len(us_codes), contract=contract, is_force_scan=is_force_scan, all_pos=all_pos))
                 except Exception as e:
                     self.log_message.emit(f"❌ [美股] 构建 {code} 任务报错: {e}")
             
@@ -541,9 +596,8 @@ class BaseUSTradingController(QObject):
         except Exception as e:
             self.log_message.emit(f"❌ [美股] 扫描过程异常: {e}")
 
-    async def _analyze_stock_async(self, code: str, name: str = "", index: int = 0, total: int = 0, contract=None, is_force_scan: bool = False):
+    async def _analyze_stock_async(self, code: str, name: str = "", index: int = 0, total: int = 0, contract=None, is_force_scan: bool = False, all_pos: dict = None):
         """异步分析单只股票"""
-        if contract is None: return
         prefix = f"[{index}/{total}] "
         await asyncio.sleep(0.01)
         self.log_message.emit(f"🔍 [策略扫描] 正在分析 {code} {name} {prefix}...")
@@ -610,6 +664,8 @@ class BaseUSTradingController(QObject):
                     self.log_message.emit(f"🔓 [美股-风控] {code} 脱离旧有止损结构，已刷新中枢，解锁准入。")
                     del self.structure_barrier[code]
 
+
+
             bsp_list = chan_30m.get_latest_bsp(number=0)
             if bsp_list:
                 bsp_list = sorted(bsp_list, key=lambda x: str(x.klu.time), reverse=True)[:1]
@@ -660,12 +716,11 @@ class BaseUSTradingController(QObject):
                 except Exception as e5m:
                     logger.warning(f"5M cache logic failed for {code}: {e5m}")
 
-                pos_qty = self.get_position_quantity(code)
+                symbol = code.split('.')[-1]
+                # 💡 [持仓防重买] 如果传入了全量持仓快照，优先使用快照
+                pos_qty = all_pos.get(symbol, 0) if all_pos is not None else self.get_position_quantity(code)
                 has_pending = self.check_pending_orders(code, 'BUY' if bsp.is_buy else 'SELL')
-                try:
-                    all_pos = self.ib.positions()
-                    current_total_pos = len(set([p.contract.symbol for p in all_pos if p.contract.secType == 'STK']))
-                except: current_total_pos = 0
+                current_total_pos = len(all_pos) if all_pos is not None else 0
 
                 self.executor.submit(self._handle_signal_sync, code, bsp, chan_30m, chan_5m, name=name,
                                     pos_qty=pos_qty, has_pending=has_pending, current_total_pos=current_total_pos,
@@ -961,6 +1016,23 @@ class BaseUSTradingController(QObject):
         # 预先检查并标准化动作
         action = action.upper()
 
+        # 🟢 [风控加固] 防止没有持仓就发出卖出指令（特别是富途不支持美股空单，会报错持仓不足）
+        if action == "SELL":
+            _, _, positions = await self.get_account_assets_async()
+            current_qty = sum(p.get('can_sell_qty', p['qty']) for p in positions if p['symbol'] == symbol or p.get('code') == code)
+            
+            if current_qty <= 0:
+                self.log_message.emit(f"⚠️ [美股] {code} 触发卖出信号，但账户无可用【可卖持仓】(可能已被止损锁单)，跳过本次下单。")
+                return
+            
+            # 🟢 [风控加固] 止损/平仓单若未显式传参 qty，自动拉满至当前全部可用持仓 
+            if qty <= 0:
+                qty = current_qty
+
+        # 🛡️ [风控加固 Phase 9] 冷却期激活 (凡是下单，进入 20 分钟观察冷却防止反复进出)
+        if hasattr(self, 'trade_cooldown'):
+            self.trade_cooldown[code] = time.time()
+
         if self.venue == "SCHWAB":
             if self.schwab_account_hash:
                 # 注意：_execute_schwab_order_async 需要同步更新以支持成功后的 DB 记录
@@ -999,22 +1071,20 @@ class BaseUSTradingController(QObject):
             self._record_trade_to_db(code, action, qty, limit_price, **kwargs)
 
             # 启动订单跟踪
-            threading.Thread(
-                target=self._track_order_status,
-                args=(None, code, action, qty, limit_price, "IB", trade),
-                daemon=True
-            ).start()
+            asyncio.create_task(
+                self._track_order_status_async(None, code, action, qty, limit_price, "IB", trade)
+            )
             
         except Exception as e:
             self.log_message.emit(f"❌ [美股-IB] 下单失败: {e}")
 
-    def _track_order_status(self, order_id: str, code: str, action: str, qty: int, price: float, venue: str, trade_obj=None):
+    async def _track_order_status_async(self, order_id: str, code: str, action: str, qty: int, price: float, venue: str, trade_obj=None):
         """轮询订单成交状态，汇报执行情况 (美股多通道)"""
         import time as _time
         import asyncio
 
         for attempt in range(12):  # 最多 60 秒
-            _time.sleep(5)
+            await asyncio.sleep(5)
             try:
                 status = ""
                 filled_qty = 0
@@ -1097,9 +1167,7 @@ class BaseUSTradingController(QObject):
                             f"成交: {filled_qty}股 @ ${filled_avg:.2f}\n"
                             f"时间: {datetime.now().strftime('%H:%M:%S')}"
                         )
-                        asyncio.run_coroutine_threadsafe(
-                            self.discord_bot.send_notification(msg), self.discord_bot.loop
-                        )
+                        await self.discord_bot.send_notification(msg)
                     return
 
                 if status == "CLOSED":
@@ -1394,6 +1462,11 @@ class BaseUSTradingController(QObject):
                     asyncio.run_coroutine_threadsafe(self.discord_bot.send_notification(msg, path_30m), self.discord_bot.loop)
 
             if score >= self.min_visual_score:
+                # 🟢 [风控加固] 对齐港股，已有持仓的股票不重复买入
+                if bsp.is_buy and pos_qty > 0:
+                    self.log_message.emit(f"🛡️ [美股] {code} 触发现点买单信号，但账户已有持仓（{pos_qty} 股），跳过重复买入。")
+                    return
+
                 if not is_valid_time:
                     self.log_message.emit(f"⏮️ [美股] {code} {bsp.type2str()} 信号过期(>{window_sec/3600:.1f}h)，跳过下单")
                 elif self.dry_run: 
@@ -1413,6 +1486,12 @@ class BaseUSTradingController(QObject):
                             atr_value = sum(tr_list[-14:]) / 14
                     except:
                         pass
+
+                    # 🟢 [风控加固] 队列去重：若指令已在队列中，不重复提交
+                    if code in self._pending_execute_codes:
+                        self.log_message.emit(f"⏳ [美股] {code} 的交易指令已在等待队列中，跳过。")
+                        return
+                    self._pending_execute_codes.add(code)
 
                     self.cmd_queue.put(('EXECUTE_TRADE', {
                         'code': code, 
@@ -1446,37 +1525,46 @@ class BaseUSTradingController(QObject):
             now_t = datetime.now()
             # ⚓ 同样锚定到上一个 30M 周期对齐
             end_time = now_t.replace(minute=(now_t.minute // 30) * 30, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
-            start_time = (now_t - timedelta(days=20)).strftime("%Y-%m-%d")
+            start_time = (now_t - timedelta(days=60)).strftime("%Y-%m-%d")
             
             local_chan_config = CHAN_CONFIG.copy()
-            # 💡 [数据源自适应] IB 模式用 IB 查 K线，否则用 SCHWAB / FUTU
+            # 💡 [数据源自适应] 用户明确 Schwab 具备付费行情，IB / Futu 无订阅。
+            # 强制所有历史 K线与 ATR 回测均从 SCHWAB 拉取，绕开订阅黑洞。
             try:
                 from Common.CEnum import DATA_SRC
-                if self.venue == "IB":
-                    # 💡 [策略修正] 优先用 IB，如果没有订阅行情，后续 chan[0] 会判定为空，触发下方的兜底
-                    d_src = DATA_SRC.IB
-                elif self.venue == "FUTU":
-                    # 🔥 [强制转接] Futu API 对美股历史 K 线有严格订阅卡控 (会抛 ret=-1)，降级使用免费的 SCHWAB 源算 ATR
-                    d_src = DATA_SRC.SCHWAB
-                else:
-                    d_src = DATA_SRC.SCHWAB
+                d_src = DATA_SRC.SCHWAB
             except:
                 d_src = DATA_SRC.SCHWAB
 
-            chan = CChan(
-                code=code,
-                begin_time=start_time,
-                end_time=end_time,
-                data_src=d_src, 
-                lv_list=[KL_TYPE.K_30M],
-                config=CChanConfig(local_chan_config),
-                autype=1 # 默认前复权
-            )
+            try:
+                chan = CChan(
+                    code=code,
+                    begin_time=start_time,
+                    end_time=end_time,
+                    data_src=d_src, 
+                    lv_list=[KL_TYPE.K_30M],
+                    config=CChanConfig(local_chan_config),
+                    autype=1 # 默认前复权
+                )
+            except Exception as e:
+                if self.venue == "IB":
+                    # 💡 [补救逻辑] 如果 CChan 内部由于 API 异常导致报错，直接降级 Schwab
+                    self.log_message.emit(f"📡 [IB-ATR补救] {code} 行情加载异常 ({e})，尝试切换 Schwab 源...")
+                    chan = CChan(
+                        code=code,
+                        begin_time=start_time,
+                        end_time=end_time,
+                        data_src=DATA_SRC.SCHWAB, 
+                        lv_list=[KL_TYPE.K_30M],
+                        config=CChanConfig(local_chan_config),
+                        autype=1
+                    )
+                else: raise
             
-            # --- 💡 [补救逻辑] 如果 IB 报错或由于订阅问题导致数据为空，在此强制切换 Schwab 数据源重试 ---
+            # --- 💡 [补救逻辑] 如果 IB 未报错，但由于延迟或订阅原因拉取了空数据，追加降级 Schwab ---
             if not chan[0] or len(list(chan[0].klu_iter())) == 0:
                 if self.venue == "IB":
-                    self.log_message.emit(f"📡 [IB-ATR补救] {code} 行情数据获取失败（可能无订阅），尝试切换 Schwab 源...")
+                    self.log_message.emit(f"📡 [IB-ATR补救] {code} 行情数据为空，尝试切换 Schwab 源...")
                     chan = CChan(
                         code=code,
                         begin_time=start_time,
@@ -1502,6 +1590,7 @@ class BaseUSTradingController(QObject):
                     hl = high_prices[i] - low_prices[i]
                     hc = abs(high_prices[i] - close_prices[i-1])
                     lc = abs(low_prices[i] - close_prices[i-1])
+                    tr_list.append(max(hl, hc, lc))
             # 安全均值（加入保底：防止极端平盘或买卖点差造成的秒抛）
                 atr_val = sum(tr_list[-10:]) / 10 if len(tr_list) >= 10 else (current * 0.02)
                 atr_val = max(atr_val, current * 0.015)  # 🛡️ 强制 1.5% 现价的安全垫底限
@@ -1525,8 +1614,9 @@ class BaseUSTradingController(QObject):
             
             # --- 💡 [仓位校准] 遍历当前持仓，挂载/更新止损监控 ---
             if positions:
-                for p in positions:
-                    await self._initialize_single_tracker_async(p)
+                # 💡 [性能优化] 并发执行 K 线拉取与 ATR 计算，克服串行加载带来的数分钟卡顿
+                tasks = [self._initialize_single_tracker_async(p) for p in positions]
+                await asyncio.gather(*tasks)
             
             # --- 💡 [补偿买入自愈] 清除今天已发出通知、但实际上「未持仓」的标的，让其可被重新扫描触发 ---
             now_et_str = self.get_us_now().strftime("%Y-%m-%d")
@@ -1624,6 +1714,11 @@ class BaseUSTradingController(QObject):
                 # 5. 触发则立刻下平仓单
                 if current_price < stop_price:
                     self.log_message.emit(f"🚨 {code} 触发{stop_type}! 最高价=${highest:.2f}, 现价=${current_price:.2f}, 止损位=${stop_price:.2f}")
+                    # 🟢 [风控加固] 队列去重
+                    if code in self._pending_execute_codes:
+                        continue
+                    self._pending_execute_codes.add(code)
+
                     self.cmd_queue.put(('EXECUTE_TRADE', {
                         'code': code, 
                         'action': 'SELL', 
@@ -1654,7 +1749,15 @@ class BaseUSTradingController(QObject):
                 # 📊 [修正选号] 过滤出与 self.trd_env 相符的账户 (SIMULATE / REAL)
                 target_env_str = 'SIMULATE' if self.trd_env == TrdEnv.SIMULATE else 'REAL'
                 matched = account_list[account_list['trd_env'] == target_env_str]
-                if not matched.empty:
+                
+                # 🛡️ [风控加固] 避免选错到港股/A股账户，强制增加美股卡号或账户类型识别
+                sub_matched = matched[(matched.get('sim_acc_type') == 'STOCK') | (matched.get('sim_acc_type') == 2)]
+                if sub_matched.empty and 'card_num' in account_list.columns:
+                    sub_matched = matched[account_list['card_num'].astype(str).str.contains('美国|US', case=False, na=False)]
+                
+                if not sub_matched.empty:
+                    row = sub_matched.iloc[0]
+                elif not matched.empty:
                     row = matched.iloc[0]
                 else:
                     row = account_list.iloc[0]
@@ -1679,9 +1782,11 @@ class BaseUSTradingController(QObject):
                     qty = int(row['qty'])
                     if qty == 0: continue
                     symbol = row['code'].split('.')[-1]
+                    can_sell_qty = int(row.get('can_sell_qty', qty))
                     positions.append({
                         'symbol': symbol,
                         'qty': qty,
+                        'can_sell_qty': can_sell_qty,
                         'mkt_value': float(row['market_val']),
                         'avg_cost': float(row['cost_price']),
                         'mkt_price': float(row['nominal_price'])
@@ -1701,24 +1806,37 @@ class BaseUSTradingController(QObject):
             if not code.startswith("US."):
                 code = f"US.{code.split('.')[-1]}"
                 
+            acc_id = 0
+            ret_list, account_list = self.trd_ctx.get_acc_list()
+            if ret_list == RET_OK and not account_list.empty:
+                from futu import TrdEnv
+                target_env_str = 'SIMULATE' if self.trd_env == TrdEnv.SIMULATE else 'REAL'
+                matched = account_list[account_list['trd_env'] == target_env_str]
+
+                # 🛡️ [风控加固] 强制锁定美股专属子账户页：避免穿隧到港股或 A股 导致持仓为空
+                sub_matched = matched[(matched.get('sim_acc_type') == 'STOCK') | (matched.get('sim_acc_type') == 2)]
+                if sub_matched.empty and 'card_num' in account_list.columns:
+                    sub_matched = matched[account_list['card_num'].astype(str).str.contains('美国|US', case=False, na=False)]
+                
+                acc_id = sub_matched.iloc[0]['acc_id'] if not sub_matched.empty else (matched.iloc[0]['acc_id'] if not matched.empty else account_list.iloc[0]['acc_id'])
+
             ret, data = self.trd_ctx.place_order(
                 price=limit_price,
                 qty=qty,
                 code=code,
                 trd_side=side,
                 order_type=OrderType.NORMAL,
-                trd_env=self.trd_env  # 🚨 传递底层环境变量
+                trd_env=self.trd_env,
+                acc_id=acc_id  # 🚨 传递底层账户ID
             )
             if ret == RET_OK:
                 order_id = data.iloc[0]['order_id']
                 self.log_message.emit(f"🚀 [美股-Futu] 限价单提交成功: {code} {action} {qty} @ ${limit_price:.2f} (ID: {order_id})")
 
                 # 启动订单跟踪
-                threading.Thread(
-                    target=self._track_order_status,
-                    args=(order_id, code, action, qty, limit_price, "FUTU"),
-                    daemon=True
-                ).start()
+                asyncio.create_task(
+                    self._track_order_status_async(order_id, code, action, qty, limit_price, "FUTU")
+                )
             else:
                 self.log_message.emit(f"❌ [美股-Futu] 下单失败: {data}")
         except Exception as e:

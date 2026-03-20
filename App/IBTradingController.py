@@ -73,6 +73,7 @@ class IBTradingController(BaseUSTradingController):
                             'mkt_value': round(item.marketValue, 2),
                             'avg_cost': round(item.averageCost, 2)
                         })
+            self.log_message.emit(f"🔌 [IB-持仓自愈] 资产查询返回: 可用资金=${available:.2f}, 总资产=${total:.2f}, 持仓数=${len(positions_data)}")
             return available, total, positions_data
         except Exception as e:
             self.log_message.emit(f"❌ IB 账户查询异常: {e}")
@@ -110,12 +111,9 @@ class IBTradingController(BaseUSTradingController):
             # 记录交易
             self._record_trade_to_db(code, action, qty, price, **kwargs)
             # 启动订单跟踪
-            import threading
-            threading.Thread(
-                target=self._track_order_status,
-                args=(None, code, action, qty, limit_price, "IB", trade),
-                daemon=True
-            ).start()
+            asyncio.create_task(
+                self._track_order_status_async(None, code, action, qty, limit_price, "IB", trade)
+            )
             return True
 
         except Exception as e:
