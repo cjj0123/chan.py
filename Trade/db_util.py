@@ -88,6 +88,41 @@ class CChanDB:
                 created_at TEXT DEFAULT (datetime('now', 'localtime'))
             )
         ''')
+
+        # 实盘/模拟交易闭环记录表 (优化F)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS live_trades (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL,
+                name TEXT,
+                market TEXT,
+                entry_time TEXT,
+                entry_price REAL,
+                quantity INTEGER,
+                signal_type TEXT,
+                ml_prob REAL,
+                visual_score REAL,
+                status TEXT DEFAULT 'open',
+                exit_time TEXT,
+                exit_price REAL,
+                exit_reason TEXT,
+                pnl REAL,
+                pnl_pct REAL,
+                created_at TEXT DEFAULT (datetime('now', 'localtime'))
+            )
+        ''')
+
+        # 🛡️ 止损状态跟踪持久化表 (防止 A股 T+1 重启丢失 ATR 止损锚点)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS stop_loss_trackers (
+                code TEXT PRIMARY KEY,
+                entry_price REAL,
+                highest_price REAL,
+                atr REAL,
+                trail_active INTEGER DEFAULT 0,
+                updated_at TEXT DEFAULT (datetime('now', 'localtime'))
+            )
+        ''')
         
         # K线数据表 - 日线
         cursor.execute('''
@@ -337,3 +372,107 @@ class CChanDB:
         if df.empty:
             return None
         return df.iloc[0].to_dict()
+
+    def record_live_trade(self, trade_data: Dict[str, Any]) -> int:
+        """
+        记录一笔新的开仓交易 (优化F)
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            columns = [
+                'code', 'name', 'market', 'entry_time', 'entry_price', 
+                'quantity', 'signal_type', 'ml_prob', 'visual_score', 'status'
+            ]
+            placeholders = ', '.join(['?'] * len(columns))
+            sql = f"INSERT INTO live_trades ({', '.join(columns)}) VALUES ({placeholders})"
+            
+            data = [trade_data.get(col) for col in columns]
+            cursor.execute(sql, data)
+            conn.commit()
+            return cursor.lastrowid
+
+    def close_live_trade(self, code: str, exit_price: float, exit_reason: str, exit_time: str = None):
+        """
+        关闭指定股票的最早一笔开仓交易 (优化F)
+        """
+        if exit_time is None:
+            exit_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            # 找到该股票最早的 'open' 订单
+            cursor.execute(
+                "SELECT id, entry_price, quantity FROM live_trades WHERE code = ? AND status = 'open' ORDER BY entry_time ASC LIMIT 1",
+                (code,)
+            )
+            row = cursor.fetchone()
+            if row:
+                trade_id, entry_price, quantity = row
+                pnl = (exit_price - entry_price) * quantity
+                pnl_pct = (exit_price / entry_price - 1) * 100 if entry_price != 0 else 0
+                
+                cursor.execute(
+                    """UPDATE live_trades SET 
+                       status = 'closed', 
+                       exit_time = ?, 
+                       exit_price = ?, 
+                       exit_reason = ?, 
+                       pnl = ?, 
+                       pnl_pct = ? 
+                       WHERE id = ?""",
+                    (exit_time, exit_price, exit_reason, pnl, pnl_pct, trade_id)
+                )
+            else:
+                # 🛡️ [风控加固 Phase 9] 如果找不到 Open 持仓记录 (例如跨周期或补单)，插入一条独立卖出记录保证汇总报告不漏单
+                cursor.execute(
+                    """INSERT INTO live_trades 
+                       (code, market, exit_time, exit_price, exit_reason, status, entry_price, quantity) 
+                       VALUES (?, ?, ?, ?, ?, 'closed', ?, ?)""",
+                    (code, 'HK', exit_time, exit_price, exit_reason, 0.0, 0)
+                )
+            conn.commit()
+
+    def save_stop_loss_tracker(self, code: str, entry_price: float, highest_price: float, atr: float, trail_active: int):
+        """
+        保存或更新止损追踪器状态
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    "INSERT OR REPLACE INTO stop_loss_trackers (code, entry_price, highest_price, atr, trail_active) VALUES (?, ?, ?, ?, ?)",
+                    (code, entry_price, highest_price, atr, trail_active)
+                )
+                conn.commit()
+            except Exception as e:
+                pass # 防爆
+
+    def get_all_stop_loss_trackers(self) -> Dict[str, Dict]:
+        """
+        加载所有持久化的止损追踪状态
+        """
+        try:
+            df = self.execute_query("SELECT * FROM stop_loss_trackers")
+            result = {}
+            for _, row in df.iterrows():
+                result[row['code']] = {
+                    'entry_price': row['entry_price'],
+                    'highest_price': row['highest_price'],
+                    'atr': row['atr'],
+                    'trail_active': True if row['trail_active'] == 1 else False
+                }
+            return result
+        except:
+            return {}
+
+    def delete_stop_loss_tracker(self, code: str):
+        """
+        清除指定股票的止损追踪状态
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute("DELETE FROM stop_loss_trackers WHERE code = ?", (code,))
+                conn.commit()
+            except:
+                pass
