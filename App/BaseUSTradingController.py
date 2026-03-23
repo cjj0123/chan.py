@@ -830,7 +830,7 @@ class BaseUSTradingController(QObject):
                     if ret == 0 and not data.empty:
                         row = data[data['code'] == f"US.{symbol}"]
                         if not row.empty:
-                            return int(row.iloc[0].get('qty', 0))
+                            return int(row.iloc[0].get('can_sell_qty', row.iloc[0].get('qty', 0)))
             except Exception as e:
                 logger.warning(f"[FUTU] get_position_quantity {symbol} 异常: {e}")
         return 0
@@ -850,6 +850,19 @@ class BaseUSTradingController(QObject):
                         # Schwab 订单状态：PENDING_ACTIVATION, PENDING_CANCEL, PENDING_REPLACE, QUEUED, ACCEPTED, WORKING
                         if order.get('status') in ('WORKING', 'ACCEPTED', 'QUEUED'):
                             return True
+        elif self.venue == "FUTU":
+            try:
+                if hasattr(self, 'trd_ctx') and self.trd_ctx:
+                    from futu import TrdSide, OrderStatus
+                    ret, data = self.trd_ctx.order_list_query(trd_env=getattr(self, 'trd_env', None))
+                    if ret == 0 and not data.empty:
+                        target_side = TrdSide.BUY if side.upper() == "BUY" else TrdSide.SELL
+                        matched = data[(data['code'] == f"US.{symbol}") & (data['trd_side'] == target_side)]
+                        for _, row in matched.iterrows():
+                            if row['order_status'] in [OrderStatus.SUBMITTED, OrderStatus.WAITING_SUBMIT]:
+                                return True
+            except Exception as e:
+                logger.warning(f"[FUTU] check_pending_orders {symbol} 异常: {e}")
         return False
 
     async def get_account_assets_async(self) -> Tuple[float, float, list]:
