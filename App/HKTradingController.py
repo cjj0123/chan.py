@@ -748,7 +748,7 @@ class HKTradingController(QObject):
                      import time
                      elapsed = time.time() - self._last_futu_order_time
                      if elapsed < 2.2:
-                          await asyncio.sleep(2.2 - elapsed)
+                          time.sleep(2.2 - elapsed)
                 self._last_futu_order_time = time.time()
 
                 ret, data = self.trd_ctx.place_order(
@@ -774,7 +774,7 @@ class HKTradingController(QObject):
                      import time
                      elapsed = time.time() - self._last_futu_order_time
                      if elapsed < 2.2:
-                          await asyncio.sleep(2.2 - elapsed)
+                          time.sleep(2.2 - elapsed)
                 self._last_futu_order_time = time.time()
 
                 ret, data = self.trd_ctx.place_order(
