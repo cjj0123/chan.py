@@ -122,26 +122,26 @@ class CKLine_List:
         return self.config.trigger_step
 
     def add_single_klu(self, klu: CKLine_Unit):
-        print(f"DEBUG: [add_single_klu] Processing KLU: {klu.time}, Current self.lst length: {len(self.lst)}")
+        # print(f"DEBUG: [add_single_klu] Processing KLU: {klu.time}, Current self.lst length: {len(self.lst)}")
         klu.set_metric(self.metric_model_lst)
         if len(self.lst) == 0:
             self.lst.append(CKLine(klu, idx=0))
-            print(f"DEBUG: [add_single_klu] Appended first CKLine. New self.lst length: {len(self.lst)}")
+            # print(f"DEBUG: [add_single_klu] Appended first CKLine. New self.lst length: {len(self.lst)}")
         else:
             _dir = self.lst[-1].try_add(klu)
-            print(f"DEBUG: [add_single_klu] try_add returned _dir: {_dir}")
+            # print(f"DEBUG: [add_single_klu] try_add returned _dir: {_dir}")
             if _dir != KLINE_DIR.COMBINE:  # 不需要合并K线
                 self.lst.append(CKLine(klu, idx=len(self.lst), _dir=_dir))
-                print(f"DEBUG: [add_single_klu] Appended new CKLine. New self.lst length: {len(self.lst)}")
+                # print(f"DEBUG: [add_single_klu] Appended new CKLine. New self.lst length: {len(self.lst)}")
                 if len(self.lst) >= 3:
                     self.lst[-2].update_fx(self.lst[-3], self.lst[-1])
                 if self.bi_list.update_bi(self.lst[-2], self.lst[-1], self.step_calculation) and self.step_calculation:
-                    print(f"DEBUG: [add_single_klu] Calling cal_seg_and_zs after bi update.")
+                    # print(f"DEBUG: [add_single_klu] Calling cal_seg_and_zs after bi update.")
                     self.cal_seg_and_zs()
             elif self.step_calculation and self.bi_list.try_add_virtual_bi(self.lst[-1], need_del_end=True):  # 这里的必要性参见issue#175
-                print(f"DEBUG: [add_single_klu] Calling cal_seg_and_zs after virtual bi update.")
+                # print(f"DEBUG: [add_single_klu] Calling cal_seg_and_zs after virtual bi update.")
                 self.cal_seg_and_zs()
-        print(f"DEBUG: [add_single_klu] Finished processing KLU: {klu.time}, Final self.lst length: {len(self.lst)}")
+        # print(f"DEBUG: [add_single_klu] Finished processing KLU: {klu.time}, Final self.lst length: {len(self.lst)}")
 
     def klu_iter(self, klc_begin_idx=0):
         for klc in self.lst[klc_begin_idx:]:

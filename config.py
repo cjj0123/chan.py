@@ -35,7 +35,12 @@ TRADING_CONFIG = {
     'atr_stop_trail': float(os.getenv('ATR_STOP_TRAIL', '2.5')),     # 移动止损回撤倍数
     'atr_profit_threshold': float(os.getenv('ATR_PROFIT_THRESHOLD', '1.5')), # 触发移动止损的获利倍数
     
+    # 策略选型适配 (对齐 30M 无后顾网格)
+    'enable_stop_loss': False,               # 港股冠军参数：无硬性止损
+    'enable_resonance_5m': True,             # 🌌 恢复 30M + 5M 双周期嵌套共振买入校验
+    
     # Discord 配置
+
     'discord': {
         'token': os.getenv('DISCORD_BOT_TOKEN', ''),
         'channel_id': os.getenv('DISCORD_CHANNEL_ID', ''),

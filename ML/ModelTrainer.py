@@ -70,7 +70,7 @@ class ModelTrainer:
     def __init__(self, 
                  watchlist: List[str] = None, 
                  start_date: str = "2021-01-01", 
-                 end_date: str = "2025-12-31",
+                 end_date: str = "2026-03-18",
                  market: str = None):
         # 默认使用成分股解析器
         self.resolver = MarketComponentResolver()
@@ -220,7 +220,7 @@ class ModelTrainer:
                     df_current.to_csv(self.train_data_file, index=False)
                     
                     # Update metadata
-                    label_cols = ["label_3p_15d", "label_5p_30d", "label_10p_60d"]
+                    label_cols = ["label_3p_15d", "label_5p_30d", "label_7p_30d", "label_10p_60d"]
                     feature_names = [c for c in df_current.columns if c not in ["code", "time"] + label_cols]
                     feature_meta = {name: i for i, name in enumerate(feature_names)}
                     with open(self.meta_file, 'w', encoding='utf-8') as f:
@@ -256,6 +256,7 @@ class ModelTrainer:
         configs = [
             (target_3p, int(15 * scale), "label_3p_15d"),
             (target_5p, int(30 * scale), "label_5p_30d"),
+            (0.07, int(30 * scale), "label_7p_30d"),
             (target_10p, int(60 * scale), "label_10p_60d")
         ]
         
@@ -613,6 +614,13 @@ class ModelTrainer:
         try:
             X_train, X_test, y_train, y_test = self._get_train_test_data(target_label)
             
+            # P0 修复: 清理数据中的 NaN 和 Inf (PyTorch 不原生支持 NaNs)
+            orig_nan_count = X_train.isna().sum().sum()
+            if orig_nan_count > 0:
+                logger.info(f"🧹 正在清理训练数据中的 {orig_nan_count} 个 NaN...")
+                X_train = X_train.fillna(0)
+                X_test = X_test.fillna(0)
+            
             # 标准化数据
             mean = X_train.mean()
             std = X_train.std() + 1e-7
@@ -627,23 +635,36 @@ class ModelTrainer:
             device = torch.device("cpu") # Force CPU for small trial runs to avoid MPS hangs
             logger.info(f"MLP Device: {device}")
             
+            logger.info("🛠 Building MLP Model...")
             model = MLPModel(X_train.shape[1]).to(device)
             criterion = nn.BCEWithLogitsLoss()
             optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
             
             # 确保转换为 numpy 再转为 tensor
-            X_tensor = torch.from_numpy(X_train_norm.values).float()
-            y_tensor = torch.from_numpy(y_train if isinstance(y_train, np.ndarray) else y_train.values).float().unsqueeze(1)
+            logger.info("🧪 Converting X_train to Numpy...")
+            X_np = X_train_norm.to_numpy(dtype=np.float32)
+            logger.info("🧪 Converting X_train to Tensor...")
+            X_tensor = torch.tensor(X_np, dtype=torch.float32).to(device)
+            logger.info(f"✅ X_tensor created: {X_tensor.shape}")
+
+            logger.info("🧪 Converting y_train to Numpy...")
+            y_np = (y_train if isinstance(y_train, np.ndarray) else y_train.values).astype(np.float32)
+            logger.info("🧪 Converting y_train to Tensor...")
+            y_tensor = torch.tensor(y_np, dtype=torch.float32).unsqueeze(1).to(device)
+            logger.info(f"✅ y_tensor created: {y_tensor.shape}")
             
+            logger.info("📦 Creating DataLoader...")
             dataset = TensorDataset(X_tensor, y_tensor)
-            train_loader = DataLoader(dataset, batch_size=min(64, len(dataset)), shuffle=True)
+            train_loader = DataLoader(dataset, batch_size=min(64, len(dataset)), shuffle=True, num_workers=0)
             
-            logger.info(f"MLP Input Size: {X_train.shape[1]}, Training Samples: {len(X_train)}")
+            logger.info(f"🚀 MLP Input Size: {X_train.shape[1]}, Training Samples: {len(X_train)}")
 
             for epoch in range(100):
                 model.train()
                 epoch_loss = 0
-                for batch_x, batch_y in train_loader:
+                for i, (batch_x, batch_y) in enumerate(train_loader):
+                    if epoch == 0 and i == 0:
+                        logger.info("🏃 First batch processing...")
                     batch_x, batch_y = batch_x.to(device), batch_y.to(device)
                     optimizer.zero_grad()
                     outputs = model(batch_x)
@@ -652,7 +673,7 @@ class ModelTrainer:
                     optimizer.step()
                     epoch_loss += loss.item()
                 
-                if epoch % 20 == 0:
+                if epoch % 10 == 0:
                     logger.info(f"MLP Epoch {epoch}/100, Loss: {epoch_loss:.4f}")
             
             # 保存模型
@@ -660,6 +681,8 @@ class ModelTrainer:
             logger.info(f"✅ MLP 模型已保存: {os.path.join(self.data_dir, 'model_mlp.pth')}")
         except Exception as e:
             logger.error(f"MLP 训练失败: {e}")
+            import traceback
+            logger.info(traceback.format_exc())
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

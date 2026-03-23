@@ -56,6 +56,19 @@ async def main():
         else:
             logger.warning(f"⚠️ 未知市场: {m_upper}")
 
+    # === 新增：合并 Futu 全量自选股放入同步池 ===
+    logger.info("正在拉取 Futu 实时全量自选股列表...")
+    try:
+        from Common.StockUtils import get_futu_watchlist_stocks
+        watchlist_df = get_futu_watchlist_stocks()
+        if not watchlist_df.empty:
+            watchlist_codes = watchlist_df['代码'].tolist()
+            # 过滤只保留 args.markets 包含的市场（如果需要）
+            logger.info(f"💡 本地共拉取到 {len(watchlist_codes)} 只 Futu 自选股，准备合并")
+            total_stocks.extend(watchlist_codes)
+    except Exception as e:
+        logger.warning(f"⚠️ 拉取 Futu 自选股失败: {e}")
+
     # 去重
     total_stocks = list(set(total_stocks))
     if not total_stocks:

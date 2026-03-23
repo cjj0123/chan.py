@@ -2,13 +2,18 @@ import pandas as pd
 from datetime import datetime
 import time
 import random
+import threading
 from futu import * 
 from DataAPI.CommonStockAPI import CCommonStockApi
 from Common.CEnum import KL_TYPE, AUTYPE, DATA_FIELD
 from Common.CTime import CTime
 from KLine.KLine_Unit import CKLine_Unit
 
+_futu_local = threading.local()
+
 class CFutuAPI(CCommonStockApi):
+    _futu_lock = threading.Lock()  # 全局线程锁，防止 request_history_kline 并发频率超限 -1
+    
     def __init__(self, code, k_type, begin_date=None, end_date=None, autype=AUTYPE.QFQ):
         super(CFutuAPI, self).__init__(code, k_type, begin_date, end_date, autype)
         
@@ -42,7 +47,10 @@ class CFutuAPI(CCommonStockApi):
             elif stock_code.startswith('6'): stock_code = f"SH.{stock_code}"
             else: stock_code = f"SZ.{stock_code}"
         
-        quote_ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
+        global _futu_local
+        if not hasattr(_futu_local, 'quote_ctx') or _futu_local.quote_ctx is None:
+            _futu_local.quote_ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
+        quote_ctx = _futu_local.quote_ctx
         
         try:
             f_ktype = self.type_map.get(self.k_type, SubType.K_DAY)
@@ -57,25 +65,30 @@ class CFutuAPI(CCommonStockApi):
             page_token = None
             current_retry = 0
             
+            time.sleep(0.15)  # 限频保护：Hybrid 模式下仅拉取单日增量，缩减避让时间。
             while current_retry < retries:
                 # 首次请求不需要 page_token，后续请求需要
-                if page_token is None:
-                    ret, data, new_page_token = quote_ctx.request_history_kline(
-                        stock_code,
-                        start=self.begin_date,
-                        end=self.end_date,
-                        ktype=f_ktype,
-                        autype=f_autype
-                    )
-                else:
-                    ret, data, new_page_token = quote_ctx.request_history_kline(
-                        stock_code,
-                        start=self.begin_date,
-                        end=self.end_date,
-                        ktype=f_ktype,
-                        autype=f_autype,
-                        page_req_key=page_token
-                    )
+                with CFutuAPI._futu_lock:
+                    if page_token is None:
+                        ret, data, new_page_token = quote_ctx.request_history_kline(
+                            stock_code,
+                            start=self.begin_date,
+                            end=self.end_date,
+                            ktype=f_ktype,
+                            autype=f_autype
+                        )
+                    else:
+                        ret, data, new_page_token = quote_ctx.request_history_kline(
+                            stock_code,
+                            start=self.begin_date,
+                            end=self.end_date,
+                            ktype=f_ktype,
+                            autype=f_autype,
+                            page_req_key=page_token
+                        )
+                    # 锁内预留微小时间间隙，保障 OpenD 绝对安全
+                    if ret != RET_OK:
+                        time.sleep(0.1)
                 
                 if ret == RET_OK:
                     if data is not None and not data.empty:
@@ -89,6 +102,19 @@ class CFutuAPI(CCommonStockApi):
                         time.sleep(random.uniform(0.1, 0.3))  # 短暂延迟避免API限制
                         continue  # 继续下一页，不增加重试计数
                 else:
+                    error_msg = str(data)
+                    # 🛡️ [风控加固] 只要失败(None)、或明确额度耗尽，自适应降级为 get_cur_kline 免配额拉取
+                    if "额度不足" in error_msg or "额度" in error_msg or data is None or error_msg == "None":
+                        print(f"💡 [FutuAPI] {stock_code} {f_ktype} 异常({error_msg})，自适应降级至 get_cur_kline 实时拉取")
+                        # get_cur_kline 依赖订阅，确保加锁订阅
+                        with CFutuAPI._futu_lock:
+                            quote_ctx.subscribe([stock_code], [f_ktype], subscribe_push=False)
+                            ret_live, data_live = quote_ctx.get_cur_kline(stock_code, num=300, ktype=f_ktype)
+                        if ret_live == RET_OK and data_live is not None and not data_live.empty:
+                            all_data.append(data_live)
+                            ret = RET_OK  # 标记为成功，防止上层触发异常
+                            break
+                    
                     print(f"⚠️ [FutuAPI] Request failed ({data}), retrying {current_retry+1}/{retries}...")
                     time.sleep(random.uniform(0.5, 1.0) * (2 ** current_retry))
                     current_retry += 1
@@ -145,12 +171,11 @@ class CFutuAPI(CCommonStockApi):
             if "Frequency limit" in str(e) or (ret != RET_OK and "limit" in str(data).lower()):
                  print(f"🚨 [FutuAPI] {stock_code} 疑似触发频率限制，建议在大循环中增加延时")
             print(f"🔥 [FutuAPI] Online Error for {stock_code}: {e}")
+            _futu_local.quote_ctx = None  # Reset bad connection on errors
             raise e
         finally:
-            try:
-                quote_ctx.close()
-            except:
-                pass
+            # Reusing connection via thread-local, do not close here
+            pass
 
     def SetBasciInfo(self):
         self.name = self.code

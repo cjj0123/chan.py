@@ -268,53 +268,53 @@ class DataManager:
                     import nest_asyncio
                     
                     # Use a different client ID range for real-time prices to avoid conflicts with download
-                realtime_client_id = int(os.getenv("IB_CLIENT_ID_RT", str(random.randint(2000, 2999))))
-                
-                async def fetch_ib_price():
-                    ib_inner = IB()
-                    try:
-                        print(f"🚀 [DataManager] Connecting to IB RTP ({os.getenv('IB_HOST')}, ClientID: {realtime_client_id})...")
-                        await ib_inner.connectAsync(
-                            os.getenv("IB_HOST"), 
-                            int(os.getenv("IB_PORT", "4002")), 
-                            clientId=realtime_client_id,
-                            timeout=5
-                        )
-                        symbol = code.split(".")[1]
-                        contract = Stock(symbol, 'SMART', 'USD')
-                        await ib_inner.qualifyContractsAsync(contract)
-                        ib_inner.reqMarketDataType(3) # 延迟行情
-                        ticker = ib_inner.reqMktData(contract, '', False, False)
-                        
-                        # 等待数据填充 (最多2秒)
-                        for _ in range(20):
-                            if ticker.last > 0 or ticker.close > 0:
-                                break
-                            await asyncio.sleep(0.1)
+                    realtime_client_id = int(os.getenv("IB_CLIENT_ID_RT", str(random.randint(2000, 2999))))
+                    
+                    async def fetch_ib_price():
+                        ib_inner = IB()
+                        try:
+                            print(f"🚀 [DataManager] Connecting to IB RTP ({os.getenv('IB_HOST')}, ClientID: {realtime_client_id})...")
+                            await ib_inner.connectAsync(
+                                os.getenv("IB_HOST"), 
+                                int(os.getenv("IB_PORT", "4002")), 
+                                clientId=realtime_client_id,
+                                timeout=5
+                            )
+                            symbol = code.split(".")[1]
+                            contract = Stock(symbol, 'SMART', 'USD')
+                            await ib_inner.qualifyContractsAsync(contract)
+                            ib_inner.reqMarketDataType(3) # 延迟行情
+                            ticker = ib_inner.reqMktData(contract, '', False, False)
                             
-                        if ticker.last and ticker.last > 0:
-                            return float(ticker.last)
-                        elif ticker.close and ticker.close > 0:
-                            return float(ticker.close)
-                        return None
-                    finally:
-                        if ib_inner.isConnected():
-                            ib_inner.disconnect()
+                            # 等待数据填充 (最多2秒)
+                            for _ in range(20):
+                                if ticker.last > 0 or ticker.close > 0:
+                                    break
+                                await asyncio.sleep(0.1)
+                                
+                            if ticker.last and ticker.last > 0:
+                                return float(ticker.last)
+                            elif ticker.close and ticker.close > 0:
+                                return float(ticker.close)
+                            return None
+                        finally:
+                            if ib_inner.isConnected():
+                                ib_inner.disconnect()
 
-                # Robust execution in background threads
-                nest_asyncio.apply()
-                try:
-                    # If there's already a loop running, use it. Otherwise use asyncio.run
+                    # Robust execution in background threads
+                    nest_asyncio.apply()
                     try:
-                        loop = asyncio.get_running_loop()
-                        return loop.run_until_complete(fetch_ib_price())
-                    except RuntimeError:
-                        return asyncio.run(fetch_ib_price())
-                except Exception as loop_e:
-                    print(f"⚠️ [DataManager] IB异步执行错误: {loop_e}")
-                    return None
-            except Exception as e:
-                print(f"⚠️ [DataManager] IB实时价格获取失败: {e}")
+                        # If there's already a loop running, use it. Otherwise use asyncio.run
+                        try:
+                            loop = asyncio.get_running_loop()
+                            return loop.run_until_complete(fetch_ib_price())
+                        except RuntimeError:
+                            return asyncio.run(fetch_ib_price())
+                    except Exception as loop_e:
+                        print(f"⚠️ [DataManager] IB异步执行错误: {loop_e}")
+                        return None
+                except Exception as e:
+                    print(f"⚠️ [DataManager] IB实时价格获取失败: {e}")
         
         # 回退到数据库最新收盘价
         try:

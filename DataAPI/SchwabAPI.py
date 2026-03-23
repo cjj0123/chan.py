@@ -76,7 +76,7 @@ class CSchwabAPI(CCommonStockApi):
         is_60m = (self.k_type == KL_TYPE.K_60M)
         request_k_type = KL_TYPE.K_30M if is_60m else self.k_type
         
-        freq_type, freq, _ = self.type_map.get(request_k_type, ('daily', 1, 'year'))
+        freq_type, freq, period_type = self.type_map.get(request_k_type, ('daily', 1, 'year'))
         url = "https://api.schwabapi.com/marketdata/v1/pricehistory"
         
         if self.begin_date:
@@ -96,6 +96,7 @@ class CSchwabAPI(CCommonStockApi):
             'symbol': symbol,
             'frequencyType': freq_type,
             'frequency': freq,
+            'periodType': period_type,
             'startDate': start_epoch,
             'endDate': end_epoch,
             'needExtendedHoursData': 'false'

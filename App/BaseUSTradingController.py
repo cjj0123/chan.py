@@ -689,6 +689,30 @@ class BaseUSTradingController(QObject):
                 self._save_notified_signals()  # 立即持久化，防止崩溃后丢失
                 self.log_message.emit(f"🎯 [美股] {code} 发现信号: {bsp.type2str()} @ {bsp.klu.time}")
                 
+                # 🟢 [排障优化] 在线拉取 5M 数据前，先核对持仓与在单
+                symbol = code.split('.')[-1]
+                pos_qty = all_pos.get(symbol, 0) if all_pos is not None else self.get_position_quantity(code)
+                has_pending = self.check_pending_orders(code, 'BUY' if bsp.is_buy else 'SELL')
+                current_total_pos = len(all_pos) if all_pos is not None else 0
+
+                # 1. 持仓方向性拦截
+                if bsp.is_buy:
+                    if current_total_pos >= TRADING_CONFIG.get('max_total_positions', 10) and pos_qty <= 0:
+                        # self.log_message.emit(f"🚫 [美股] {code} 触发持位上限限制 (当前: {current_total_pos})")
+                        continue
+                    if pos_qty > 0:
+                        # self.log_message.emit(f"ℹ️ [美股] {code} 已有持仓 ({pos_qty})，跳过买入")
+                        continue
+                else:
+                    if pos_qty <= 0:
+                        # self.log_message.emit(f"ℹ️ [美股] {code} 无持仓，跳过卖出信号")
+                        continue
+
+                # 2. 在单拦截
+                if has_pending:
+                    # self.log_message.emit(f"⏳ [美股] {code} 存在未完成同向订单，跳过当前信号")
+                    continue
+
                 chan_5m = None
                 try:
                     # 在线获取 5M 数据
@@ -715,12 +739,6 @@ class BaseUSTradingController(QObject):
                         self.log_message.emit(f"   ↳ {code} 5M数据线拉取完成")
                 except Exception as e5m:
                     logger.warning(f"5M cache logic failed for {code}: {e5m}")
-
-                symbol = code.split('.')[-1]
-                # 💡 [持仓防重买] 如果传入了全量持仓快照，优先使用快照
-                pos_qty = all_pos.get(symbol, 0) if all_pos is not None else self.get_position_quantity(code)
-                has_pending = self.check_pending_orders(code, 'BUY' if bsp.is_buy else 'SELL')
-                current_total_pos = len(all_pos) if all_pos is not None else 0
 
                 self.executor.submit(self._handle_signal_sync, code, bsp, chan_30m, chan_5m, name=name,
                                     pos_qty=pos_qty, has_pending=has_pending, current_total_pos=current_total_pos,
@@ -1361,6 +1379,12 @@ class BaseUSTradingController(QObject):
                 self.log_message.emit(f"⏳ [美股] {code} 存在未完成订单，跳过当前信号")
                 return
 
+            # 🛡️ [风控加固] 冷却期拦截 (对齐下单 20 分钟锁定)
+            if hasattr(self, 'trade_cooldown') and code in self.trade_cooldown:
+                if (time.time() - self.trade_cooldown[code]) < 1200:
+                    self.log_message.emit(f"⏳ [美股] {code} 处于交易冷却期，跳过信号。")
+                    return
+
             # --- 多周期共振过滤 (优化 A: 30M+5M 严苛嵌套) ---
             if chan_5m:
                 bsp_5m_list = chan_5m.get_latest_bsp(number=0)
@@ -1484,6 +1508,7 @@ class BaseUSTradingController(QObject):
                                 h, l, pc = kl_list[i].high, kl_list[i].low, kl_list[i-1].close
                                 tr_list.append(max(h - l, abs(h - pc), abs(l - pc)))
                             atr_value = sum(tr_list[-14:]) / 14
+                            atr_value = max(atr_value, bsp.klu.close * 0.015)  # 🛡️ 注入 1.5% 容错防守保底
                     except:
                         pass
 

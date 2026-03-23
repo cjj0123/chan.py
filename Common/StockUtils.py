@@ -67,20 +67,28 @@ def get_futu_watchlist_stocks():
             print("没有找到富途自选股分组")
             return pd.DataFrame(columns=['代码', '名称', '最新价', '涨跌幅'])
         
-        # 使用第一个分组
-        ret, data = monitor.quote_ctx.get_user_security(group_name=watchlists[0])
+        all_dfs = []
+        for wl_name in watchlists:
+            ret, data = monitor.quote_ctx.get_user_security(group_name=wl_name)
+            if ret == RET_OK and not data.empty:
+                all_dfs.append(data)
+        
         monitor.quote_ctx.close()
         
-        if ret != RET_OK:
-            print(f"获取自选股失败: {data}")
+        if not all_dfs:
+            print("所有自选股分组获取失败或为空")
             return pd.DataFrame(columns=['代码', '名称', '最新价', '涨跌幅'])
+        
+        # 合并所有分组数据并去重
+        data = pd.concat(all_dfs, ignore_index=True)
+        data = data.drop_duplicates(subset=['code'])
         
         # data is a pandas DataFrame, convert to our format
         result_df = pd.DataFrame({
             '代码': data['code'],
             '名称': data['name'],
-            '最新价': [0.0] * len(data),  # 富途API返回的自选股数据可能不包含最新价
-            '涨跌幅': [0.0] * len(data)   # 需要额外查询
+            '最新价': [0.0] * len(data),
+            '涨跌幅': [0.0] * len(data)
         })
         
         return result_df[['代码', '名称', '最新价', '涨跌幅']]
@@ -228,18 +236,8 @@ def get_default_data_sources(code: str) -> list:
     default_sources = ["custom:SQLiteAPI.SQLiteAPI"]
     
     if is_us_stock(code):
-        # 美股优先级逻辑: Schwab -> 本地数据库
-        sources = []
-        
-        # 0. Schwab (如果 Token 存在)
-        token_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'schwab_token.json')
-        if os.path.exists(token_path):
-            sources.append(DATA_SRC.SCHWAB)
-            
-        # 1. 本地数据库 (兜底)
-        sources.append("custom:SQLiteAPI.SQLiteAPI")
-        
-        return sources
+        # 美股独家数据源: Schwab
+        return [DATA_SRC.SCHWAB]
     else:
         # 港股/A股优先级逻辑
         return [DATA_SRC.FUTU] + default_sources

@@ -319,6 +319,10 @@ class HKStockBroker(BacktestBroker):
         raw_qty = int(risk_amount / stop_distance)
         # 取整到手数
         qty_in_lots = (raw_qty // lot_size) * lot_size
+        # 💡 保底机制：若风控额度小于一手，且本金充裕，则强制买入起步价“一手”，防止全盘零交易
+        if qty_in_lots == 0 and raw_qty > 0:
+            qty_in_lots = lot_size
+            
         # 最多不超过可用资金的50%
         max_qty_by_funds = int(self.available_funds * 0.5 / current_price)
         max_qty_by_funds = (max_qty_by_funds // lot_size) * lot_size
@@ -665,7 +669,8 @@ class EnhancedBacktestEngine:
                  watchlist: List[str] = None,
                  lot_size_file: str = "stock_cache/lot_size_config.json",
                  use_hk_costs: bool = True,
-                 use_ml: bool = False):
+                 use_ml: bool = False,
+                 freq: str = "30M"):
         """
         初始化回测引擎
         
@@ -684,6 +689,7 @@ class EnhancedBacktestEngine:
         self.watchlist = watchlist or ["HK.00700", "HK.00836", "HK.02688"]
         self.use_hk_costs = use_hk_costs
         self.use_ml = use_ml
+        self.freq = freq
         
         # 加载每手股数配置
         self.lot_size_map = self._load_lot_size_map(lot_size_file)
@@ -850,7 +856,7 @@ class EnhancedBacktestEngine:
             score += vol_score
             
             # ---- 维度 3: 买点类型权重 ----
-            bs_type = signal.get('bs_type', '')
+            bs_type = signal.get('bsp_type', '')  # 👈 修正：之前拼写为了 bs_type 导致取不到值无法加分
             if '1' in str(bs_type) and '3' not in str(bs_type):
                 score += 30  # 1类买点，最强
             elif '2' in str(bs_type):
@@ -882,16 +888,42 @@ class EnhancedBacktestEngine:
         self.logger.info(f"📊 股票列表：{self.watchlist}")
         
         # 创建经纪商
-        broker = HKStockBroker(
-            initial_funds=self.initial_funds,
-            lot_size_map=self.lot_size_map,
-            use_hk_costs=self.use_hk_costs
-        )
+        broker_kwargs = {
+            'initial_funds': self.initial_funds, 
+            'lot_size_map': self.lot_size_map,
+            'use_hk_costs': self.use_hk_costs
+        }
+        if config_override:
+            for k in ['hard_stop_pct', 'trailing_stop_pct', 'risk_per_trade_pct', 'atr_multiplier', 'enable_stop_loss']:
+                if k in config_override:
+                    broker_kwargs[k] = config_override[k]
+        broker = HKStockBroker(**broker_kwargs)
         
         # 创建策略适配器
+        chan_config = self.chan_config
+        if config_override and 'bs_type' in config_override:
+            try:
+                from ChanConfig import CChanConfig
+                conf_dict = {}
+                if hasattr(self.chan_config, 'to_dict'):
+                    conf_dict = self.chan_config.to_dict()
+                elif hasattr(self.chan_config, 'config'):
+                    conf_dict = self.chan_config.config.copy()
+                else:
+                    conf_dict = {
+                        'bi_strict': True, 'one_bi_zs': False, 'seg_algo': 'chan',
+                        'bs_type': '1,1p,2,2s,3a,3b', 'macd_algo': 'peak', 'zs_algo': 'normal'
+                    }
+                conf_dict['bs_type'] = config_override['bs_type']
+                chan_config = CChanConfig(conf_dict)
+            except Exception as e:
+                print(f'Override chan_config bs_type 失败: {e}')
+
         strategy_adapter = BacktestStrategyAdapter(
             live_trader_instance=None,
-            chan_config=self.chan_config
+            chan_config=chan_config,
+            freq=self.freq,
+            allowed_bsp_types=config_override.get('allowed_bsp_types') if config_override else None
         )
         
         # 创建报告器
@@ -902,7 +934,7 @@ class EnhancedBacktestEngine:
         data_iterator = BacktestDataIterator(
             loader=self.loader,
             watchlist=self.watchlist,
-            freq="30M",
+            freq=self.freq,
             start_date=self.start_date,
             end_date=self.end_date,
             lot_size_map=self.lot_size_map
@@ -977,6 +1009,10 @@ class EnhancedBacktestEngine:
                 signal = strategy_adapter.get_signal(code, code_data, self.lot_size_map)
                 
                 if signal:
+                    # 提前拦截已被适配器过滤的信号 (例如 allowed_bsp_types 之外的)
+                    if not signal.get('is_valid_for_trade', True):
+                        continue
+                        
                     signal['position_qty'] = broker.get_position_quantity(code)
                     # 对买点评分
                     if signal['is_buy']:

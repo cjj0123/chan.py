@@ -38,11 +38,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ComparativeBT")
 
-def run_single_stock_comparison(code: str, start_date: str, end_date: str, initial_funds: float) -> Dict[str, Any]:
+def run_single_stock_comparison(code: str, start_date: str, end_date: str, initial_funds: float, freq: str = "30M") -> Dict[str, Any]:
     """
     针对单只股票运行 A/B 对比。
     """
-    logger.info(f"📊 [A/B 对比] 开始回测: {code} ...")
+    logger.info(f"📊 [A/B 对比] 开始回测: {code} ({freq}) ...")
     
     try:
         # 1. 运行轨道 A (Base: 无 ML)
@@ -51,7 +51,8 @@ def run_single_stock_comparison(code: str, start_date: str, end_date: str, initi
             start_date=start_date,
             end_date=end_date,
             watchlist=[code],
-            use_ml=False
+            use_ml=False,
+            freq=freq
         )
         res_a = engine_a.run()
         
@@ -61,7 +62,8 @@ def run_single_stock_comparison(code: str, start_date: str, end_date: str, initi
             start_date=start_date,
             end_date=end_date,
             watchlist=[code],
-            use_ml=True
+            use_ml=True,
+            freq=freq
         )
         res_b = engine_b.run()
         
@@ -149,6 +151,7 @@ def main():
     parser.add_argument('--funds', type=float, default=100000, help='每只初始资金')
     parser.add_argument('--workers', type=int, default=4, help='并行进程数')
     parser.add_argument('--limit', type=int, default=10, help='测试前 N 只(默认 10 避免测试太久)')
+    parser.add_argument('--freq', type=str, default='30M', help='跑测周期 (30M, 5M, DAY)')
     
     args = parser.parse_args()
     
@@ -177,7 +180,7 @@ def main():
     
     with ProcessPoolExecutor(max_workers=args.workers) as executor:
         futures = {
-            executor.submit(run_single_stock_comparison, code, args.start, args.end, args.funds): code 
+            executor.submit(run_single_stock_comparison, code, args.start, args.end, args.funds, args.freq): code 
             for code in target_list
         }
         

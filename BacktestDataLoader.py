@@ -178,6 +178,7 @@ class BacktestDataLoader:
             # 过滤掉无法转换的日期 (NaT)
             initial_count = len(df)
             df = df.dropna(subset=['timestamp'])
+            df = df.sort_values('timestamp')  # 👈 强制按时间升序排序
             if len(df) < initial_count:
                 logger.warning(f"在 {filepath} 中过滤掉了 {initial_count - len(df)} 条无效时间数据。")
 
@@ -258,8 +259,13 @@ class BacktestDataLoader:
                     volume=int(klu.volume),
                     kl_type=freq
                 )
-                backtest_klu.set_idx(i)
                 kline_units.append(backtest_klu)
+            
+            # 强制按时间升序排序
+            kline_units = sorted(kline_units, key=lambda x: x.timestamp)
+            # 重新分配 idx
+            for i, backtest_klu in enumerate(kline_units):
+                backtest_klu.set_idx(i)
             
             if kline_units:
                 logger.info(f"Loaded {len(kline_units)} {freq} K-lines for {code} from SQLite")

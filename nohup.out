@@ -1,0 +1,1 @@
+bash: line 1: 83655 Terminated: 15          PYTHONPATH=. .venv/bin/python3 scripts/train_ml_model.py --market US --limit 600 >> /tmp/ml_full_train.log 2>&1

@@ -411,12 +411,14 @@ class BacktestStrategyAdapter:
     """
     适配 live trading 逻辑到回测环境。
     """
-    def __init__(self, live_trader_instance: Any, chan_config: CChanConfig):
+    def __init__(self, live_trader_instance: Any, chan_config: CChanConfig, freq: str = "30M", allowed_bsp_types: List[str] = None):
         self.live_trader = live_trader_instance
         self.chan_config = chan_config
+        self.freq = freq if freq else "30M"
         self.logger = logging.getLogger(__name__ + ".StrategyAdapter")
         self.chan_cache: Dict[str, CChan] = {}  # cache_key -> chan_instance
         self.last_timestamps: Dict[str, pd.Timestamp] = {}  # cache_key -> last processed timestamp
+        self.allowed_bsp_types = allowed_bsp_types  # ['1买', '2买', '3买'] 等组成的白名单
     
     def _prepare_chan_instance(self, code: str, klines: List[BacktestKLineUnit], freq: str) -> Optional[CChan]:
         """构建或更新 CChan 实例。"""
@@ -434,18 +436,22 @@ class BacktestStrategyAdapter:
         # 我们需要在 adapter 外部或者内部逻辑中确保实例是持久化的
         if cache_key in self.chan_cache:
             chan_instance = self.chan_cache[cache_key]
-            # 增量加载最后一根数据，前提是时间戳确实更新了，防止抛出由于不同级别 K 线更新频率不同导致的报错
+
+
+            # 增量加载最后一批新数据，防止漏掉子级别的中间K线
             if klines:
                 last_time = self.last_timestamps.get(cache_key, pd.Timestamp.min)
-                if klines[-1].timestamp > last_time:
+                new_klines = [k for k in klines if k.timestamp > last_time]
+                if new_klines:
                     try:
-                        chan_instance.trigger_load({target_kl_type: [klines[-1]]})
+                        chan_instance.trigger_load({target_kl_type: new_klines})
                     except Exception as e:
                         self.logger.debug(f"增量加载K线失败(可忽略): {e}")
                     self.last_timestamps[cache_key] = klines[-1].timestamp
         else:
-            # 开启步骤模式，允许增量更新
-            self.chan_config.trigger_step = True
+            # 开启步骤模式，允许增量更新 (但在创建时关闭 trigger_step，使其消化 180 天预热数据)
+            self.chan_config.trigger_step = False
+
             
             from DataAPI.MockStockAPI import register_kline_data
             register_kline_data(code, target_kl_type, klines)
@@ -457,11 +463,8 @@ class BacktestStrategyAdapter:
                 config=self.chan_config,
                 autype=0
             )
-            # 初始全量加载
-            try:
-                chan_instance.trigger_load({target_kl_type: klines})
-            except Exception as e:
-                self.logger.error(f"初始加载K线失败: {e}")
+            # CChan initialization automatically loads from MockStockAPI, 
+            # so we DO NOT need to call trigger_load for initial data!
             self.chan_cache[cache_key] = chan_instance
             if klines:
                 self.last_timestamps[cache_key] = klines[-1].timestamp
@@ -471,22 +474,24 @@ class BacktestStrategyAdapter:
     def get_signal(self, code: str, klines_data: Dict[str, List[BacktestKLineUnit]], lot_size_map: Dict[str, int]) -> Optional[Dict]:
         """核心分析函数。模仿 live trader 的 analyze_with_chan 逻辑。"""
         
-        klines_30m = klines_data.get("30M")
-        klines_5m = klines_data.get("5M")
+        main_klines = klines_data.get(self.freq)
         
-        if not klines_30m:
-            self.logger.warning(f"{code}: 缺少关键的 30M 数据，跳过分析。")
+        if not main_klines:
+            self.logger.warning(f"{code}: 缺少关键的 {self.freq} 数据，跳过分析。")
             return None
 
         chan_multi_level: List[CChan] = []
         
         try:
-            chan_30m = self._prepare_chan_instance(code, klines_30m, "30M")
-            if chan_30m: chan_multi_level.append(chan_30m)
+            chan_main = self._prepare_chan_instance(code, main_klines, self.freq)
+            if chan_main: chan_multi_level.append(chan_main)
             
-            if klines_5m:
-                chan_5m = self._prepare_chan_instance(code, klines_5m, "5M")
-                if chan_5m: chan_multi_level.append(chan_5m)
+            # 如果是 30M，尝试追加 5M 作为附属子周期
+            if self.freq == "30M":
+                klines_5m = klines_data.get("5M")
+                if klines_5m:
+                    chan_5m = self._prepare_chan_instance(code, klines_5m, "5M")
+                    if chan_5m: chan_multi_level.append(chan_5m)
             
         except Exception as e:
             self.logger.error(f"构建 CChan 实例失败 for {code}: {e}")
@@ -497,7 +502,11 @@ class BacktestStrategyAdapter:
         chan_main = chan_multi_level[0]
         
         try:
-            latest_bsps = chan_main.get_latest_bsp(number=1)
+            # 💡 替换 get_latest_bsp。由于 3 根 K 线分型落后确认，get_latest_bsp 只检查最后一根可能为空。
+            # 直接提取全树最新买卖点对齐触发
+            all_bsps = chan_main.get_bsp()
+            latest_bsps = [all_bsps[-1]] if all_bsps else []
+
         except Exception as e:
             self.logger.error(f"获取 {code} 最新 BSP 失败: {e}")
             print(f"DEBUG: {code} get_latest_bsp error: {e}")
@@ -512,7 +521,7 @@ class BacktestStrategyAdapter:
         is_buy = bsp.is_buy
         price = bsp.klu.close
         
-        current_time_pd = klines_30m[-1].timestamp
+        current_time_pd = main_klines[-1].timestamp
         
         # Check if the signal is new for this specific time
         last_signal_time = getattr(self, '_last_signal_time', {}).get(code)
@@ -540,10 +549,29 @@ class BacktestStrategyAdapter:
         }
         
         self.logger.info(f"{code} 策略分析: 发现 {bsp_type} 信号, 价格: {price}")
+        
+        # 补全调用 evaluate 拦截链路
+        result = self.evaluate_signal_for_backtest(result)
         return result
 
     def evaluate_signal_for_backtest(self, signal: Dict) -> Dict:
         """在回测中，我们使用缠论信号作为有效信号，评分设为最高。"""
+        bsp_type = signal.get('bsp_type', '')
+        
+        # 增加买卖点类型过滤矩阵拦截 (修正汉字映射为底层字母 1, 1s, 2, 3a)
+        if self.allowed_bsp_types is not None:
+            mapped_allowed = []
+            for t in self.allowed_bsp_types:
+                if t == '1买': mapped_allowed += ['1', '1p']
+                elif t == '2买': mapped_allowed += ['2', '2s']
+                elif t == '3买': mapped_allowed += ['3a', '3b']
+                else: mapped_allowed.append(t)
+                
+            if bsp_type not in mapped_allowed:
+                signal['is_valid_for_trade'] = False
+                signal['score'] = 0
+                return signal
+
         signal['score'] = 99 
         signal['is_valid_for_trade'] = True
         if 'chart_paths' not in signal: signal['chart_paths'] = []
@@ -552,7 +580,7 @@ class BacktestStrategyAdapter:
 # --- 数据迭代器 ---
 
 class BacktestDataIterator:
-    def __init__(self, loader: BacktestDataLoader, watchlist: List[str], freq: str, start_date: str, end_date: str, lot_size_map: Dict[str, int]):
+    def __init__(self, loader: BacktestDataLoader, watchlist: List[str], freq: str, start_date: str, end_date: str, lot_size_map: Dict[str, int], required_freqs: List[str] = None):
         import logging
         self.loader = loader
         self.watchlist = watchlist
@@ -560,27 +588,38 @@ class BacktestDataIterator:
         self.start_date = start_date
         self.end_date = end_date
         self.lot_size_map = lot_size_map
+        self.required_freqs = required_freqs if required_freqs is not None else ["30M", "DAY"]
         self.data_cache: Dict[str, Dict[str, List[BacktestKLineUnit]]] = {}
         self.pointers: Dict[str, Dict[str, int]] = {}  # code -> {freq -> current_idx}
         self.logger = logging.getLogger(__name__ + ".Iterator")
         self._load_all_data()
         
         all_times = [klu.timestamp for klu_list in self.data_cache.values() for klu_dict in klu_list.values() if isinstance(klu_dict, list) for klu in klu_dict]
-        self.timeline = sorted(list(set(all_times)))
+        # 💡 过滤 timeline：仅保留 start_date 之后的时间点分配给迭代器，前面用来给 CChan 预热
+        self.timeline = sorted([t for t in list(set(all_times)) if t >= pd.to_datetime(self.start_date)])
         self.current_index = 0
         self.max_index = len(self.timeline)
 
     def _load_all_data(self):
-        required_freqs = ["30M", "5M", "DAY"] 
+        required_freqs = self.required_freqs
         
+        warmup_start = (pd.to_datetime(self.start_date) - pd.Timedelta(days=180)).strftime('%Y-%m-%d')
         for code in self.watchlist:
             self.data_cache[code] = {}
             all_freq_loaded = True
             for freq in required_freqs:
-                data = self.loader.load_kline_data(code, freq, self.start_date, self.end_date)
+                data = self.loader.load_kline_data(code, freq, warmup_start, self.end_date)
                 if data:
-                    self.data_cache[code][freq] = data
+                    # 💡 强行去重，防止脏数据触发 CChan 报错 cur==last
+                    seen = set()
+                    unique_data = []
+                    for d in data:
+                        if d.timestamp not in seen:
+                            unique_data.append(d)
+                            seen.add(d.timestamp)
+                    self.data_cache[code][freq] = unique_data
                 else:
+
                     self.logger.warning(f"未能加载 {code} 的 {freq} 数据。")
                     all_freq_loaded = False
             
@@ -602,11 +641,10 @@ class BacktestDataIterator:
                 klines_at_time = {}
                 is_data_valid = True
                 
-                # 使用指针高效获取此时的数据
-                for freq in ["30M", "5M", "DAY"]:
+                # 使用指针高效获取此时的数据 (改用动态频率，不再死扣 5M)
+                for freq in self.pointers[code].keys():
                     kline_list = self.data_cache[code].get(freq)
                     if not kline_list:
-                        if freq in ["30M", "5M"]: is_data_valid = False; break
                         continue
 
                     idx = self.pointers[code][freq]
@@ -620,10 +658,11 @@ class BacktestDataIterator:
                         # 如果是第一次加载，adapter 会处理全量
                         klines_at_time[freq] = kline_list[:idx]
                     else:
-                        if freq in ["30M", "5M"]: is_data_valid = False; break
+                        is_data_valid = False; break
                         
-                if is_data_valid and klines_at_time.get("30M") and klines_at_time.get("5M"):
+                if is_data_valid and klines_at_time.get("30M"):
                      snapshot[code] = klines_at_time
+
 
             if snapshot:
                 yield current_time, snapshot

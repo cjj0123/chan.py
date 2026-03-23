@@ -7,6 +7,7 @@ import pandas as pd
 from datetime import datetime
 import time
 import random
+import threading
 from futu import * 
 from DataAPI.CommonStockAPI import CCommonStockApi
 from Common.CEnum import KL_TYPE, AUTYPE, DATA_FIELD
@@ -14,6 +15,7 @@ from Common.CTime import CTime
 from KLine.KLine_Unit import CKLine_Unit
 from kline_raw_cache import kline_raw_cache
 
+_futu_local = threading.local()
 
 class CFutuAPICached(CCommonStockApi):
     def __init__(self, code, k_type, begin_date=None, end_date=None, autype=AUTYPE.QFQ):
@@ -79,7 +81,10 @@ class CFutuAPICached(CCommonStockApi):
             return
         
         # 缓存未命中，从API获取数据
-        quote_ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
+        global _futu_local
+        if not hasattr(_futu_local, 'quote_ctx') or _futu_local.quote_ctx is None:
+            _futu_local.quote_ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
+        quote_ctx = _futu_local.quote_ctx
         
         try:
             f_ktype = self.type_map.get(self.k_type, SubType.K_DAY)
@@ -91,6 +96,7 @@ class CFutuAPICached(CCommonStockApi):
             # 2. 指数退避重试 (使用 request_history_kline)
             retries = 3
             data = None
+            time.sleep(0.55)  # 限频保护：防止超过 Futu 30秒内拉取60张历史K线 的接口频次限制
             for i in range(retries):
                 # 注意：request_history_kline 是分页接口，此处简单模拟单次请求，如果需要全量则需递归
                 ret, data, page_token = quote_ctx.request_history_kline(
@@ -143,8 +149,10 @@ class CFutuAPICached(CCommonStockApi):
                 
         except Exception as e:
             print(f"🔥 [FutuAPI] Online Error: {e}")
+            _futu_local.quote_ctx = None  # Reset bad connection on errors
         finally:
-            quote_ctx.close()
+            # Reusing connection via thread-local, do not close here
+            pass
 
     def SetBasciInfo(self):
         self.name = self.code

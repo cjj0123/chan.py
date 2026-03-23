@@ -106,6 +106,7 @@ class MarketMonitorController(QObject):
         self._force_scan = False      # 强制扫描标志
         self._current_bar_scanned = True  # 启动时不触发补偿扫描，等待下一个30M周期
         self._last_close_date = None  # 收盘运行标记
+        self.trade_cooldown = {}       # 🛡️ [风控加固] 20min 冷却限频线
 
         # ATR 移动追踪止损器
         self.position_trackers = self.db.get_all_stop_loss_trackers() if hasattr(self, 'db') else {}
@@ -461,9 +462,14 @@ class MarketMonitorController(QObject):
                 tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
                 tr_list.append(tr)
 
+            current_close = float(klines.iloc[-1]['close'])
             if len(tr_list) < period:
-                return sum(tr_list) / len(tr_list) if tr_list else 0.0
-            return sum(tr_list[-period:]) / period
+                atr_val = sum(tr_list) / len(tr_list) if tr_list else 0.0
+            else:
+                atr_val = sum(tr_list[-period:]) / period
+                
+            # 🛡️ [风控加固] 注入 1.5% 容错 A股防守保底，防盘整缩量扫防
+            return max(atr_val, current_close * 0.015)
         except Exception as e:
             logger.error(f"ATR 计算失败 {code}: {e}")
             return 0.0
@@ -832,6 +838,8 @@ class MarketMonitorController(QObject):
                                 await asyncio.get_event_loop().run_in_executor(
                                     None, lambda: self.execute_trade(**data)
                                 )
+                                if hasattr(self, 'trade_cooldown'):
+                                    self.trade_cooldown[c] = time.time()  # 触发下单即刷新冷冻线
                             except Exception as ex:
                                 if not hasattr(self, 'retry_orders'): self.retry_orders = {}
                                 self.retry_orders[c] = data
@@ -876,15 +884,28 @@ class MarketMonitorController(QObject):
             from Chan import CChan
             from ChanConfig import CChanConfig
             idx_code = "SZ.399001" if TRADING_CONFIG.get("market_index_type") == "SZ" else "SH.510300"
-            chan_idx = CChan(
-                code=idx_code,
-                begin_time=(datetime.now() - timedelta(days=20)).strftime("%Y-%m-%d"),
-                data_src="CUSTOM", # A股使用本地缓存
-                lv_list=[KL_TYPE.K_30M],
-                config=CChanConfig(CHAN_CONFIG),
-                autype=AUTYPE.QFQ
-            )
-            if chan_idx.lv_list and len(list(chan_idx[0].klu_iter())) >= 10:
+            from Common.StockUtils import get_default_data_sources
+            data_sources = get_default_data_sources(idx_code)
+            if "custom:SQLiteAPI.SQLiteAPI" not in data_sources:
+                 data_sources = ["custom:SQLiteAPI.SQLiteAPI"] + data_sources # 优先 local
+                 
+            chan_idx = None
+            for src in data_sources:
+                 try:
+                      chan_idx = CChan(
+                          code=idx_code,
+                          begin_time=(datetime.now() - timedelta(days=20)).strftime("%Y-%m-%d"),
+                          data_src=src,
+                          lv_list=[KL_TYPE.K_30M],
+                          config=CChanConfig(CHAN_CONFIG),
+                          autype=AUTYPE.QFQ
+                      )
+                      if chan_idx.lv_list and len(list(chan_idx[0].klu_iter())) >= 10:
+                           break
+                 except Exception:
+                      continue
+                      
+            if chan_idx and chan_idx.lv_list and len(list(chan_idx[0].klu_iter())) >= 10:
                 kl_list = list(chan_idx[0].klu_iter())
                 idx_k = kl_list[-1]
                 if len(kl_list) >= 6:
@@ -1012,6 +1033,31 @@ class MarketMonitorController(QObject):
             is_buy = bsp.is_buy
             now = datetime.now()
 
+            # --- 0. [风控加固] 20分钟 Cooldown 降温线 (对齐港/美) ---
+            import time
+            if hasattr(self, 'trade_cooldown') and code in self.trade_cooldown:
+                if (time.time() - self.trade_cooldown[code]) < 1200:
+                    self.log_message.emit(f"🛡️ [A股] {code} 触发 20min 操作冷却安全期，本轮信号忽略。")
+                    return
+
+            # --- 0. [自愈加固] 持仓过滤拦截 (已有持仓防重复买入) ---
+            if is_buy:
+                has_pos = False
+                try:
+                    if not hasattr(self, 'trd_ctx') or self.trd_ctx is None:
+                        self._init_trd_ctx()
+                    
+                    ret_p, p_data = self.trd_ctx.position_list_query(trd_env=self.trd_env)
+                    if ret_p == 0 and not p_data.empty: # 0 = RET_OK
+                        sub_df = p_data[(p_data['code'] == code) & (p_data['qty'].astype(float) > 0)]
+                        if not sub_df.empty:
+                            has_pos = True
+                except Exception as e_p:
+                    pass
+                if has_pos:
+                    self.log_message.emit(f"🛡️ [A股] {code} 已有持仓，忽略买点共振与并发下单操作。")
+                    return
+
             # --- 0. [风控加固 Phase 8] 结构锁区拦截 (防下探拉锯) ---
             if is_buy and hasattr(self, 'structure_barrier') and code in self.structure_barrier:
                 barrier_ts = self.structure_barrier[code]['lock_time_ts']
@@ -1029,47 +1075,48 @@ class MarketMonitorController(QObject):
                     del self.structure_barrier[code]
 
             # --- 0. 多周期共振过滤 (优化 A: 30M+5M 严苛嵌套) ---
-            chan_5m = None
-            try:
-                begin_5m = (now - timedelta(days=7)).strftime("%Y-%m-%d")
-                # 使用与 30M 相同的 Data Source 拉取 5M
-                chan_5m = CChan(
-                    code=code,
-                    begin_time=begin_5m,
-                    data_src=chan.data_src,
-                    lv_list=[KL_TYPE.K_5M],
-                    config=CChanConfig(CHAN_CONFIG),
-                    autype=AUTYPE.QFQ
-                )
-                
-                if chan_5m:
-                    bsp_5m_list = chan_5m.get_latest_bsp(number=0)
-                    if not bsp_5m_list:
-                         self.log_message.emit(f"⚠️ [A股] {code} {bsp_type_str} 30M 信号未获得 5M 共振确认 (5M无任何信号)，拦截")
-                         return
+            if TRADING_CONFIG.get('enable_resonance_5m', False):
+                chan_5m = None
+                try:
+                    begin_5m = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+                    # 使用与 30M 相同的 Data Source 拉取 5M
+                    chan_5m = CChan(
+                        code=code,
+                        begin_time=begin_5m,
+                        data_src=chan.data_src,
+                        lv_list=[KL_TYPE.K_5M],
+                        config=CChanConfig(CHAN_CONFIG),
+                        autype=AUTYPE.QFQ
+                    )
+                    
+                    if chan_5m:
+                        bsp_5m_list = chan_5m.get_latest_bsp(number=0)
+                        if not bsp_5m_list:
+                             self.log_message.emit(f"⚠️ [A股] {code} {bsp_type_str} 30M 信号未获得 5M 共振确认 (5M无任何信号)，拦截")
+                             return
 
-                    # 验证最新 5M 信号
-                    sorted_5m = sorted(bsp_5m_list, key=lambda x: str(x.klu.time), reverse=True)
-                    latest_b = sorted_5m[0]
-                    b_dt = datetime(latest_b.klu.time.year, latest_b.klu.time.month, latest_b.klu.time.day, 
-                                   latest_b.klu.time.hour, latest_b.klu.time.minute, latest_b.klu.time.second)
-                    
-                    is_same_dir = (latest_b.is_buy == is_buy)
-                    is_recent = (now - b_dt).total_seconds() < 1800 # 30min
-                    
-                    if not is_same_dir:
-                        logger.debug(f"[A股] {code} {bsp_type_str} 5M 确认失败: 5M 最新信号为反向")
-                        return
-                    if not is_recent:
-                        logger.debug(f"[A股] {code} {bsp_type_str} 5M 确认失败: 5M 最新信号已过时(>30min)")
-                        return
+                        # 验证最新 5M 信号
+                        sorted_5m = sorted(bsp_5m_list, key=lambda x: str(x.klu.time), reverse=True)
+                        latest_b = sorted_5m[0]
+                        b_dt = datetime(latest_b.klu.time.year, latest_b.klu.time.month, latest_b.klu.time.day, 
+                                       latest_b.klu.time.hour, latest_b.klu.time.minute, latest_b.klu.time.second)
                         
-                    logger.debug(f"[A股] {code} {bsp_type_str} 30M+5M 多周期共振确认成功 (最新5M信号: {latest_b.type2str()})")
-            except Exception as e_5m:
-                logger.error(f"[A股] 5M 共振数据获取异常 {code}: {e_5m}")
-                # 如果拉不到 5M 数据，为了严谨，选择拦截
-                self.log_message.emit(f"⚠️ [A股] {code} 无法拉取 5M 数据进行共振验证，为保安全已拦截")
-                return
+                        is_same_dir = (latest_b.is_buy == is_buy)
+                        is_recent = (now - b_dt).total_seconds() < 1800 # 30min
+                        
+                        if not is_same_dir:
+                            logger.debug(f"[A股] {code} {bsp_type_str} 5M 确认失败: 5M 最新信号为反向")
+                            return
+                        if not is_recent:
+                            logger.debug(f"[A股] {code} {bsp_type_str} 5M 确认失败: 5M 最新信号已过时(>30min)")
+                            return
+                            
+                        logger.debug(f"[A股] {code} {bsp_type_str} 30M+5M 多周期共振确认成功 (最新5M信号: {latest_b.type2str()})")
+                except Exception as e_5m:
+                    logger.error(f"[A股] 5M 共振数据获取异常 {code}: {e_5m}")
+                    # 如果拉不到 5M 数据，为了严谨，选择拦截
+                    self.log_message.emit(f"⚠️ [A股] {code} 无法拉取 5M 数据进行共振验证，为保安全已拦截")
+                    return
 
             # --- 1. ML 校验 (买卖信号均需验证) ---
             ml_result = self.signal_validator.validate_signal(chan, bsp, market_context=getattr(self, 'market_context', {}))
