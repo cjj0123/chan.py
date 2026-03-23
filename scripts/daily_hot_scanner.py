@@ -188,10 +188,10 @@ def get_schwab_movers(top_n: int) -> list:
                 price = quote.get('lastPrice', 0)
                 
                 market_cap = float(shares) * float(price)
-                if market_cap >= 100_000_000:  # 1亿美元 阈值
+                if market_cap >= 200_000_000:  # 2亿美元 阈值
                     filtered_symbol_volumes[sym] = symbol_volumes[sym]
                 else:
-                    logger.warning(f"⏭️ 剔除 {sym} (总市值 ${market_cap:,.0f} < $100,000,000)")
+                    logger.warning(f"⏭️ 剔除 {sym} (总市值 ${market_cap:,.0f} < $200,000,000)")
                     
         if not filtered_symbol_volumes:
             logger.warning("全部美股市值过滤后为空或接口失败，尝试使用原数据...")
@@ -205,7 +205,9 @@ def get_schwab_movers(top_n: int) -> list:
         return []
 
 def robust_get_hot_stocks(ctx: OpenQuoteContext, market: str, top_n: int) -> list:
-    """采用抓取市场全列表+并发分批快照+本地排序的方式，百分百可靠找出真实热点"""
+    """采用 get_stock_filter 服务器端原生排序过滤 + 批量快照验证，极速找出真实热点"""
+    from futu import SimpleFilter, StockField, SortDir
+    
     if market == Market.US:
         # 用户需求优先：美股强行限制只取前 25 只
         actual_top = 25
@@ -213,64 +215,73 @@ def robust_get_hot_stocks(ctx: OpenQuoteContext, market: str, top_n: int) -> lis
         if schwab_codes:
             logger.info(f"✅ 从 Schwab 获取并排序完成，截取成交量前 {actual_top} 只美股。")
             return schwab_codes[:actual_top]
-        logger.warning("⚠️ 从 Schwab 未能获取到数据，降级回 Futu 板块模式")
+        logger.warning("⚠️ 从 Schwab 未能获取到数据，降级回 Futu 条件选股模式")
 
-    plate_code = {
-        Market.HK: "HK.BK1910",    # 港股主板
-        Market.US: "US.BK2999",    # 美股股票 (如果美股太大，下面仅抽样)
-        Market.SH: "SH.LIST0190",  # 沪A 
-        Market.SZ: "SZ.LIST0922"   # 深A
-    }.get(market)
+    # 1. 设置原生过滤器
+    # 过滤器A: 成交额排序（降序）
+    f_turnover = SimpleFilter()
+    f_turnover.stock_field = StockField.TURNOVER
+    f_turnover.sort = SortDir.DESCEND if hasattr(SortDir, 'DESCEND') else 2
+
+    # 过滤器B: 市值限定 >= 2亿美元等值 (200,000,000)
+    f_cap = SimpleFilter()
+    f_cap.stock_field = StockField.VALUE
     
-    if not plate_code: return []
-    
-    logger.info(f"📥 [第1步] 获取板块 {plate_code} 的股票代码...")
-    ret, data = ctx.get_plate_stock(plate_code)
-    if ret != RET_OK or data.empty:
-        logger.error(f"❌ 获取板块失败: {data}")
-        # 对于美股，因为没有很好的单一主板概念，我们可以获取道指、纳指、标普500成分股作为美股热点池
-        if market == Market.US:
-            logger.info("尝试组合美股三大指数成分股...")
-            codes = []
-            for idx in ["US.BK2995", "US.BK2997", "US.BK2998"]: # SP500, 纳指100, 道指30
-                r, d = ctx.get_plate_stock(idx)
-                if r == RET_OK and not d.empty:
-                    codes.extend(d['code'].tolist())
-            if not codes: return []
-            data = {'code': list(set(codes))} # 去重
-        else:
-            return []
-            
-    all_codes = list(data['code'])
-    if market == Market.US and len(all_codes) > 2000:
-        logger.info("⚠️ 美股股票过多，为了防止触发流控限制，随机抽样 600 只大盘股...")
-        all_codes = all_codes[:600] # 取前600只
-    
-    logger.info(f"📥 [第2步] 分批获取 {len(all_codes)} 只股票的市值和成交额快照...")
-    batch_size = 350 # OpenD 一次快照上限通常是 400
-    snapshots = []
-    import time
-    for i in range(0, len(all_codes), batch_size):
-        batch = all_codes[i:i+batch_size]
-        ret, snap_data = ctx.get_market_snapshot(batch)
-        if ret == RET_OK and not snap_data.empty:
-            snapshots.append(snap_data)
-        time.sleep(0.5) # 控制频率防拒绝
+    cap_min = 200_000_000  # Default USD
+    if market == Market.HK:
+        cap_min = 1_560_000_000  # 15.6亿 HKD
+    elif market in [Market.SH, Market.SZ]:
+        cap_min = 1_440_000_000  # 14.4亿 RMB
         
-    if not snapshots:
+    f_cap.filter_min = cap_min
+
+    logger.info(f"📥 [第1步] {market} 服务器端条件选股(成交额排序，市值 >= {cap_min:,.0f})...")
+    
+    num_to_fetch = max(top_n * 3, 100) # 多拉一些防正股剔除
+    ret, filter_data = ctx.get_stock_filter(
+        market=market,
+        filter_list=[f_turnover, f_cap],
+        begin=0,
+        num=num_to_fetch
+    )
+    
+    if ret != 0:
+        logger.error(f"❌ 条件选股 API 失败: {filter_data}")
         return []
         
-    import pandas as pd
-    df = pd.concat(snapshots, ignore_index=True)
+    # filter_data 格式为 (is_no_filter, count, list) 或 (total_count, df) 不同API略有差异
+    # 经过测试本版本为 3-tuple (is_no, total, list)
+    try:
+        item_list = filter_data[2]
+        codes = [x.stock_code for x in item_list]
+    except Exception as e_parse:
+        logger.error(f"❌ 解析条件选股结果异常: {e_parse}")
+        return []
+
+    if not codes:
+        logger.warning(f"⚠️ {market} 选股列表为空，可能符合门槛的大盘股偏少。")
+        return []
+
+    logger.info(f"📥 [第2步] 批量拉取 {len(codes)} 只股票快照进行主板正股核验...")
+    ret_s, snap_data = ctx.get_market_snapshot(codes)
+    if ret_s != 0 or snap_data.empty:
+        logger.error(f"❌ 快照验证失败: {snap_data}")
+        return []
+
+    logger.info(f"📥 [第3步] 降序排序并核对主体成分...")
+    # 过滤停牌
+    snap_data = snap_data[snap_data['suspension'] == False]
     
-    logger.info(f"📥 [第3步] 根据成交额(turnover)按降序过滤排名...")
-    # 过滤掉停牌的、退市的
-    df = df[df['suspension'] == False]
-    # 如果有 turnover 列，按 turnover 降序
-    if 'turnover' in df.columns:
-        df = df.sort_values(by='turnover', ascending=False)
-    
-    top_codes = df.head(top_n)['code'].tolist()
+    # 验证是否是正股 (EQUITY)，避免拉入涡轮等衍生品
+    if 'type' in snap_data.columns:
+         snap_data = snap_data[snap_data['type'].isin(['EQUITY', 'STOCK'])]
+    elif 'lot_size' in snap_data.columns:
+         snap_data = snap_data[snap_data['lot_size'] > 0]
+         
+    if 'turnover' in snap_data.columns:
+         snap_data = snap_data.sort_values(by='turnover', ascending=False)
+         
+    top_codes = snap_data.head(top_n)['code'].tolist()
     logger.info(f"✅ 从 {market} 筛选出 Top {len(top_codes)} 强势活跃股。")
     return top_codes
 
