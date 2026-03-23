@@ -818,6 +818,21 @@ class BaseUSTradingController(QObject):
             for p in self.schwab_positions_cache:
                 if p.get('instrument', {}).get('symbol') == symbol:
                     return int(p.get('longQuantity', 0) - p.get('shortQuantity', 0))
+        elif self.venue == "FUTU":
+            # 🛡️ [风控加固] 实时从富途持仓接口查询，防止缓存脏数据导致 SELL 穿透
+            try:
+                if hasattr(self, 'trd_ctx') and self.trd_ctx:
+                    from futu import TrdEnv
+                    ret, data = self.trd_ctx.position_list_query(
+                        code=f"US.{symbol}",
+                        trd_env=self.trd_env
+                    )
+                    if ret == 0 and not data.empty:
+                        row = data[data['code'] == f"US.{symbol}"]
+                        if not row.empty:
+                            return int(row.iloc[0].get('qty', 0))
+            except Exception as e:
+                logger.warning(f"[FUTU] get_position_quantity {symbol} 异常: {e}")
         return 0
 
     def check_pending_orders(self, code: str, side: str) -> bool:
@@ -1098,6 +1113,16 @@ class BaseUSTradingController(QObject):
             return
             
         if self.venue == "FUTU":
+            # 🛡️ [风控加固] SELL 前实时核查持仓，防止无仓卖出
+            if action == "SELL":
+                curr_qty = self.get_position_quantity(code)
+                if curr_qty <= 0:
+                    self.log_message.emit(f"ℹ️ [美股-Futu] {symbol} Futu 实际无持仓，跳过卖出指令")
+                    return
+                qty = min(qty, curr_qty)
+                if self.check_pending_orders(code, 'SELL'):
+                    self.log_message.emit(f"⏳ [美股-Futu] {symbol} 存在未完成 SELL 订单，跳过当前指令")
+                    return
             await self._execute_futu_order_async(code, action, qty, price)
             return
 
