@@ -620,18 +620,37 @@ class BaseUSTradingController(QObject):
             # 💡 trigger_step = True 会禁用 CChan 初始化时加载数据，导致 0 根 K线。需移除！
             
             loop = asyncio.get_running_loop()
+            # 🛡️ [风控加固] 依照 venue 选择数据源：IB 模式优先用本地 SQLITE（避免 Schwab token 失效静默瘫痪）
+            _venue = self.venue
             def create_chan_30m():
                 try:
                     from Common.CEnum import DATA_SRC, KL_TYPE, AUTYPE
                     from Chan import CChan, CChanConfig
                     from config import CHAN_CONFIG
+                    # IB 模式: 本地数据库 → 失败则尝试 Schwab；Schwab 模式: 直连 Schwab
+                    src = DATA_SRC.SQLITE if _venue == 'IB' else DATA_SRC.SCHWAB
+                    try:
+                        result = CChan(
+                            code=code,
+                            begin_time=start_30m_str,
+                            end_time=end_time_str,
+                            data_src=src,
+                            lv_list=[KL_TYPE.K_30M],
+                            config=CChanConfig(local_chan_config),
+                            autype=AUTYPE.QFQ
+                        )
+                        if result and len(result[0]) > 0:
+                            return result
+                    except Exception:
+                        pass
+                    # 兜底: Schwab
                     return CChan(
-                        code=code, 
-                        begin_time=start_30m_str, 
-                        end_time=end_time_str, 
-                        data_src=DATA_SRC.SCHWAB, 
-                        lv_list=[KL_TYPE.K_30M], 
-                        config=CChanConfig(local_chan_config), 
+                        code=code,
+                        begin_time=start_30m_str,
+                        end_time=end_time_str,
+                        data_src=DATA_SRC.SCHWAB,
+                        lv_list=[KL_TYPE.K_30M],
+                        config=CChanConfig(local_chan_config),
                         autype=AUTYPE.QFQ
                     )
                 except Exception as e:
@@ -721,13 +740,30 @@ class BaseUSTradingController(QObject):
                     
                     def create_chan_5m():
                         try:
+                            # IB 模式优先用 SQLITE，Schwab 模式用 SCHWAB
+                            src5 = DATA_SRC.SQLITE if _venue == 'IB' else DATA_SRC.SCHWAB
+                            try:
+                                r5 = CChan(
+                                    code=code,
+                                    begin_time=start_5m_str,
+                                    end_time=end_time_str,
+                                    data_src=src5,
+                                    lv_list=[KL_TYPE.K_5M],
+                                    config=CChanConfig(local_chan_config),
+                                    autype=AUTYPE.QFQ
+                                )
+                                if r5 and len(r5[0]) > 0:
+                                    return r5
+                            except Exception:
+                                pass
+                            # 兜底: Schwab
                             return CChan(
-                                code=code, 
-                                begin_time=start_5m_str, 
-                                end_time=end_time_str, 
-                                data_src=DATA_SRC.SCHWAB, 
-                                lv_list=[KL_TYPE.K_5M], 
-                                config=CChanConfig(local_chan_config), 
+                                code=code,
+                                begin_time=start_5m_str,
+                                end_time=end_time_str,
+                                data_src=DATA_SRC.SCHWAB,
+                                lv_list=[KL_TYPE.K_5M],
+                                config=CChanConfig(local_chan_config),
                                 autype=AUTYPE.QFQ
                             )
                         except Exception as e:
