@@ -1932,14 +1932,35 @@ class HKTradingController(QObject):
         end_time_5m_str = now.strftime("%Y-%m-%d %H:%M:%S")
         start_time_5m_str = (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
 
+        # 🛡️ [API频率保护 Phase 9] 一站式预拉取全量持仓和待成交状态，杜绝 Loop 中频繁触发 API
+        pending_orders_codes = set()
+        positions_qty_map = {}
+        try:
+            with self.futu_api_lock:
+                 ret_ord, ord_data = self.trd_ctx.order_list_query(trd_env=self.trd_env)
+                 if ret_ord == RET_OK and not ord_data.empty:
+                     from futu import TrdSide, OrderStatus
+                     status_col = 'order_status' if 'order_status' in ord_data.columns else 'status'
+                     active_statuses = [OrderStatus.SUBMITTING, OrderStatus.SUBMITTED, OrderStatus.WAITING_SUBMIT]
+                     # 专门看 SELL 待成交
+                     orders_active = ord_data[ord_data[status_col].isin(active_statuses) & (ord_data['trd_side'] == TrdSide.SELL)]
+                     pending_orders_codes = set(orders_active['code'].tolist())
+                 
+                 ret_pos, pos_data = self.trd_ctx.position_list_query(trd_env=self.trd_env)
+                 if ret_pos == RET_OK and not pos_data.empty:
+                     for _, prow in pos_data.iterrows():
+                          positions_qty_map[prow['code']] = int(prow['qty'])
+        except Exception as e_pull:
+             self.log_message.emit(f"⚠️ [5M 逃顶快速路] 数据批次预拉异常: {e_pull}")
+
         for code in codes_to_check:
             try:
-                # 先检查是否已有卖单（避免重复下单）
-                if self.check_pending_orders(code, 'SELL'):
+                # 检查是否已有卖单（避免重复下单）
+                if code in pending_orders_codes:
                     continue
 
                 # 确认仍有持仓
-                pos_qty = self.get_position_quantity(code)
+                pos_qty = positions_qty_map.get(code, 0)
                 if pos_qty <= 0:
                     continue
 
@@ -1969,8 +1990,13 @@ class HKTradingController(QObject):
 
                 escape_key = f"ESCAPE_{code}_{bsp_time_5m.strftime('%Y%m%d%H%M')}"
                 if escape_key in self.discovered_signals:
-                    # 该时间戳已触发过（但可能漏单），自愈逻辑：无在单时强制再次发出，**忽略时效过期**！
-                    self.log_message.emit(f"🚨🚨 [5M 快速自愈] {code} 5M 卖点曾报过但无在单，强制再发逃逸出单！")
+                    # 🕐 时效保质期拦截 [风控加固 Phase 9]：避免几天前触发的逃离锁对未来手动建仓产生误杀
+                    is_too_old_for_healing = (now - bsp_time_5m).total_seconds() > 3600  # 1 小时前强力冷却
+                    if is_too_old_for_healing:
+                        continue
+                    
+                    # 该时间戳已触发过（但可能是漏单了），自愈逻辑：无在单时强制再次发出
+                    self.log_message.emit(f"🚨🚨 [5M 快速自愈] {code} 5M 卖点曾报过但无在单，强制再发逃避出单！")
                 else:
                     if is_stale:
                         # 对于全新的未发现信号，如果是过期的，就不当作逃顶处理
