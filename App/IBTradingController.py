@@ -99,6 +99,10 @@ class IBTradingController(BaseUSTradingController):
                 
             if action == "SELL":
                 curr_qty = self.get_position_quantity(code)
+                # 🛡️ [风控加固] 拦截在单，防止队列内高频 or 延迟的双 SELL 击穿持仓
+                if hasattr(self, 'check_pending_orders') and self.check_pending_orders(code, 'SELL'):
+                    self.log_message.emit(f"⏳ [美股-IB] {symbol} 存在未完成 SELL 订单，跳过当前指令")
+                    return
                 qty = min(qty, curr_qty)
                 if qty <= 0: return
 

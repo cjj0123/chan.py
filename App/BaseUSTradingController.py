@@ -1076,6 +1076,10 @@ class BaseUSTradingController(QObject):
                 
             if action == "SELL":
                 curr_qty = self.get_position_quantity(code)
+                # 🛡️ [风控加固] 拦截在单，防止队列内高频 or 延迟的双 SELL 击穿持仓
+                if self.check_pending_orders(code, 'SELL'):
+                    self.log_message.emit(f"⏳ [美股-IB] {symbol} 存在未完成 SELL 订单，跳过当前指令")
+                    return
                 qty = min(qty, curr_qty)
                 if qty <= 0: return
 
@@ -1308,6 +1312,10 @@ class BaseUSTradingController(QObject):
                 for p in positions:
                     qty = int(p.position)
                     if qty == 0: continue
+                    # 🛡️ [风控加固] 避免在一键清仓由于网络延迟被重复点击时，提交多个市价单导致形成反向多余头寸
+                    if hasattr(self, 'check_pending_orders') and self.check_pending_orders(f"US.{p.contract.symbol}", 'SELL' if qty > 0 else 'BUY'):
+                        self.log_message.emit(f"⏳ [美股-IB] {p.contract.symbol} 存在未完成平仓订单，跳过重复提交")
+                        continue
                     self.ib.placeOrder(p.contract, MarketOrder("SELL" if qty > 0 else "BUY", abs(qty)))
                     count += 1
                 self.log_message.emit(f"🔥 [美股-IB] 已提交 {count} 个清仓订单 (市价单)")
