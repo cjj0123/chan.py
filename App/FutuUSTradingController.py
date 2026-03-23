@@ -113,6 +113,27 @@ class FutuUSTradingController(BaseUSTradingController):
             
             if not code.startswith("US."):
                 code = f"US.{code.split('.')[-1]}"
+
+            # 🛡️ [风控加固] 卖单拦截与数量校准，防止出现持仓不足的假单报错
+            if side == TrdSide.SELL:
+                curr_qty = self.get_position_quantity(code)
+                if curr_qty <= 0:
+                    self.log_message.emit(f"ℹ️ [美股-Futu] {code} 实际无持仓或被挂单锁定，跳过卖单")
+                    return False
+                # 从参数0默认算出10000美元时，卖出量需校准到最大持仓
+                qty = min(qty, curr_qty)
+                if self.check_pending_orders(code, "SELL"):
+                    self.log_message.emit(f"⏳ [美股-Futu] {code} 存在未完成 SELL 订单，跳过防堆积")
+                    return False
+                
+            # 🛡️ [风控加固] 极速防爆：强制将 Futu 下单间隔拉开到 2.2 秒，对齐 15次/30秒 官方红线
+            if hasattr(self, '_last_futu_order_time'):
+                 import time
+                 elapsed = time.time() - self._last_futu_order_time
+                 if elapsed < 2.2:
+                      await asyncio.sleep(2.2 - elapsed)
+            import time
+            self._last_futu_order_time = time.time()
                 
             ret, data = self.trd_ctx.place_order(
                 price=limit_price,
