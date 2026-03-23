@@ -742,6 +742,15 @@ class HKTradingController(QObject):
                 order_price = self._round_to_hk_tick(raw_price, is_buy)
                     
                 self.log_message.emit(f"🚀 {code} 触发紧急模式，使用【5% 穿透限价单】执行 {action}: 数量={quantity}, 价格={order_price}")
+                
+                # 🛡️ [风控加固] 极速防爆：强制将 Futu 下单间隔拉开到 2.2 秒，对齐 15次/30秒 官方红线
+                if hasattr(self, '_last_futu_order_time'):
+                     import time
+                     elapsed = time.time() - self._last_futu_order_time
+                     if elapsed < 2.2:
+                          await asyncio.sleep(2.2 - elapsed)
+                self._last_futu_order_time = time.time()
+
                 ret, data = self.trd_ctx.place_order(
                     price=order_price,
                     qty=quantity,
@@ -760,6 +769,14 @@ class HKTradingController(QObject):
                 mode_str = "紧急(回退)" if urgent else "常规"
                 self.log_message.emit(f"📝 {code} 使用【增强限价单】({mode_str}) 执行 {action}: 数量={quantity}, 价格={order_price}")
                 
+                # 🛡️ [风控加固] 极速防爆：强制将 Futu 下单间隔拉开到 2.2 秒，对齐 15次/30秒 官方红线
+                if hasattr(self, '_last_futu_order_time'):
+                     import time
+                     elapsed = time.time() - self._last_futu_order_time
+                     if elapsed < 2.2:
+                          await asyncio.sleep(2.2 - elapsed)
+                self._last_futu_order_time = time.time()
+
                 ret, data = self.trd_ctx.place_order(
                     price=order_price,
                     qty=quantity,

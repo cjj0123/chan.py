@@ -442,8 +442,8 @@ class BaseUSTradingController(QObject):
                 try:
                     self.log_message.emit(f"🚀 [美股] 发起指令执行: {c}")
                     await asyncio.wait_for(self._execute_trade_async(**data), timeout=20)
-                    # 🟢 [风控加固] 强制睡眠 1.5s，确保整体频率控制在每 30 秒 15 次安全红线内
-                    await asyncio.sleep(1.5)
+                    # 🟢 [风控加固] 强制睡眠 2.2s，确保整体频率控制在每 30 秒 15 次安全红线内 (30 / 15 = 2.0s)
+                    await asyncio.sleep(2.2)
                 except Exception as ex:
                     self.log_message.emit(f"⚠️ [指令下单异常] {c} 执行失败: {ex}，已安全载入重试队列。")
                     if not hasattr(self, 'retry_orders'): self.retry_orders = {}
@@ -1852,6 +1852,14 @@ class BaseUSTradingController(QObject):
                     sub_matched = matched[account_list['card_num'].astype(str).str.contains('美国|US', case=False, na=False)]
                 
                 acc_id = sub_matched.iloc[0]['acc_id'] if not sub_matched.empty else (matched.iloc[0]['acc_id'] if not matched.empty else account_list.iloc[0]['acc_id'])
+
+            # 🛡️ [风控加固] 极速防爆：强制将 Futu 下单间隔拉开到 2.2 秒，对齐 15次/30秒 官方红线
+            if hasattr(self, '_last_futu_order_time'):
+                 import time
+                 elapsed = time.time() - self._last_futu_order_time
+                 if elapsed < 2.2:
+                      await asyncio.sleep(2.2 - elapsed)
+            self._last_futu_order_time = time.time()
 
             ret, data = self.trd_ctx.place_order(
                 price=limit_price,
