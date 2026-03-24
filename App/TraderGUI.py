@@ -15,7 +15,8 @@ from PyQt6.QtWidgets import (
     QGroupBox, QHBoxLayout, QPushButton, QComboBox, QCheckBox,
     QTableWidget, QTableWidgetItem, QTextEdit, QLabel, QLineEdit,
     QSplitter, QFrame, QMessageBox, QProgressBar, QDateTimeEdit,
-    QGridLayout, QHeaderView, QProgressDialog, QSizePolicy, QInputDialog
+    QGridLayout, QHeaderView, QProgressDialog, QSizePolicy, QInputDialog,
+    QDoubleSpinBox, QSpinBox
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, pyqtSlot, QTimer
 from PyQt6.QtGui import QTextCursor
@@ -134,8 +135,16 @@ class TraderGUI(QMainWindow):
             QPushButton:pressed { background-color: #0d47a1; }
             QPushButton:disabled { background-color: #bdc1c6; color: #ffffff; }
             
-            QLineEdit, QComboBox, QDateTimeEdit { 
+            QLineEdit, QComboBox, QDateTimeEdit, QSpinBox, QDoubleSpinBox { 
                 border: 1px solid #dadce0; border-radius: 4px; padding: 4px; background: #ffffff; color: #202124;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #ffffff;
+                color: #202124;
+                selection-background-color: #e8f0fe;
+                selection-color: #1a73e8;
+                border: 1px solid #dadce0;
+                outline: 0px;
             }
             
             QTableWidget { border: none; alternate-background-color: #f8f9fa; selection-background-color: #e8f0fe; color: #202124; }
@@ -157,6 +166,25 @@ class TraderGUI(QMainWindow):
             }
         """)
         self.layout = QVBoxLayout(self.central_widget)
+
+        # --- Top Header (Global Controls) ---
+        header_layout = QHBoxLayout()
+        header_layout.setContentsMargins(0, 0, 5, 0)
+        header_layout.addStretch()
+        
+        self.restart_btn = QPushButton("重启程序")
+        self.restart_btn.clicked.connect(self.on_restart_clicked)
+        self.restart_btn.setToolTip("重启图表分析终端")
+        # 针对顶部放置，给予更紧凑且醒目的样式
+        self.restart_btn.setStyleSheet("""
+            QPushButton { 
+                background-color: #f8f9fa; color: #d93025; border: 1px solid #dadce0; 
+                font-size: 11px; padding: 2px 8px; font-weight: bold;
+            }
+            QPushButton:hover { background-color: #f1f3f4; border-color: #d93025; }
+        """)
+        header_layout.addWidget(self.restart_btn)
+        self.layout.addLayout(header_layout)
 
         # --- Tab Widget ---
         self.tabs = QTabWidget()
@@ -205,6 +233,8 @@ class TraderGUI(QMainWindow):
             self.start_scan_btn.setVisible(True)
         if hasattr(self, 'load_chart_btn'):
             self.load_chart_btn.setVisible(True)
+        if hasattr(self, 'restart_btn'):
+            self.restart_btn.setVisible(True)
 
     def create_scanner_tab(self):
         """创建扫描与分析选项卡"""
@@ -345,12 +375,6 @@ class TraderGUI(QMainWindow):
         manual_layout.addWidget(self.repair_btn)
 
         manual_layout.addStretch()
-
-        self.restart_btn = QPushButton("重启程序")
-        self.restart_btn.clicked.connect(self.on_restart_clicked)
-        self.restart_btn.setToolTip("重启图表分析终端")
-        self.restart_btn.setStyleSheet("background-color: #f0f0f0; color: #333;")
-        manual_layout.addWidget(self.restart_btn)
         manual_group.setLayout(manual_layout)
         right_layout.addWidget(manual_group)
         
@@ -447,6 +471,35 @@ class TraderGUI(QMainWindow):
         hk_func_layout.addWidget(self.liquidate_btn)
         hk_func_layout.addStretch()
         hk_layout.addLayout(hk_func_layout)
+        
+        # --- 港股手动交易模块 ---
+        hk_manual_layout = QHBoxLayout()
+        hk_manual_layout.addWidget(QLabel("🕹️ 手动:"))
+        self.hk_manual_ticker_combo = QComboBox()
+        self.hk_manual_ticker_combo.setEditable(True)
+        self.hk_manual_ticker_combo.setPlaceholderText("代码(如 00700)")
+        self.hk_manual_ticker_combo.setMinimumWidth(100)
+        hk_manual_layout.addWidget(self.hk_manual_ticker_combo)
+        
+        hk_manual_layout.addWidget(QLabel(" 价格:"))
+        self.hk_manual_price_spin = QDoubleSpinBox()
+        self.hk_manual_price_spin.setRange(0, 999999); self.hk_manual_price_spin.setDecimals(3)
+        hk_manual_layout.addWidget(self.hk_manual_price_spin)
+        
+        hk_manual_layout.addWidget(QLabel(" 数量:"))
+        self.hk_manual_qty_spin = QSpinBox()
+        self.hk_manual_qty_spin.setRange(1, 1000000); self.hk_manual_qty_spin.setValue(100)
+        hk_manual_layout.addWidget(self.hk_manual_qty_spin)
+        
+        self.hk_manual_buy_btn = QPushButton("买")
+        self.hk_manual_buy_btn.setStyleSheet("background-color: #52c41a; color: white; width: 40px;")
+        self.hk_manual_buy_btn.clicked.connect(lambda: self.on_hk_manual_trade_clicked("BUY"))
+        self.hk_manual_sell_btn = QPushButton("卖")
+        self.hk_manual_sell_btn.setStyleSheet("background-color: #f5222d; color: white; width: 40px;")
+        self.hk_manual_sell_btn.clicked.connect(lambda: self.on_hk_manual_trade_clicked("SELL"))
+        hk_manual_layout.addWidget(self.hk_manual_buy_btn)
+        hk_manual_layout.addWidget(self.hk_manual_sell_btn)
+        hk_layout.addLayout(hk_manual_layout)
         
         # 港股日志
         self.auto_log_text = QTextEdit()
@@ -666,6 +719,35 @@ class TraderGUI(QMainWindow):
         monitor_ctrl_layout.addStretch()
         monitor_main_layout.addLayout(monitor_ctrl_layout)
         
+        # --- A股手动交易模块 ---
+        cn_manual_layout = QHBoxLayout()
+        cn_manual_layout.addWidget(QLabel("🕹️ 手动(Sim):"))
+        self.cn_manual_ticker_combo = QComboBox()
+        self.cn_manual_ticker_combo.setEditable(True)
+        self.cn_manual_ticker_combo.setPlaceholderText("代码(如 600519)")
+        self.cn_manual_ticker_combo.setMinimumWidth(100)
+        cn_manual_layout.addWidget(self.cn_manual_ticker_combo)
+        
+        cn_manual_layout.addWidget(QLabel(" 价格:"))
+        self.cn_manual_price_spin = QDoubleSpinBox()
+        self.cn_manual_price_spin.setRange(0, 999999); self.cn_manual_price_spin.setDecimals(2)
+        cn_manual_layout.addWidget(self.cn_manual_price_spin)
+        
+        cn_manual_layout.addWidget(QLabel(" 数量:"))
+        self.cn_manual_qty_spin = QSpinBox()
+        self.cn_manual_qty_spin.setRange(100, 1000000); self.cn_manual_qty_spin.setSingleStep(100); self.cn_manual_qty_spin.setValue(100)
+        cn_manual_layout.addWidget(self.cn_manual_qty_spin)
+        
+        self.cn_manual_buy_btn = QPushButton("买入")
+        self.cn_manual_buy_btn.setStyleSheet("background-color: #52c41a; color: white;")
+        self.cn_manual_buy_btn.clicked.connect(lambda: self.on_cn_manual_trade_clicked("BUY"))
+        self.cn_manual_sell_btn = QPushButton("卖出")
+        self.cn_manual_sell_btn.setStyleSheet("background-color: #f5222d; color: white;")
+        self.cn_manual_sell_btn.clicked.connect(lambda: self.on_cn_manual_trade_clicked("SELL"))
+        cn_manual_layout.addWidget(self.cn_manual_buy_btn)
+        cn_manual_layout.addWidget(self.cn_manual_sell_btn)
+        monitor_main_layout.addLayout(cn_manual_layout)
+        
         # 监控专属日志
         self.monitor_log_text = QTextEdit()
         self.monitor_log_text.setReadOnly(True)
@@ -683,11 +765,60 @@ class TraderGUI(QMainWindow):
         left_column.addWidget(hk_group)
         left_column.addWidget(monitor_group)
         
-        # --- 第二列：美股 (IB / Schwab / Futu) ---
+        # --- 美股手动交易模块 ---
+        us_manual_group = QGroupBox("🕹️ 手动执行 (美股)")
+        us_manual_layout = QVBoxLayout()
+        
+        manual_inputs_layout = QHBoxLayout()
+        manual_inputs_layout.addWidget(QLabel("渠道:"))
+        self.manual_venue_combo = QComboBox()
+        self.manual_venue_combo.addItems(["IB", "FUTU", "SCHWAB"])
+        self.manual_venue_combo.currentIndexChanged.connect(self.on_manual_venue_changed)
+        manual_inputs_layout.addWidget(self.manual_venue_combo)
+        
+        # 初始化持仓缓存，用于手动交易对应渠道
+        self.portfolio_cache = {"IB": [], "FUTU": [], "SCHWAB": []}
+        
+        manual_inputs_layout.addWidget(QLabel(" 标的:"))
+        self.manual_ticker_combo = QComboBox()
+        self.manual_ticker_combo.setEditable(True)
+        self.manual_ticker_combo.setPlaceholderText("输入或选择代码(如 AAPL)")
+        self.manual_ticker_combo.setMinimumWidth(120)
+        manual_inputs_layout.addWidget(self.manual_ticker_combo)
+        
+        manual_inputs_layout.addWidget(QLabel(" 价格:"))
+        self.manual_price_spin = QDoubleSpinBox()
+        self.manual_price_spin.setRange(0, 999999)
+        self.manual_price_spin.setDecimals(2)
+        self.manual_price_spin.setToolTip("设为 0 则底层自动处理")
+        manual_inputs_layout.addWidget(self.manual_price_spin)
+        
+        manual_inputs_layout.addWidget(QLabel(" 数量:"))
+        self.manual_qty_spin = QSpinBox()
+        self.manual_qty_spin.setRange(1, 1000000)
+        self.manual_qty_spin.setValue(100)
+        manual_inputs_layout.addWidget(self.manual_qty_spin)
+        
+        manual_btns_layout = QHBoxLayout()
+        self.manual_buy_btn = QPushButton("手动买入")
+        self.manual_buy_btn.setStyleSheet("background-color: #52c41a; color: white; font-weight: bold;")
+        self.manual_buy_btn.clicked.connect(lambda: self.on_manual_trade_clicked("BUY"))
+        self.manual_sell_btn = QPushButton("手动卖出")
+        self.manual_sell_btn.setStyleSheet("background-color: #f5222d; color: white; font-weight: bold;")
+        self.manual_sell_btn.clicked.connect(lambda: self.on_manual_trade_clicked("SELL"))
+        manual_btns_layout.addWidget(self.manual_buy_btn)
+        manual_btns_layout.addWidget(self.manual_sell_btn)
+        
+        us_manual_layout.addLayout(manual_inputs_layout)
+        us_manual_layout.addLayout(manual_btns_layout)
+        us_manual_group.setLayout(us_manual_layout)
+
+        # --- 第二列：美股 (IB / Schwab / Futu / Manual) ---
         right_column = QVBoxLayout()
         right_column.addWidget(us_group)
         right_column.addWidget(schwab_group)
         right_column.addWidget(futu_us_group)
+        right_column.addWidget(us_manual_group)
         
         main_config_layout.addLayout(left_column, 1)
         main_config_layout.addLayout(right_column, 1)
@@ -823,6 +954,7 @@ class TraderGUI(QMainWindow):
 
                 self.hk_trading_controller = HKTradingController(hk_watchlist_group=group_name, discord_bot=bot)
                 self.hk_trading_controller.log_message.connect(self.append_auto_log)
+                self.hk_trading_controller.funds_updated.connect(self.update_hk_funds_display)
                 
                 # 在新线程中运行策略
                 import threading
@@ -834,6 +966,9 @@ class TraderGUI(QMainWindow):
                     
                 self.hk_trade_thread = threading.Thread(target=run_trade, daemon=True)
                 self.hk_trade_thread.start()
+                
+                # 初始触发一次资金同步，确保手动下拉框立即可用
+                self.hk_trading_controller.query_account_funds()
                 
                 self.hk_auto_status.setText("港股自动交易: [运行中]")
                 self.hk_auto_btn.setText("停止自动交易")
@@ -956,6 +1091,116 @@ class TraderGUI(QMainWindow):
             self.append_us_auto_log(pos_msg)
         else:
             self.append_us_auto_log("ℹ️ 当前账户无美股持仓")
+        
+        # 更新缓存并同步手动模块 (如果当前选中 IB)
+        self.portfolio_cache["IB"] = positions
+        if self.manual_venue_combo.currentText() == "IB":
+            self.update_manual_ticker_list(positions)
+
+    def update_hk_funds_display(self, available, total, positions):
+        """更新港股资金持仓显示"""
+        self.append_auto_log(f"💰 [港股账户] 可用资金: ${available:,.2f}, 总资产: ${total:,.2f}")
+        if positions:
+            pos_msg = "📦 [当前持仓]:"
+            for p in positions:
+                pos_msg += f"\n   • {p['symbol']}: {p['qty']} 股, 市值 {p['mkt_value']:.2f}, 盈亏 {p['pnl_ratio']:.2f}%"
+            self.append_auto_log(pos_msg)
+        else:
+            self.append_auto_log("ℹ️ 当前账户无港股持仓")
+            
+        # 同步更新手动模块
+        self.update_market_ticker_list(self.hk_manual_ticker_combo, [p['symbol'] for p in positions] if positions else [])
+
+    def on_manual_venue_changed(self):
+        """当手动交易渠道切换时，同步更新标的下拉框"""
+        venue = self.manual_venue_combo.currentText()
+        positions = self.portfolio_cache.get(venue, [])
+        self.update_manual_ticker_list(positions, force_refresh=True)
+
+    def update_manual_ticker_list(self, positions: list, force_refresh=False):
+        """同步更新手动交易面板的代码列表"""
+        # 如果下拉框当前处于展开状态，且不是强制刷新，则跳过以免干扰用户操作
+        if not force_refresh and self.manual_ticker_combo.view().isVisible():
+            return
+
+        current_text = self.manual_ticker_combo.currentText()
+        new_codes = [p['symbol'] for p in positions] if positions else []
+        
+        # 检查列表是否真的需要更新
+        existing_codes = [self.manual_ticker_combo.itemText(i) for i in range(self.manual_ticker_combo.count())]
+        if not force_refresh and set(existing_codes) == set(new_codes):
+            return
+
+        # 阻塞信号防止触发 index_changed 逻辑
+        self.manual_ticker_combo.blockSignals(True)
+        self.manual_ticker_combo.clear()
+        if new_codes:
+            self.manual_ticker_combo.addItems(new_codes)
+        self.manual_ticker_combo.setCurrentText(current_text)
+        self.manual_ticker_combo.blockSignals(False)
+
+    def on_manual_trade_clicked(self, action: str):
+        """执行手工委托"""
+        venue = self.manual_venue_combo.currentText()
+        ticker = self.manual_ticker_combo.currentText().strip()
+        price = self.manual_price_spin.value()
+        qty = self.manual_qty_spin.value()
+        
+        if not ticker:
+            QMessageBox.warning(self, "参数错误", "请输入或选择股票代码！")
+            return
+            
+        # 确定控制器
+        controller = None
+        if venue == "IB": controller = self.us_trading_controller
+        elif venue == "FUTU": controller = self.futu_us_trading_controller
+        elif venue == "SCHWAB": controller = self.schwab_trading_controller
+        
+        if controller is None:
+            QMessageBox.warning(self, "未启动", f"请先启动 {venue} 交易连接。")
+            return
+            
+        msg = f"确定要手动执行 {venue} {action} {ticker} {qty} 股吗？"
+        if price > 0: msg += f"\n限价: ${price:.2f}"
+        
+        reply = QMessageBox.question(self, '确认手动交易', msg,
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            controller.execute_manual_order(ticker, action, price, qty)
+
+    # --- 通用市场代码同步逻辑 ---
+    def update_market_ticker_list(self, combo_box, symbols: list):
+        """通用更新代码下拉框列表逻辑"""
+        if combo_box.view().isVisible(): return
+        current_text = combo_box.currentText()
+        existing_codes = [combo_box.itemText(i) for i in range(combo_box.count())]
+        if set(existing_codes) == set(symbols): return
+        
+        combo_box.blockSignals(True)
+        combo_box.clear()
+        if symbols: combo_box.addItems(symbols)
+        combo_box.setCurrentText(current_text)
+        combo_box.blockSignals(False)
+
+    def on_hk_manual_trade_clicked(self, action: str):
+        if not self.hk_trading_controller:
+            self.append_auto_log("⚠️ 港股交易未启动")
+            return
+        code = self.hk_manual_ticker_combo.currentText().strip()
+        price = self.hk_manual_price_spin.value()
+        qty = self.hk_manual_qty_spin.value()
+        if not code: return
+        self.hk_trading_controller.execute_manual_order(code, action, price, qty)
+
+    def on_cn_manual_trade_clicked(self, action: str):
+        if not self.market_monitor_controller or not self._cn_trading_enabled:
+            self.append_monitor_log("⚠️ A股自动交易模式未开启")
+            return
+        code = self.cn_manual_ticker_combo.currentText().strip()
+        price = self.cn_manual_price_spin.value()
+        qty = self.cn_manual_qty_spin.value()
+        if not code: return
+        self.market_monitor_controller.execute_manual_order(code, action, price, qty)
 
     def on_us_force_scan_clicked(self):
         """手动触发美股策略扫描"""
@@ -1045,6 +1290,11 @@ class TraderGUI(QMainWindow):
             self.append_futu_us_auto_log(pos_msg)
         else:
             self.append_futu_us_auto_log("ℹ️ 当前账户无 Futu 美股持仓")
+        
+        # 更新缓存同步
+        self.portfolio_cache["FUTU"] = positions
+        if self.manual_venue_combo.currentText() == "FUTU":
+            self.update_manual_ticker_list(positions)
 
     def on_futu_us_force_scan_clicked(self):
         """手动触发 Futu 美股策略扫描"""
@@ -1129,6 +1379,11 @@ class TraderGUI(QMainWindow):
             self.append_schwab_auto_log(pos_msg)
         else:
             self.append_schwab_auto_log("ℹ️ 当前账户无 Schwab 持仓")
+            
+        # 更新缓存同步
+        self.portfolio_cache["SCHWAB"] = positions
+        if self.manual_venue_combo.currentText() == "SCHWAB":
+            self.update_manual_ticker_list(positions)
 
     def on_schwab_force_scan_clicked(self):
         """手动触发 Schwab 策略扫描"""
@@ -1213,6 +1468,9 @@ class TraderGUI(QMainWindow):
             for p in positions:
                 pos_msg += f"\n   • {p['symbol']}: {p['qty']} 股, 市值 {p['mkt_value']:.2f}, 可卖 {p['can_sell_qty']}"
             self.append_monitor_log(pos_msg)
+        
+        # 同步更新手动模块
+        self.update_market_ticker_list(self.cn_manual_ticker_combo, [p['symbol'] for p in positions] if positions else [])
 
     def on_monitor_force_scan_clicked(self):
         """异步/定时监控：手动触发一次扫描"""
@@ -1233,41 +1491,37 @@ class TraderGUI(QMainWindow):
             
     def on_query_funds_clicked(self):
         """刷新并打印账户持仓及资金到自动化日志"""
+        # 优先使用现有控制器进行异步查询
+        if self.hk_trading_controller:
+            self.append_auto_log("🔄 正在通过主控制器查询港股账户状态...")
+            self.hk_trading_controller.query_account_funds()
+            return
+            
+        # 如果控制器未启动，尝试临时查询
         if HKTradingController is None:
             self.append_auto_log("❌ 无法连接接口获取资金信息。")
             return
         
-        self.append_auto_log("🔄 正在查询富途账户资金及持仓...")
+        self.append_auto_log("🔄 正在通过临时查询获取港股状态...")
         try:
             # 临时创建一个控制器来获取资金
             temp_controller = HKTradingController()
             temp_controller.log_message.connect(self.append_auto_log)
-            funds, total_assets = temp_controller.get_account_assets()
+            # 关联信号到 UI 更新方法，确保即使手动刷新也能同步下拉框
+            temp_controller.funds_updated.connect(self.update_hk_funds_display)
             
-            # 同时查询持仓
-            from futu import OpenHKTradeContext, TrdEnv, RET_OK
-            try:
-                env = temp_controller.trd_env
-                trd_ctx = OpenHKTradeContext(host='127.0.0.1', port=11111)
-                ret, data = trd_ctx.position_list_query(trd_env=env)
-                if ret == RET_OK:
-                    if data.empty:
-                        self.append_auto_log("📊 当前无持仓。")
-                    else:
-                        self.append_auto_log(f"📊 当前持仓: {len(data)} 个股票")
-                        for _, row in data.iterrows():
-                            self.append_auto_log(f"   - {row.get('code', 'N/A')}: {row.get('qty', 0)}股, 市值 {row.get('market_val', 0):.2f}")
-                else:
-                    self.append_auto_log(f"⚠️ 查询持仓失败: {data}")
-                trd_ctx.close()
-            except Exception as e:
-                self.append_auto_log(f"⚠️ 查询持仓出现异常: {e}")
+            # 执行查询
+            temp_controller.query_account_funds()
             
-            # 关闭临时控制器的连接
-            if hasattr(temp_controller, 'quote_ctx') and temp_controller.quote_ctx:
-                temp_controller.quote_ctx.close()
-            if hasattr(temp_controller, 'trd_ctx') and temp_controller.trd_ctx:
-                temp_controller.trd_ctx.close()
+            # 使用一次性定时器关闭连接，避免阻塞当前逻辑
+            import QtCore
+            def cleanup():
+                if hasattr(temp_controller, 'trd_ctx') and temp_controller.trd_ctx:
+                    temp_controller.trd_ctx.close()
+                if hasattr(temp_controller, 'quote_ctx') and temp_controller.quote_ctx:
+                    temp_controller.quote_ctx.close()
+            
+            QtCore.QTimer.singleShot(5000, cleanup)
             
             self.append_auto_log(f"💰 账户可用资金: {funds:.2f}")
         except Exception as e:

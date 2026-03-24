@@ -33,7 +33,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 # 将项目根目录加入路径
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from config import TRADING_CONFIG, CHAN_CONFIG, CHART_CONFIG, CHART_PARA
+from config import TRADING_CONFIG, CHAN_CONFIG, CHART_CONFIG, CHART_PARA, MARKET_SPECIFIC_CONFIG
 from Chan import CChan
 from ChanConfig import CChanConfig
 from Common.CEnum import KL_TYPE, DATA_SRC, AUTYPE
@@ -54,6 +54,7 @@ from ML.SignalValidator import SignalValidator
 # 导入 视觉评分器
 from visual_judge import VisualJudge
 from Trade.db_util import CChanDB
+from Trade.RiskManager import get_risk_manager
 
 
 logger = logging.getLogger(__name__)
@@ -110,6 +111,7 @@ class MarketMonitorController(QObject):
 
         # ATR 移动追踪止损器
         self.position_trackers = self.db.get_all_stop_loss_trackers() if hasattr(self, 'db') else {}
+        self.subscribed_stocks = set() # 📡 实时行情订阅池
         if self.position_trackers:
             # self.log_message.emit(f"🔄 [A股-风控] 从数据库载入并初始化 {len(self.position_trackers)} 只持仓的止损锚点。")
             for c, t in self.position_trackers.items():
@@ -120,6 +122,21 @@ class MarketMonitorController(QObject):
 
         # 视觉/AI 评分缓存 {cache_key: {"score", "analysis"}}
         self.visual_score_cache = {}
+        
+        # 🛡️ [对齐港股] 全局风险管理器与头寸上限 (10 只)
+        self.risk_manager = get_risk_manager()
+        self.max_total_positions = TRADING_CONFIG.get('max_total_positions', 10)
+
+        # 🚀 [Phase 11] 应用针对 A 股优化的专属参数
+        cn_cfg = MARKET_SPECIFIC_CONFIG.get('CN', {})
+        self.chan_config = CChanConfig(CHAN_CONFIG)
+        if 'bs_type' in cn_cfg:
+            self.chan_config.bs_point_conf.b_conf.tmp_target_types = cn_cfg['bs_type']
+            self.chan_config.bs_point_conf.b_conf.parse_target_type()
+            self.chan_config.bs_point_conf.s_conf.tmp_target_types = cn_cfg['bs_type']
+            self.chan_config.bs_point_conf.s_conf.parse_target_type()
+        
+        self.atr_stop_trail = cn_cfg.get('atr_stop_trail', TRADING_CONFIG.get('atr_stop_trail', 2.5))
 
     # ============================= 交易时间判定 =============================
 
@@ -234,6 +251,23 @@ class MarketMonitorController(QObject):
     def close_all_positions(self):
         self.cmd_queue.put(('CLOSE_ALL', None))
 
+    def execute_manual_order(self, code, action, price, qty):
+        """主入口：执行 A股 手工委托订单 (Futu 模拟盘)"""
+        if not code: return
+        # A股代码标准化 (如 600519 -> SH.600519)
+        if "." not in code:
+            if code.startswith("60") or code.startswith("68"):
+                code = f"SH.{code}"
+            else:
+                code = f"SZ.{code}"
+        
+        self.cmd_queue.put(('MANUAL_TRADE', {
+            'code': code.upper(),
+            'action': action.upper(),
+            'price': float(price),
+            'qty': int(qty)
+        }))
+
     def get_status_summary(self) -> str:
         run_status = "🟢 正在运行" if self._is_running else "🛑 已停止"
         tracker_count = len(self.position_trackers)
@@ -276,31 +310,50 @@ class MarketMonitorController(QObject):
         self._init_trd_ctx()
 
         try:
-            # --- 动态仓位计算 (对齐港股 risk_manager 模型) ---
+            # --- 🛡️ [风控加固] 1. 全局个股限额校验 (对齐港股 10 只闸门) ---
+            if action.upper() == "BUY":
+                current_count = self.get_position_count()
+                if current_count >= self.max_total_positions:
+                    self.log_message.emit(f"🚫 [A股-限额] 达到最大持仓限制({current_count}/{self.max_total_positions})，跳过 {code}")
+                    return
+
+            # --- 2. 动态仓位计算 (对齐港股 50,000 资金门槛 与 RiskManager 模型) ---
             if action.upper() == "BUY" and qty <= 0:
-                # 查询账户可用资金
+                # 查询账户资产
                 ret_acct, acct_data = self.trd_ctx.accinfo_query(trd_env=self.trd_env)
-                available = float(acct_data.iloc[0]['cash']) if ret_acct == RET_OK and not acct_data.empty else 0
-                
-                if available < 5000:
-                    self.log_message.emit(f"💰 [A股-交易] 可用资金({available:.0f})不足5000元，跳过买入")
+                if ret_acct != RET_OK or acct_data.empty:
+                    self.log_message.emit(f"⚠️ [A股-交易] 资产查询失败，无法计算仓位")
                     return
                 
-                # 单笔最大使用可用资金的 20%
-                max_position_value = available * 0.20
+                available = float(acct_data.iloc[0]['cash'])
+                total_assets = float(acct_data.iloc[0].get('total_assets', available))
                 
-                # 用 ATR 限制风险: 单笔最大亏损 = 总资产的 2%
+                # [核心修正] 对齐港股 5.0w 门槛
+                if available < 50000:
+                    self.log_message.emit(f"💰 [A股-交易] 可用资金({available:.0f})不足 50,000 元，停止买入 (对齐港股风控线)")
+                    return
+                
+                # 获取 ATR 
                 atr = self._calculate_atr(code)
-                if atr > 0 and price > 0:
-                    total_assets = float(acct_data.iloc[0].get('total_assets', available))
-                    risk_per_trade = total_assets * 0.02  # 每笔最多亏 2%
-                    atr_limited_qty = int(risk_per_trade / (atr * 1.2))  # 1.2 ATR止损
-                    fund_limited_qty = int(max_position_value / price)
-                    qty = min(atr_limited_qty, fund_limited_qty)
-                    self.log_message.emit(f"📊 [A股-交易] {code} 动态仓位: ATR限={atr_limited_qty}, 资金限={fund_limited_qty} -> 取{qty}股")
-                else:
-                    qty = int(max_position_value / price) if price > 0 else 100
-                    self.log_message.emit(f"📊 [A股-交易] {code} 固定20%仓位: {qty}股")
+                score = kwargs.get('visual_score', 75)
+                ml_prob = kwargs.get('ml_prob', 0.7)
+                
+                # [核心修正] 使用统一 RiskManager 计算仓位
+                qty = self.risk_manager.calculate_position_size(
+                    code=code,
+                    available_funds=available,
+                    current_price=price,
+                    signal_score=score,
+                    risk_factor=1.0,
+                    atr=atr,
+                    atr_multiplier=2.2, # A股波动稍大，倍数微调
+                    total_assets=total_assets,
+                    lot_size=100,
+                    ml_prob=ml_prob
+                )
+                self.log_message.emit(f"📊 [A股-对齐] {code} 风险引擎计算仓位: {qty}股 (基于 ATR={atr:.3f}, Score={score})")
+            elif qty <= 0:
+                qty = 100  # 卖出默认回退
             elif qty <= 0:
                 qty = 100  # 卖出默认回退
 
@@ -327,6 +380,12 @@ class MarketMonitorController(QObject):
             if ret == RET_OK:
                 order_id = data.iloc[0]['order_id']
                 self.log_message.emit(f"✅ [A股-交易] 订单提交成功! ID: {order_id}")
+
+                # 记录到全局风险管理器 (Phase 9)
+                self.risk_manager.record_trade(
+                    code, action.upper(), qty, limit_price, 
+                    kwargs.get('visual_score', 0), pnl=0.0
+                )
 
                 # 记录实盘数据库 (优化F)
                 try:
@@ -364,6 +423,7 @@ class MarketMonitorController(QObject):
                         }
                         self.db.save_stop_loss_tracker(code, limit_price, limit_price, atr, 0)  # 🛡️ 辅助持久化
                         self.log_message.emit(f"🛡️ [A股-风控] {code} 已初始化 ATR 止损追踪 (ATR={atr:.4f})")
+                        self._subscribe_stock_quote(code) # 📡 [极速风控] 开启实时推送
 
                 # 启动异步订单跟踪
                 self.cmd_queue.put(('TRACK_ORDER', {'order_id': order_id, 'code': code, 'action': action, 'qty': qty, 'price': limit_price}))
@@ -450,8 +510,33 @@ class MarketMonitorController(QObject):
                 code, start=None, end=None, ktype=KLType.K_DAY,
                 autype=AuType.QFQ, max_count=period + 5
             )
-            if ret != RET_OK or klines.empty or len(klines) < period:
-                self.log_message.emit(f"⚠️ [A股-ATR] {code} 日线拉取失败: ret={ret}, empty={(klines.empty if not klines.empty else 'True') if 'klines' in locals() else 'Unknown'}, len={len(klines) if 'klines' in locals() else 0}")
+            if ret != RET_OK:
+                # 🛡️ [风控加固 Phase 9] 如果富途额度不足 (A股额度极低)，降级使用本地数据库计算 ATR
+                if "额度不足" in str(klines):
+                    self.log_message.emit(f"⚠️ [A股-ATR] {code} 富途历史K线额度受限，正在从本地核心库调取数据自愈...")
+                    klines = self.db.execute_query(
+                        "SELECT high, low, close FROM kline_day WHERE code = ? ORDER BY date DESC LIMIT ?",
+                        (code, period + 5)
+                    )
+                    if klines.empty or len(klines) < period:
+                        # 🛡️ [风控加固 Phase 9] 终极兜底：如果本地库也无数据，使用当前价格的 2.5% 作为估算 ATR
+                        # 保证止损系统不会因为“没数据”而完全罢工
+                        snap_ret, snap_data = self.quote_ctx.get_market_snapshot([code])
+                        if snap_ret == RET_OK and not snap_data.empty:
+                            last_price = float(snap_data.iloc[0]['last_price'])
+                            est_atr = last_price * 0.025
+                            self.log_message.emit(f"🛡️ [A股-ATR] {code} 本地历史缺失，已启用估算 ATR (2.5% 现价): {est_atr:.3f}")
+                            return est_atr
+                        self.log_message.emit(f"❌ [A股-ATR] {code} 本地库/实测价均不可达，风控锚点将失效！")
+                        return 0.0
+                    # 将本地 DB 数据逆序 (由近及远 -> 由远及近) 以对齐 ATR 计算逻辑
+                    klines = klines.iloc[::-1].reset_index(drop=True)
+                else:
+                    self.log_message.emit(f"⚠️ [A股-ATR] {code} 日线拉取失败: {klines}")
+                    return 0.0
+            
+            if klines.empty or len(klines) < period:
+                self.log_message.emit(f"⚠️ [A股-ATR] {code} 样本数据不足: len={len(klines)}")
                 return 0.0
 
             tr_list = []
@@ -530,6 +615,39 @@ class MarketMonitorController(QObject):
         except Exception as e:
             self.log_message.emit(f"❌ [A股-交易] 清仓操作异常: {e}")
 
+    def _subscribe_stock_quote(self, code: str):
+        """订阅实时行情以获取极速价格"""
+        if not self.quote_ctx: self._init_futu()
+        from futu import SubType
+        if code not in self.subscribed_stocks:
+            ret, data = self.quote_ctx.subscribe([code], [SubType.QUOTE], subscribe_push=False)
+            if ret == RET_OK:
+                self.subscribed_stocks.add(code)
+                # self.log_message.emit(f"📡 [A股-订阅] {code} 实时行情已开启")
+
+    def _unsubscribe_stock_quote(self, code: str):
+        """取消订阅实时行情"""
+        if not self.quote_ctx: return
+        from futu import SubType
+        if code in self.subscribed_stocks:
+            self.quote_ctx.unsubscribe([code], [SubType.QUOTE])
+            self.subscribed_stocks.remove(code)
+
+    def get_position_count(self) -> int:
+        """获取当前 A 股实际持仓数量 (去重)"""
+        if not self.trd_ctx:
+            self._init_trd_ctx()
+        try:
+            ret, data = self.trd_ctx.position_list_query(trd_env=self.trd_env)
+            if ret == RET_OK and not data.empty:
+                # 只算 Qty > 0 的
+                held = data[data['qty'].astype(float) > 0]
+                return len(held)
+            return 0
+        except Exception as e:
+            logger.error(f"获取持仓数量异常: {e}")
+            return 0
+
     # ============================= ATR 移动止损监控 =============================
 
     def _check_trailing_stops(self):
@@ -562,10 +680,23 @@ class MarketMonitorController(QObject):
                 self.log_message.emit(f"🔄 [A股-风控] {code} 已无持仓，停止止损追踪")
                 del self.position_trackers[code]
                 self.db.delete_stop_loss_tracker(code) # 清除持久化
+                self._unsubscribe_stock_quote(code) # 🚫 释放推送配额
                 continue
 
+            # 🚀 [极速数据线] 优先使用行情快照代替持仓列表的延迟价格 (nominal_price)
+            # 解决 A 股 ATR 止损不够敏捷的问题
+            current_price = 0.0
+            self._subscribe_stock_quote(code)
+            ret_snap, snap_data = self.quote_ctx.get_market_snapshot([code])
+            if ret_snap == RET_OK and not snap_data.empty:
+                current_price = float(snap_data.iloc[0]['last_price'])
+            else:
+                current_price = current_positions[code]['price'] # 降级使用持仓列表价格
+            
+            if current_price <= 0: continue
+            
             pos = current_positions[code]
-            current_price = pos['price']
+            # current_price = pos['price'] # 已被行情快照替代
             can_sell = pos['can_sell_qty']
             tracker = self.position_trackers[code]
 
@@ -586,7 +717,8 @@ class MarketMonitorController(QObject):
             elif "2买" in bsp_type_str or "3买" in bsp_type_str:
                 atr_init = 1.2 # 2/3买右侧确认，严格控损 1.2x
 
-            atr_trail = TRADING_CONFIG.get('atr_stop_trail', 2.5)
+            # 🚀 [Phase 11] 使用针对 A 股优化的 1.5 ATR 移动止损
+            atr_trail = self.atr_stop_trail
             atr_profit = TRADING_CONFIG.get('atr_profit_threshold', 1.5)
 
             # 触发移动止损
@@ -597,10 +729,10 @@ class MarketMonitorController(QObject):
 
             if tracker.get('trail_active', False):
                 stop_price = highest - (atr * atr_trail)
-                stop_type = "移动止损"
+                stop_type = "ATR移动止盈"
             else:
                 stop_price = entry_price - (atr * atr_init)
-                stop_type = "固定止损"
+                stop_type = "ATR初始止损"
 
             # 触发则立刻下平仓单 (受 T+1 限制，只卖可卖数量)
             if current_price < stop_price:
@@ -616,6 +748,7 @@ class MarketMonitorController(QObject):
                     self.execute_trade(code, "SELL", current_price, qty=can_sell, exit_reason=stop_type)
                     del self.position_trackers[code]
                     self.db.delete_stop_loss_tracker(code) # 清除持久化
+                    self._unsubscribe_stock_quote(code) # 🚫 释放推送配额
                     
                     # 🛡️ [风控加固 Phase 8] 录入锁区锚点：记录锁区触发时的 CTime 戳记
                     from Common.CTime import CTime
@@ -628,6 +761,31 @@ class MarketMonitorController(QObject):
                         self.log_message.emit(f"🛡️ [A股-风控] {code} 止损出局，锁入结构防护舱，直到生成新中枢为止。")
                 else:
                     self.log_message.emit(f"⚠️ [A股-风控] {code} T+1 限制，当日买入不可卖出，下一交易日将继续监控。")
+                continue # 已处理卖出，无需继续后续逻辑
+                    
+            # 🛡️ [风控加固 Phase 9] 快速利润保护 (1.0 ATR 冲高回落止盈)
+            # 对齐港股规则：若已激活移动止损(盈利>1.5*ATR)，且回落超 1.0*ATR (即使还未到 2.5x 止损位)，提前锁定利润
+            if tracker.get('trail_active', False) and (highest - current_price) > (1.0 * atr):
+                self.log_message.emit(f"⚡ [A股-风控] {code} 触发快速回撤保护 (冲高回落 > 1.0 ATR)，提前止盈。")
+                if not getattr(self, 'trading_enabled', False):
+                    self.log_message.emit(f"⚠️ [A股-风控] {code} 满足止盈，但“开启交易”未勾选，仅报警。")
+                elif can_sell > 0:
+                    self.execute_trade(code, "SELL", current_price, qty=can_sell, exit_reason="快速止盈")
+                    del self.position_trackers[code]
+                    self.db.delete_stop_loss_tracker(code) # 清除持久化
+                    self._unsubscribe_stock_quote(code) # 🚫 释放推送配额
+                    
+                    # 录入锁区锚点
+                    from Common.CTime import CTime
+                    from datetime import datetime
+                    now = datetime.now()
+                    self.structure_barrier[code] = {
+                        'lock_time_ts': CTime(now.year, now.month, now.day, now.hour, now.minute).ts
+                    }
+                    self.log_message.emit(f"🛡️ [A股-风控] {code} 止盈出局，锁入结构防护舱。")
+                else:
+                    self.log_message.emit(f"⚠️ [A股-风控] {code} 满足止盈，但受 T+1 限制当日无法卖出。")
+                continue
                     
             # 🔄 同步更新最高价与移动止损状态到数据库
             if code in self.position_trackers:
@@ -691,13 +849,13 @@ class MarketMonitorController(QObject):
             today_str = datetime.now().strftime('%Y-%m-%d')
             
             # 查买入单
-            cursor.execute("SELECT code, name, entry_price, quantity FROM live_trades WHERE date(entry_time) = ?", (today_str,))
+            cursor.execute("SELECT code, name, entry_price, quantity FROM live_trades WHERE date(entry_time) = ? AND market = 'CN'", (today_str,))
             buys = cursor.fetchall()
             for b in buys:
                 report.append(f"   • [买入] {b[0]} ({b[1]}) | 成交: ¥{b[2]:.2f} | 数量: {b[3]}股")
                 
             # 查卖出单
-            cursor.execute("SELECT code, exit_price, exit_reason, pnl_pct FROM live_trades WHERE date(exit_time) = ?", (today_str,))
+            cursor.execute("SELECT code, exit_price, exit_reason, pnl_pct FROM live_trades WHERE date(exit_time) = ? AND market = 'CN'", (today_str,))
             sells = cursor.fetchall()
             for s in sells:
                 report.append(f"   • [卖出/止损] {s[0]} | 出场: ¥{s[1]:.2f} | 理由: {s[2]} | PnL损耗: {s[3]:.2f}%")
@@ -779,8 +937,8 @@ class MarketMonitorController(QObject):
                 if now.minute != last_heartbeat_min:
                     last_heartbeat_min = now.minute
 
-                # ATR 移动止损检查 (每 60 秒，仅交易时间内)
-                if self.is_trading_time() and time.time() - last_stop_check_time >= 60:
+                # ATR 移动止损检查 (高频化：每 5 秒，仅交易时间内)
+                if self.is_trading_time() and time.time() - last_stop_check_time >= 5:
                     self._check_trailing_stops()
                     last_stop_check_time = time.time()
 
@@ -849,6 +1007,16 @@ class MarketMonitorController(QObject):
                                 None, self._track_order_status,
                                 data['order_id'], data['code'], data['action'], data['qty'], data['price']
                             )
+                        elif cmd_type == 'MANUAL_TRADE':
+                            c = data.get('code', 'Unknown')
+                            self.log_message.emit(f"🕹️ [手动-A股] 正在执行: {data['action']} {c} ({data['qty']}股 @ {data['price']:.2f})")
+                            try:
+                                # 复用 A股 交易执行逻辑
+                                await asyncio.get_event_loop().run_in_executor(
+                                    None, lambda: self.execute_trade(**data)
+                                )
+                            except Exception as ex:
+                                self.log_message.emit(f"⚠️ [手动-A股异常] {c} 执行失败: {ex}")
                     except Exception as e:
                         self.log_message.emit(f"⚠️ [A股-指令异常] 管道崩塌故障: {e}")
                         
@@ -1313,6 +1481,7 @@ class MarketMonitorController(QObject):
                         # 同步数据库防止丢失
                         self.db.save_stop_loss_tracker(code, cost, max(cost, price), atr, 0)
                         self.log_message.emit(f"🛡️ [A股-风控] 发现遗漏持仓 {code}，追溯自愈开启 ATR 止损监控: 成本价={cost:.2f}, ATR={atr:.3f}")
+                        self._subscribe_stock_quote(code) # 📡 [极速风控] 开启实时推送
                         count += 1
                         
             if count > 0:
