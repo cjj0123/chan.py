@@ -80,15 +80,29 @@ class FutuUSTradingController(BaseUSTradingController):
                 ret_pos, pos_data = self.trd_ctx.position_list_query(trd_env=self.trd_env)
                 
             if ret_pos == RET_OK and not pos_data.empty:
+                import time
                 for _, row in pos_data.iterrows():
                     qty = int(row['qty'])
                     if qty == 0: continue
                     symbol = row['code'].split('.')[-1]
+                    code = f"US.{symbol}"
+                    
+                    # 🛡️ [对冲逻辑] 修正有效持仓数值
+                    hedge_qty = 0
+                    if code in self.filled_recently:
+                        fill = self.filled_recently[code]
+                        if time.time() - fill['time'] < 120:
+                            if fill['action'].upper() == "SELL":
+                                hedge_qty += fill['qty']
+                    
+                    effective_qty = max(0, qty - hedge_qty)
+                    if effective_qty == 0: continue
+                    
                     positions.append({
                         'symbol': symbol,
-                        'qty': qty,
-                        'can_sell_qty': int(row.get('can_sell_qty', qty)),
-                        'mkt_value': float(row['market_val']),
+                        'qty': effective_qty,
+                        'can_sell_qty': max(0, int(row.get('can_sell_qty', qty)) - hedge_qty),
+                        'mkt_value': float(row['market_val']) * (effective_qty / qty),
                         'avg_cost': float(row['cost_price']),
                         'mkt_price': float(row['nominal_price'])
                     })

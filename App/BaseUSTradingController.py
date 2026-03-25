@@ -183,6 +183,7 @@ class BaseUSTradingController(QObject):
         self.retry_orders = {}             # 🚨 [补漏专用] 下单异常重试池，防崩溃漏单
         self.structure_barrier = {}        # 🛡️ [风控锁区 Phase 8] 挂载止损隔离舱，防止重复进出损耗
         self.trade_cooldown = {}           # 🛡️ [风控锁区 Phase 9] 冷却期记录，防止高频震荡进出
+        self.filled_recently = {}          # 🛡️ [对冲锁区 Phase 12] 最近成交记录，对冲券商持仓同步延迟 (code: {qty, time, action})
         # 🚀 [Phase 11] 应用针对 美股 优化的专属参数
         us_cfg = MARKET_SPECIFIC_CONFIG.get('US', {})
         self.chan_config = CChanConfig(CHAN_CONFIG)
@@ -895,7 +896,20 @@ class BaseUSTradingController(QObject):
                     if ret == 0 and not data.empty:
                         row = data[data['code'] == f"US.{symbol}"]
                         if not row.empty:
-                            return int(row.iloc[0].get('can_sell_qty', row.iloc[0].get('qty', 0)))
+                            raw_qty = int(row.iloc[0].get('can_sell_qty', row.iloc[0].get('qty', 0)))
+                            # 🛡️ [对冲逻辑] 扣除最近已成交但尚未同步的卖单数量
+                            import time
+                            hedge_qty = 0
+                            if code in self.filled_recently:
+                                fill = self.filled_recently[code]
+                                if time.time() - fill['time'] < 120: # 120秒内有效
+                                    if fill['action'].upper() == "SELL":
+                                        hedge_qty += fill['qty']
+                            
+                            effective_qty = max(0, raw_qty - hedge_qty)
+                            if hedge_qty > 0:
+                                self.log_message.emit(f"🛡️ [有效持仓-对冲] {symbol} 券商报 {raw_qty}，对冲近期已成交 SELL {hedge_qty}，修正为 {effective_qty}")
+                            return effective_qty
             except Exception as e:
                 logger.warning(f"[FUTU] get_position_quantity {symbol} 异常: {e}")
         return 0
@@ -1333,9 +1347,17 @@ class BaseUSTradingController(QObject):
                     break
 
                 if status == "FILLED":
+                    # 🛡️ [对冲填充] 记录成交，用于对冲未来 120s 内的持仓同步延迟
+                    import time
+                    self.filled_recently[code] = {
+                        'qty': filled_qty,
+                        'time': time.time(),
+                        'action': action.upper()
+                    }
+                    
                     self.log_message.emit(
                         f"📋 [美股-成交] {code} {action} {status_str}: "
-                        f"{filled_qty}股 @ ${filled_avg:.2f}"
+                        f"{filled_qty}股 @ ${filled_avg:.2f} (已加入持仓对冲，有效期120s)"
                     )
                     if self.discord_bot and hasattr(self.discord_bot, 'loop') and self.discord_bot.loop and self.discord_bot.loop.is_running():
                         msg = (

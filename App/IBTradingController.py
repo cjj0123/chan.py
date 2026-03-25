@@ -75,20 +75,47 @@ class IBTradingController(BaseUSTradingController):
                         # 优先取 last, 兜底取 close 或 avgCost (极简兜底)
                         mkt_price = getattr(ticker, 'last', 0) or getattr(ticker, 'close', 0) or p.avgCost
                         
+                        # 🛡️ [对冲逻辑] 修正有效持仓数值
+                        import time
+                        code = f"US.{symbol}"
+                        hedge_qty = 0
+                        if code in self.filled_recently:
+                            fill = self.filled_recently[code]
+                            if time.time() - fill['time'] < 120:
+                                if fill['action'].upper() == "SELL":
+                                    hedge_qty += fill['qty']
+                        
+                        effective_qty = max(0, int(p.position) - hedge_qty)
+                        if effective_qty == 0: continue
+                        
                         positions_data.append({
                             'symbol': symbol,
-                            'qty': int(p.position),
-                            'mkt_value': round(p.position * mkt_price, 2),
+                            'qty': effective_qty,
+                            'mkt_value': round(effective_qty * mkt_price, 2),
                             'avg_cost': round(p.avgCost, 2),
                             'mkt_price': mkt_price
                         })
             else:
                 for item in actual_items:
                     if item.position != 0:
+                        # 🛡️ [对冲逻辑] 修正有效持仓数值
+                        import time
+                        symbol = item.contract.symbol
+                        code = f"US.{symbol}"
+                        hedge_qty = 0
+                        if code in self.filled_recently:
+                            fill = self.filled_recently[code]
+                            if time.time() - fill['time'] < 120:
+                                if fill['action'].upper() == "SELL":
+                                    hedge_qty += fill['qty']
+                        
+                        effective_qty = max(0, int(item.position) - hedge_qty)
+                        if effective_qty == 0: continue
+                        
                         positions_data.append({
-                            'symbol': item.contract.symbol,
-                            'qty': int(item.position),
-                            'mkt_value': round(item.marketValue, 2),
+                            'symbol': symbol,
+                            'qty': effective_qty,
+                            'mkt_value': round(effective_qty * item.marketPrice, 2),
                             'avg_cost': round(item.averageCost, 2),
                             'mkt_price': item.marketPrice
                         })
