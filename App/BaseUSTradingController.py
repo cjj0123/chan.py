@@ -183,6 +183,7 @@ class BaseUSTradingController(QObject):
         self.retry_orders = {}             # 🚨 [补漏专用] 下单异常重试池，防崩溃漏单
         self.structure_barrier = {}        # 🛡️ [风控锁区 Phase 8] 挂载止损隔离舱，防止重复进出损耗
         self.trade_cooldown = {}           # 🛡️ [风控锁区 Phase 9] 冷却期记录，防止高频震荡进出
+        self.sold_today = set()            # 🛡️ [风控加固 Phase 13] 单日平仓锁定集合，防止因 API 延迟导致的循环下单
         # 🚀 [Phase 11] 应用针对 美股 优化的专属参数
         us_cfg = MARKET_SPECIFIC_CONFIG.get('US', {})
         self.chan_config = CChanConfig(CHAN_CONFIG)
@@ -196,6 +197,7 @@ class BaseUSTradingController(QObject):
 
         self._trd_ctx = None
         self._last_close_date = None
+        self._last_reset_date = datetime.now().strftime("%Y-%m-%d") # 🛡️ 日期重置锚点
 
     @property
     def trd_ctx(self):
@@ -1333,6 +1335,11 @@ class BaseUSTradingController(QObject):
                     break
 
                 if status == "FILLED":
+                    # 🛡️ [平仓锁定] 如果是卖出平仓，记录到今日锁定名单，防止循环下单
+                    if action.upper() == "SELL":
+                        self.sold_today.add(code)
+                        self.log_message.emit(f"🔒 [单日平仓锁] {code} 已成交平仓，今日锁定卖出逻辑防止循环")
+                    
                     self.log_message.emit(
                         f"📋 [美股-成交] {code} {action} {status_str}: "
                         f"{filled_qty}股 @ ${filled_avg:.2f}"
@@ -1871,6 +1878,13 @@ class BaseUSTradingController(QObject):
     async def _check_trailing_stops(self):
         """活性持仓止损检查算法 (方案丙) - 异步高频安全哨兵"""
         try:
+            # 🛡️ [每日重置] 开启新的一天时，清空卖出锁定名单
+            curr_date = datetime.now().strftime("%Y-%m-%d")
+            if curr_date != self._last_reset_date:
+                self.log_message.emit(f"📅 [美股-新交易日] 自动清空昨日平仓锁定清单 (曾锁定: {len(self.sold_today)} 只)")
+                self.sold_today.clear()
+                self._last_reset_date = curr_date
+
             available, total, positions = await self.get_account_assets_async()
             current_held_codes = {f"US.{p['symbol']}": p for p in positions}
             
@@ -1886,6 +1900,8 @@ class BaseUSTradingController(QObject):
             # --- 自愈补救机制：为缺失的持仓 cold start 加载 ATR ---
             for code, p in current_held_codes.items():
                 if code not in self.position_trackers:
+                    # 🛡️ [锁定校验] 若今日已成交平仓，不再重新初始化追踪器
+                    if code in self.sold_today: continue
                     # 🛡️ [防卖出循环] 如果该股票最近 10 分钟内有过卖出记录，暂不建立追踪器，防止幽灵持仓复活
                     if code in self.trade_cooldown:
                         if (time.time() - self.trade_cooldown[code]) < 600: # 10分钟保护
@@ -1954,6 +1970,12 @@ class BaseUSTradingController(QObject):
                 
                 # 5. 触发则立刻下平仓单
                 if current_price < stop_price:
+                    # 🛡️ [单日平仓锁] 根本方案：今日已卖，绝不再卖
+                    if code in self.sold_today:
+                        if attempt % 5 == 0:
+                            self.log_message.emit(f"🛡️ [单日平仓锁] {code} 触发止损，但由于今日已执行过平仓，拦截重复下单")
+                        continue
+
                     # 🛡️ [风控加固 Phase 12] 严防死守：止损触发必须验证 20 分钟冷却期
                     if code in self.trade_cooldown:
                         elapsed = time.time() - self.trade_cooldown[code]
