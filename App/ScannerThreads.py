@@ -474,10 +474,43 @@ class RepairSingleStockThread(QThread):
             self.log_signal.emit(f"❌ 数据修复失败: {str(e)}")
             self.log_signal.emit(f"   错误详情: {traceback.format_exc()}")
             self.finished.emit(False, f"数据修复失败: {str(e)}")
-        finally:
-            # 确保数据修复结束后关闭 IB 连接
             try:
                 from DataAPI.InteractiveBrokersAPI import CInteractiveBrokersAPI
                 CInteractiveBrokersAPI.do_close()
             except:
                 pass
+
+class NewsCollectorThread(QThread):
+    """
+    后台抓取新闻和板块数据的线程
+    """
+    finished = pyqtSignal()
+    log_signal = pyqtSignal(str)
+
+    def run(self):
+        try:
+            from DataAPI.NewsCollector import NewsCollector
+            self.log_signal.emit("🚀 启动市场感知引擎...")
+            c = NewsCollector()
+            self.log_signal.emit("📡 正在从东方财富获取多市场资讯...")
+            raw = c._fetch_raw_news()
+            self.log_signal.emit(f"📥 获取 {len(raw)} 条原始资讯，正在过滤...")
+            filtered = c._pre_filter(raw)
+            self.log_signal.emit(f"🤖 {len(filtered)} 条待 Gemini AI 分析...")
+            analyzed = []
+            for i in range(0, len(filtered), 15):
+                analyzed.extend(c._batch_analyze(filtered[i:i+15]))
+            final = c._post_process(analyzed)
+            self.log_signal.emit(f"💾 保存 {len(final)} 条高质量资讯...")
+            c._save_news(final)
+            self.log_signal.emit("🔥 正在抓取板块热度...")
+            c.save_sectors(c.collect_sector_heat('HK'))
+            c.save_sectors(c.collect_sector_heat('US'))
+            c.close()
+            self.log_signal.emit(f"✅ 完成: {len(final)} 条资讯已入库")
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self.log_signal.emit(f"❌ 抓取失败: {e}")
+        finally:
+            self.finished.emit()

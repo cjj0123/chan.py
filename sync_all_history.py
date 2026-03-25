@@ -17,6 +17,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from DataAPI.SQLiteAPI import download_and_save_all_stocks_async
+from DataAPI.FutuAPI import CFutuAPI
 from ML.MarketComponentResolver import MarketComponentResolver
 
 # 设置默认的 IB 环境变量，确保异步下载逻辑能被触发
@@ -43,39 +44,54 @@ async def main():
     parser.add_argument("--timeframes", nargs="+", default=["day", "30m", "5m"], help="需要同步的周期")
     args = parser.parse_args()
 
-    resolver = MarketComponentResolver()
-    targets = resolver.get_all_training_targets()
-    
-    total_stocks = []
-    for m in args.markets:
-        m_upper = m.upper()
-        if m_upper in targets:
-            codes = targets[m_upper]
-            logger.info(f"📍 目标市场 {m_upper}: 找到 {len(codes)} 只成分股")
-            total_stocks.extend(codes)
-        else:
-            logger.warning(f"⚠️ 未知市场: {m_upper}")
-
-    # === 新增：合并 Futu 全量自选股放入同步池 ===
+    # ==============================================================
+    # 核心逻辑：优先同步 Futu 自选股 (Watchlist)，保障实盘风控不罢工
+    # ==============================================================
     logger.info("正在拉取 Futu 实时全量自选股列表...")
+    watchlist_codes = []
     try:
         from Common.StockUtils import get_futu_watchlist_stocks
         watchlist_df = get_futu_watchlist_stocks()
         if not watchlist_df.empty:
             watchlist_codes = watchlist_df['代码'].tolist()
-            # 过滤只保留 args.markets 包含的市场（如果需要）
-            logger.info(f"💡 本地共拉取到 {len(watchlist_codes)} 只 Futu 自选股，准备合并")
-            total_stocks.extend(watchlist_codes)
+            logger.info(f"💡 本地共拉取到 {len(watchlist_codes)} 只 Futu 自选股")
     except Exception as e:
         logger.warning(f"⚠️ 拉取 Futu 自选股失败: {e}")
 
-    # 去重
-    total_stocks = list(set(total_stocks))
+    # 获取全量训练样本（热点股、成分股等）
+    resolver = MarketComponentResolver()
+    targets = resolver.get_all_training_targets()
+    
+    extra_stocks = []
+    for m in args.markets:
+        m_upper = m.upper()
+        if m_upper in targets:
+            codes = targets[m_upper]
+            logger.info(f"📍 目标市场 {m_upper}: 找到 {len(codes)} 只额外样本股")
+            extra_stocks.extend(codes)
+        else:
+            logger.warning(f"⚠️ 未知市场: {m_upper}")
+
+    # 去重处理，但保留顺序：自选股排在最前面
+    seen = set()
+    total_stocks = []
+    # 1. 优先加入自选股
+    for code in watchlist_codes:
+        if code not in seen:
+            total_stocks.append(code)
+            seen.add(code)
+    
+    # 2. 加入其他样本股
+    for code in extra_stocks:
+        if code not in seen:
+            total_stocks.append(code)
+            seen.add(code)
+
     if not total_stocks:
         logger.error("❌ 未找到任何需要同步的股票，程序退出。")
         return
 
-    logger.info(f"🚀 开始全量同步，共计 {len(total_stocks)} 只股票，深度 {args.days} 天，周期 {args.timeframes}...")
+    logger.info(f"🚀 开始顺序同步，共计 {len(total_stocks)} 只股票 (自选股优先级最高)，深度 {args.days} 天，周期 {args.timeframes}...")
     
     # 修复：stop_check 必须是可调用的 (callable)
     def stop_check_func():
@@ -95,6 +111,9 @@ async def main():
         logger.info("🎉 恭喜！全市场数据历史同步已完成。")
     except Exception as e:
         logger.error(f"🚨 同步过程中发生崩溃: {e}\n{traceback.format_exc()}")
+    finally:
+        # 🛡️ 显式释放 Futu 连接资源
+        CFutuAPI.close_all()
 
 if __name__ == "__main__":
     if sys.platform != "win32":
