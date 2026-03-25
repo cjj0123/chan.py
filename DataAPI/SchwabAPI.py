@@ -160,6 +160,58 @@ class CSchwabAPI(CCommonStockApi):
                  }
                  yield CKLine_Unit(item_dict)
 
+    def get_realtime_quotes(self, codes: list) -> dict:
+        """
+        获取多个股票的实时报价
+        :param codes: 股票代码列表，如 ['US.AAPL', 'US.TSLA']
+        :return: {code: current_price}
+        """
+        if not codes: return {}
+        
+        symbols = []
+        for c in codes:
+            s = c.split(".")[-1].upper() if c.startswith("US.") else c.upper()
+            symbols.append(s)
+            
+        # Schwab API 限制单次请求 500 个 symbol
+        url = "https://api.schwabapi.com/marketdata/v1/quotes"
+        params = {
+            'symbols': ",".join(symbols),
+            'fields': 'quote'
+        }
+        
+        access_token = self._get_access_token()
+        headers = {
+            'Authorization': f'Bearer {access_token}',
+            'Accept': 'application/json'
+        }
+        
+        try:
+            response = requests.get(url, headers=headers, params=params)
+            if response.status_code == 401:
+                access_token = self._refresh_access_token()
+                headers['Authorization'] = f'Bearer {access_token}'
+                response = requests.get(url, headers=headers, params=params)
+                
+            if response.status_code != 200:
+                print(f"❌ Schwab Quote API 错误: {response.status_code} {response.text}")
+                return {}
+                
+            data = response.json()
+            results = {}
+            for code in codes:
+                symbol = code.split(".")[-1].upper() if code.startswith("US.") else code.upper()
+                if symbol in data:
+                    # 优先取 lastPrice, 兜底取 close (收盘后)
+                    quote = data[symbol].get('quote', {})
+                    price = quote.get('lastPrice') or quote.get('closePrice')
+                    if price:
+                        results[code] = float(price)
+            return results
+        except Exception as e:
+            print(f"❌ Schwab Quote 请求异常: {e}")
+            return {}
+
     def SetBasciInfo(self):
         self.name = self.code
         self.is_stock = True

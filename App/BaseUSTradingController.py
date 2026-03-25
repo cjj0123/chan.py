@@ -22,6 +22,7 @@ import nest_asyncio
 from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 import sqlite3
+from Trade.MemorySummarizer import MemorySummarizer
 import requests
 
 from PyQt6.QtCore import QObject, pyqtSignal
@@ -29,7 +30,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 # 将项目根目录加入路径
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from config import TRADING_CONFIG, CHAN_CONFIG, CHART_CONFIG, CHART_PARA
+from config import TRADING_CONFIG, CHAN_CONFIG, CHART_CONFIG, CHART_PARA, MARKET_SPECIFIC_CONFIG
 from Chan import CChan
 from ChanConfig import CChanConfig
 from Common.CEnum import KL_TYPE, DATA_SRC, AUTYPE, DATA_FIELD
@@ -73,6 +74,44 @@ class BaseUSTradingController(QObject):
     scan_finished = pyqtSignal(int, int, int, int)
     funds_updated = pyqtSignal(float, float, list) # (available, total, positions)
     
+    def get_futu_watchlist(self):
+        """支持多个分组合并同步 (如 '美股,热点_实盘')"""
+        all_dict = {}
+        try:
+            import socket
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(2)
+            result = sock.connect_ex(('127.0.0.1', 11111))
+            sock.close()
+            if result != 0:
+                # 🟢 [IB/Schwab] Futu 关停时，支持从本地 Config/us_watchlist.txt 加载扫描股票池
+                import os
+                local_path = "Config/us_watchlist.txt"
+                if os.path.exists(local_path):
+                    with open(local_path, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            line = line.strip()
+                            if line and not line.startswith('#'):
+                                c = line if line.startswith("US.") else f"US.{line}"
+                                all_dict[c] = c.split('.')[-1]
+                return all_dict
+
+            from futu import OpenQuoteContext, RET_OK
+            ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
+            groups = [g.strip() for g in self.watchlist_group.split(',') if g.strip()]
+            for grp in groups:
+                ret, data = ctx.get_user_security(group_name=grp)
+                if ret == RET_OK and not data.empty:
+                    name_col = 'name' if 'name' in data.columns else 'stock_name'
+                    for _, row in data.iterrows():
+                        c = row['code']
+                        if c.startswith("US."):
+                            all_dict[c] = row.get(name_col, c)
+            ctx.close()
+        except Exception:
+            pass
+        return all_dict
+
     def __init__(self, 
                  us_watchlist_group: str = "美股", 
                  discord_bot: DiscordBot = None, 
@@ -144,6 +183,17 @@ class BaseUSTradingController(QObject):
         self.retry_orders = {}             # 🚨 [补漏专用] 下单异常重试池，防崩溃漏单
         self.structure_barrier = {}        # 🛡️ [风控锁区 Phase 8] 挂载止损隔离舱，防止重复进出损耗
         self.trade_cooldown = {}           # 🛡️ [风控锁区 Phase 9] 冷却期记录，防止高频震荡进出
+        # 🚀 [Phase 11] 应用针对 美股 优化的专属参数
+        us_cfg = MARKET_SPECIFIC_CONFIG.get('US', {})
+        self.chan_config = CChanConfig(CHAN_CONFIG)
+        if 'bs_type' in us_cfg:
+            self.chan_config.bs_point_conf.b_conf.tmp_target_types = us_cfg['bs_type']
+            self.chan_config.bs_point_conf.b_conf.parse_target_type()
+            self.chan_config.bs_point_conf.s_conf.tmp_target_types = us_cfg['bs_type']
+            self.chan_config.bs_point_conf.s_conf.parse_target_type()
+        
+        self.atr_stop_trail = us_cfg.get('atr_stop_trail', TRADING_CONFIG.get('atr_stop_trail', 2.5))
+
         self._trd_ctx = None
         self._last_close_date = None
 
@@ -241,6 +291,18 @@ class BaseUSTradingController(QObject):
             self.log_message.emit("🛑 [美股] 交易驱动线程已正常终止")
             print("[DEBUG] US Trading Thread EXIT.")
 
+    def on_market_close(self):
+        """收盘逻辑"""
+        self.log_message.emit("🌙 [美股] 交易时段结束，正在执行收盘结算...")
+        try:
+            summarizer = MemorySummarizer()
+            count, report_path = summarizer.run()
+            self.log_message.emit(f"📝 [美股] Memory Summarize 完成: 归档 {count} 条信号，报告生成于 {report_path}")
+        except Exception as e:
+            self.log_message.emit(f"⚠️ [美股] Memory Summarize 运行失败: {str(e)}")
+        # 清理过时状态
+        self.buy_interceptors.clear()
+
     def on_ib_error(self, reqId, errorCode, errorString, contract):
         """IB 错误事件回调"""
         if errorCode in (1100, 1101, 1102):
@@ -274,11 +336,13 @@ class BaseUSTradingController(QObject):
 
     async def _async_main(self):
         """真正的异步主循环"""
-        self.log_message.emit("🔌 [美股] 异步中枢启动成功，准备初始化 IB...")
-        self._poll_task = asyncio.create_task(self._poll_gui_commands())
+        self.log_message.emit("🔌 [美股] 异步中枢启动成功，从底层初始化连接...")
+        
+        from ib_insync import IB
         self.ib = IB()
         self.ib.errorEvent += self.on_ib_error
         self.ib.execDetailsEvent += self._on_exec_details  # 💡 挂载成交触发，同步推送至 GUI
+        self._poll_task = asyncio.create_task(self._poll_gui_commands())
         
         # 避免启动时立即触发全量扫描，初始化为当前 30M Bar 时间，等待下一个周期再触发
         now_et = self.get_us_now()
@@ -322,7 +386,6 @@ class BaseUSTradingController(QObject):
                             self.log_message.emit(f"🔄 [美股] 发起连接 ({self.host}:{self.port}, ID:{target_client_id})...")
                             await asyncio.wait_for(self.ib.connectAsync(self.host, self.port, clientId=target_client_id), timeout=12)
                             self.log_message.emit(f"🔌 [美股] IB 连接成功 (ID:{target_client_id})")
-                            self.ib.reqAccountUpdates() # 修复 reqAccountUpdates 的传参
                             # 💡 [数据源自适应] 允许没有订阅的情况下，通过 API 拉取 15-20分钟免费延迟行情，用以计算 ATR
                             try: self.ib.reqMarketDataType(3)
                             except: pass
@@ -331,8 +394,6 @@ class BaseUSTradingController(QObject):
                         except asyncio.TimeoutError:
                             self.log_message.emit("⚠️ [美股] IB 连接超时 (12s)")
                         except Exception as e:
-                            import traceback
-                            last_exc = traceback.format_exc().splitlines()[-1]
                             self.log_message.emit(f"⚠️ [美股] 连接失败: {e}")
                     await asyncio.sleep(1)
                     continue
@@ -360,7 +421,6 @@ class BaseUSTradingController(QObject):
 
                 # (指令处理已迁移至 _poll_gui_commands 后台协程)
 
-                # 3. 驱动的心跳
                 await asyncio.sleep(0.5)
 
                 # 3.5 活性持仓止损监测 (方案丙)
@@ -386,12 +446,11 @@ class BaseUSTradingController(QObject):
                     continue
 
                 # 4. 周期扫描逻辑
-                now_et = self.get_us_now()
-                if now_et.minute != last_heartbeat_min:
-                    # 心跳逻辑 (仅更新变量，不再打印日志以减少刷屏)
-                    last_heartbeat_min = now_et.minute
-
+                now_et = us_now # 复用循环开始处定义的 us_now
                 if not self.is_trading_time():
+                    if not hasattr(self, '_notified_closed') or self._notified_closed != now_et.minute // 10:
+                        self.log_message.emit(f"🌙 [美股] 当前非交易时段 ({now_et.strftime('%H:%M')}), 系统待机中...")
+                        self._notified_closed = now_et.minute // 10
                     await asyncio.sleep(1.0)
                     continue
 
@@ -399,14 +458,20 @@ class BaseUSTradingController(QObject):
                 current_bar_et = now_et.replace(minute=(now_et.minute // 30) * 30, second=0, microsecond=0)
                 should_scan = False
                 
+                # 💡 [调试追踪]
+                # print(f"DEBUG: Checking scan: current_bar_et={current_bar_et}, last_scan_bar={last_scan_bar}, min={now_et.minute}")
+
+                # 💡 [数据对齐] 已迁移至独立同步进程，此处仅触发本地数据库查询扫描
                 if current_bar_et > last_scan_bar:
+                    
+                    # 💡 每个 30M 周期，在第 1 分钟后触发 (给 K 线一点落地时间)
                     if now_et.minute % 30 >= 1:
                         should_scan = True
-                        self._current_bar_scanned = True # 标记已扫
+                        self._current_bar_scanned = True
                 elif not getattr(self, '_current_bar_scanned', False):
-                    # 💡 补偿刚启动时当前 30M 周期还未跑过扫描的情况(参照港股：前8分钟内允许)
+                    # 💡 补偿刚启动时当前 30M 周期还未跑过扫描的情况 (启动前 8 分钟内允许补扫)
                     if 1 <= (now_et.minute % 30) <= 8:
-                        self.log_message.emit("⚡ [美股] 触发补全启动窗口期扫描...")
+                        self.log_message.emit("⚡ [美股] 触发启动窗口期补全扫描...")
                         should_scan = True
                         self._current_bar_scanned = True
 
@@ -451,6 +516,10 @@ class BaseUSTradingController(QObject):
                 finally:
                     if hasattr(self, '_pending_execute_codes') and c in self._pending_execute_codes:
                         self._pending_execute_codes.remove(c)
+            elif cmd_type == 'MANUAL_TRADE':
+                c = data.get('code', 'Unknown')
+                self.log_message.emit(f"🕹️ [手动-{self.venue}] 发起指令: {data['action']} {c} ({data['qty']}股 @ ${data['price']:.2f})")
+                await asyncio.wait_for(self._execute_trade_async(**data), timeout=20)
         except asyncio.TimeoutError:
             self.log_message.emit(f"⚠️ [指令] 指令 {cmd_type} 执行超时")
 
@@ -460,48 +529,9 @@ class BaseUSTradingController(QObject):
         us_watchlist = {} # code -> name
         
         try:
-            from futu import OpenQuoteContext, RET_OK
-            
-            def get_futu_watchlist():
-                """支持逗号分隔的多分组合并 (如 '美股,热点_实盘')"""
-                all_dict = {}
-                try:
-                    import socket
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.settimeout(2)
-                    result = sock.connect_ex(('127.0.0.1', 11111))
-                    sock.close()
-                    if result != 0:
-                        # 🟢 [IB-补救] Futu 关停时，支持从本地目录 Config/us_watchlist.txt 加载扫描股票池
-                        import os
-                        local_path = "Config/us_watchlist.txt"
-                        if os.path.exists(local_path):
-                            with open(local_path, 'r', encoding='utf-8') as f:
-                                for line in f:
-                                    line = line.strip()
-                                    if line and not line.startswith('#'):
-                                        c = line if line.startswith("US.") else f"US.{line}"
-                                        all_dict[c] = c.split('.')[-1]
-                        return all_dict
-
-                    ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
-                    groups = [g.strip() for g in self.watchlist_group.split(',') if g.strip()]
-                    for grp in groups:
-                        ret, data = ctx.get_user_security(group_name=grp)
-                        if ret == RET_OK and not data.empty:
-                            name_col = 'name' if 'name' in data.columns else 'stock_name'
-                            for _, row in data.iterrows():
-                                c = row['code']
-                                if c.startswith("US."):
-                                    all_dict[c] = row.get(name_col, c)
-                    ctx.close()
-                except:
-                    pass
-                return all_dict
-
             # 1. Fetch from Futu via executor (Sync -> Async)
             loop = asyncio.get_running_loop()
-            futu_watchlist = await loop.run_in_executor(self.executor, get_futu_watchlist)
+            futu_watchlist = await loop.run_in_executor(self.executor, self.get_futu_watchlist)
             us_watchlist.update(futu_watchlist)
 
             if self.venue == "IB" and self.ib and self.ib.isConnected():
@@ -550,20 +580,48 @@ class BaseUSTradingController(QObject):
                 # Schwab 模式下，直接使用 symbol 字符串
                 symbol_to_contract = {c.symbol: c for c in contracts}
 
-            # 2. 批量极速同步 (Phase 5: Sync-then-Scan) - 移除，改为在线拉取
-            # self.log_message.emit(f"🔄 [美股] 执行批量同步 (30m & 5m)...")
-            # sync_start = time.perf_counter()
-            # try:
-            #     # 使用已经实现的 Phase 3 异步下载器
-            #     await download_and_save_all_stocks_async(
-            #         us_codes, days=60, timeframes=['30m', '5m'],
-            #         log_callback=self.log_message.emit,
-            #         ib_client=self.ib
-            #     )
-            #     sync_time = time.perf_counter() - sync_start
-            #     self.log_message.emit(f"✅ [美股] 批量同步完成 (耗时: {sync_time:.2f}s)")
-            # except Exception as e:
-            #     self.log_message.emit(f"⚠️ [美股] 批量同步异常: {e}")
+            # 3. 提取大盘上下文环境 (S&P 500 SPY 动量/波动率) [风控加固 Phase 9]
+            self.market_context = {}
+            try:
+                from Common.CEnum import KL_TYPE, AUTYPE
+                from Chan import CChan
+                from ChanConfig import CChanConfig
+                from Common.StockUtils import get_default_data_sources
+                idx_code = TRADING_CONFIG.get("us_market_index", "US.SPY")
+                data_sources = get_default_data_sources(idx_code)
+                if "custom:SQLiteAPI.SQLiteAPI" not in data_sources:
+                     data_sources = ["custom:SQLiteAPI.SQLiteAPI"] + data_sources
+                     
+                chan_idx = None
+                for src in data_sources:
+                     try:
+                          chan_idx = CChan(
+                              code=idx_code,
+                              begin_time=(datetime.now() - timedelta(days=20)).strftime("%Y-%m-%d"),
+                              data_src=src,
+                              lv_list=[KL_TYPE.K_30M],
+                              config=CChanConfig(CHAN_CONFIG),
+                              autype=AUTYPE.QFQ
+                          )
+                          if chan_idx.lv_list and len(list(chan_idx[0].klu_iter())) >= 10:
+                               break
+                     except Exception:
+                          continue
+                          
+                if chan_idx and chan_idx.lv_list and len(list(chan_idx[0].klu_iter())) >= 10:
+                    kl_list = list(chan_idx[0].klu_iter())
+                    idx_k = kl_list[-1]
+                    if len(kl_list) >= 6:
+                         pre_5 = kl_list[-6]
+                         self.market_context["index_roc_5"] = (idx_k.close - pre_5.close) / (pre_5.close + 1e-7)
+                    amps = []
+                    for k in kl_list[-10:]:
+                         if k.low > 0: amps.append((k.high - k.low) / k.low)
+                    if amps:
+                         self.market_context["index_volatility"] = sum(amps) / len(amps)
+                    self.log_message.emit(f"🌏 美股大盘诊断 ({idx_code}): 5周期动量={self.market_context.get('index_roc_5', 0):.4f}, 动能方差={self.market_context.get('index_volatility', 0):.4f}")
+            except Exception as e_idx:
+                 self.log_message.emit(f"⚠️ 提取美股大盘环境特征失败: {e_idx}")
 
             # 3. 串行分析 (依照港股逻辑，稳定可靠)
             scan_start = time.perf_counter()
@@ -593,6 +651,11 @@ class BaseUSTradingController(QObject):
             
             total_scan_time = time.perf_counter() - scan_start
             self.log_message.emit(f"✅ [美股] 策略扫描完成, 总耗时: {total_scan_time:.2f}s")
+            
+            # 🟢 [风控加固] 扫描后自动检查上下文状态，防止撑爆
+            try:
+                MemorySummarizer().check_and_compress()
+            except: pass
         except Exception as e:
             self.log_message.emit(f"❌ [美股] 扫描过程异常: {e}")
 
@@ -616,41 +679,39 @@ class BaseUSTradingController(QObject):
             await asyncio.sleep(0.01)
             
             analysis_start = time.perf_counter()
-            local_chan_config = CHAN_CONFIG.copy()
-            # 💡 trigger_step = True 会禁用 CChan 初始化时加载数据，导致 0 根 K线。需移除！
+            # 💡 [美股-信号一致性] 使用 self.chan_config（已应用 MARKET_SPECIFIC_CONFIG['US'] 专属参数，
+            # 如 bs_type='2,2s,3a,3b'，去掉1买点），确保与后台持仓风控/止损逻辑一致
+            _us_chan_config = self.chan_config
             
             loop = asyncio.get_running_loop()
-            # 🛡️ [风控加固] 依照 venue 选择数据源：IB 模式优先用本地 SQLITE（避免 Schwab token 失效静默瘫痪）
-            _venue = self.venue
             def create_chan_30m():
                 try:
                     from Common.CEnum import DATA_SRC, KL_TYPE, AUTYPE
-                    from Chan import CChan, CChanConfig
-                    from config import CHAN_CONFIG
-                    # IB 模式: 本地数据库 → 失败则尝试 Schwab；Schwab 模式: 直连 Schwab
-                    src = DATA_SRC.SQLITE if _venue == 'IB' else DATA_SRC.SCHWAB
+                    from Chan import CChan
+                    # 💡 [美股-数据源策略] 优先读本地 SQLite（极速，无网络依赖）；
+                    # 本地数据不足（<10根K线）时才 fallback 到 Schwab 在线拉取
                     try:
                         result = CChan(
                             code=code,
                             begin_time=start_30m_str,
                             end_time=end_time_str,
-                            data_src=src,
+                            data_src="custom:SQLiteAPI.SQLiteAPI",
                             lv_list=[KL_TYPE.K_30M],
-                            config=CChanConfig(local_chan_config),
+                            config=_us_chan_config,
                             autype=AUTYPE.QFQ
                         )
-                        if result and len(result[0]) > 0:
+                        if result and len(result[0]) >= 10:
                             return result
                     except Exception:
                         pass
-                    # 兜底: Schwab
+                    # 兜底: Schwab 在线拉取
                     return CChan(
                         code=code,
                         begin_time=start_30m_str,
                         end_time=end_time_str,
                         data_src=DATA_SRC.SCHWAB,
                         lv_list=[KL_TYPE.K_30M],
-                        config=CChanConfig(local_chan_config),
+                        config=_us_chan_config,
                         autype=AUTYPE.QFQ
                     )
                 except Exception as e:
@@ -694,13 +755,18 @@ class BaseUSTradingController(QObject):
         
         us_now = self.get_us_now()
         in_market = self.is_trading_time()
-        window_sec = 3600 if in_market else 86400
+        # 交易时段：仅接受 1 小时内的信号；非交易时段：放宽到 2 小时（收盘后复盘用）
+        window_sec = 3600 if in_market else 7200
         
         for bsp in bsp_list:
             bsp_dt = datetime(bsp.klu.time.year, bsp.klu.time.month, bsp.klu.time.day, 
                               bsp.klu.time.hour, bsp.klu.time.minute, bsp.klu.time.second)
             is_valid_time = is_force_scan or (us_now - bsp_dt).total_seconds() <= window_sec
-            if True: # 保持缩进，下沉时间过滤至下单前以呈现完整日志
+            if not is_valid_time:
+                # 🛡️ 信号时间超出窗口期，静默丢弃（不打日志，不下单）
+                continue
+            
+            if True:  # 保留缩进层级
                 sig_key = f"{code}_{str(bsp.klu.time)}_{bsp.type2str()}"
                 if sig_key in self.notified_signals: continue
                 
@@ -740,30 +806,29 @@ class BaseUSTradingController(QObject):
                     
                     def create_chan_5m():
                         try:
-                            # IB 模式优先用 SQLITE，Schwab 模式用 SCHWAB
-                            src5 = DATA_SRC.SQLITE if _venue == 'IB' else DATA_SRC.SCHWAB
+                            # 💡 [美股-数据源策略+信号一致性] 使用 _us_chan_config，优先本地 SQLite，失败才 fallback Schwab
                             try:
                                 r5 = CChan(
                                     code=code,
                                     begin_time=start_5m_str,
                                     end_time=end_time_str,
-                                    data_src=src5,
+                                    data_src="custom:SQLiteAPI.SQLiteAPI",
                                     lv_list=[KL_TYPE.K_5M],
-                                    config=CChanConfig(local_chan_config),
+                                    config=_us_chan_config,
                                     autype=AUTYPE.QFQ
                                 )
-                                if r5 and len(r5[0]) > 0:
+                                if r5 and len(r5[0]) >= 10:
                                     return r5
                             except Exception:
                                 pass
-                            # 兜底: Schwab
+                            # 兜底: Schwab 在线拉取
                             return CChan(
                                 code=code,
                                 begin_time=start_5m_str,
                                 end_time=end_time_str,
                                 data_src=DATA_SRC.SCHWAB,
                                 lv_list=[KL_TYPE.K_5M],
-                                config=CChanConfig(local_chan_config),
+                                config=_us_chan_config,
                                 autype=AUTYPE.QFQ
                             )
                         except Exception as e:
@@ -914,13 +979,29 @@ class BaseUSTradingController(QObject):
             if not actual_items:
                 # 💡 [兜底读取] 如果 portfolio() 缓冲尚未同步，尝试调用同步 positions() 列表
                 pos_list = self.ib.positions()
+                
+                # 🛡️ [补救逻辑] 通过 reqTickers 获取实时价格，避免错误地将成本价 (avgCost) 报送为市价
+                ticker_contracts = [p.contract for p in pos_list if p.position != 0]
+                tickers = {}
+                if ticker_contracts:
+                    try:
+                        ticker_data = self.ib.reqTickers(*ticker_contracts)
+                        tickers = {t.contract.symbol: t for t in ticker_data}
+                    except: pass
+
                 for p in pos_list:
                     if p.position != 0:
+                        symbol = p.contract.symbol
+                        ticker = tickers.get(symbol)
+                        # 优先取 last, 兜底取 close 或 avgCost (极简兜底)
+                        mkt_price = getattr(ticker, 'last', 0) or getattr(ticker, 'close', 0) or p.avgCost
+                        
                         positions_data.append({
-                            'symbol': p.contract.symbol,
+                            'symbol': symbol,
                             'qty': int(p.position),
-                            'mkt_value': round(p.position * p.avgCost, 2),
-                            'avg_cost': round(p.avgCost, 2)
+                            'mkt_value': round(p.position * mkt_price, 2),
+                            'avg_cost': round(p.avgCost, 2),
+                            'mkt_price': mkt_price
                         })
             else:
                 for item in actual_items:
@@ -929,7 +1010,8 @@ class BaseUSTradingController(QObject):
                             'symbol': item.contract.symbol,
                             'qty': int(item.position),
                             'mkt_value': round(item.marketValue, 2),
-                            'avg_cost': round(item.averageCost, 2)
+                            'avg_cost': round(item.averageCost, 2),
+                            'mkt_price': item.marketPrice
                         })
             return available, total, positions_data
         except Exception as e:
@@ -1041,13 +1123,13 @@ class BaseUSTradingController(QObject):
             today_str = datetime.now().strftime('%Y-%m-%d')
             
             # 查买入单
-            cursor.execute("SELECT code, name, entry_price, quantity FROM live_trades WHERE date(entry_time) = ?", (today_str,))
+            cursor.execute("SELECT code, name, entry_price, quantity FROM live_trades WHERE date(entry_time) = ? AND market = 'US'", (today_str,))
             buys = cursor.fetchall()
             for b in buys:
                 report_list.append(f"   • [买入] {b[0]} ({b[1]}) | 成交: ${b[2]:.2f} | 数量: {b[3]}股")
                 
             # 查卖出单
-            cursor.execute("SELECT code, exit_price, exit_reason, pnl_pct FROM live_trades WHERE date(exit_time) = ?", (today_str,))
+            cursor.execute("SELECT code, exit_price, exit_reason, pnl_pct FROM live_trades WHERE date(exit_time) = ? AND market = 'US'", (today_str,))
             sells = cursor.fetchall()
             for s in sells:
                 report_list.append(f"   • [卖出/止损] {s[0]} | 出场: ${s[1]:.2f} | 理由: {s[2]} | PnL损耗: {s[3]:.2f}%")
@@ -1172,7 +1254,7 @@ class BaseUSTradingController(QObject):
             )
             
         except Exception as e:
-            self.log_message.emit(f"❌ [美股-IB] 下单失败: {e}")
+            self.log_message.emit(f"❌ [美股-{self.venue}] 下单失败: {e}")
 
     async def _track_order_status_async(self, order_id: str, code: str, action: str, qty: int, price: float, venue: str, trade_obj=None):
         """轮询订单成交状态，汇报执行情况 (美股多通道)"""
@@ -1435,6 +1517,21 @@ class BaseUSTradingController(QObject):
         """同步包装下单"""
         asyncio.run_coroutine_threadsafe(self._execute_trade_async(code, action, price), self.loop)
 
+    def execute_manual_order(self, code, action, price, qty):
+        """主入口：执行手工委托订单"""
+        if not code: return
+        if not code.startswith("US."):
+            code = f"US.{code.upper()}"
+        else:
+            code = code.upper()
+            
+        self.cmd_queue.put(('MANUAL_TRADE', {
+            'code': code,
+            'action': action.upper(),
+            'price': float(price),
+            'qty': int(qty)
+        }))
+
     def close_all_positions(self):
         """主入口：向底层异步队列提交清仓指令"""
         self.cmd_queue.put(('CLOSE_ALL', None))
@@ -1481,15 +1578,19 @@ class BaseUSTradingController(QObject):
                 b_dt = datetime(latest_b.klu.time.year, latest_b.klu.time.month, latest_b.klu.time.day, 
                                latest_b.klu.time.hour, latest_b.klu.time.minute, latest_b.klu.time.second)
                 
-                # 严苛过滤：1. 方向一致; 2. 30分钟内
+                # 严苛过滤：1. 方向一致; 2. 45分钟(交易时间)内
+                from Common.TimeUtils import get_trading_minutes_diff
+                max_age = TRADING_CONFIG.get('max_signal_age_minutes', 45)
+                
                 is_same_dir = (latest_b.is_buy == is_buy)
-                is_recent = (us_now - b_dt).total_seconds() < 1800 # 30分钟
+                trade_diff = get_trading_minutes_diff(b_dt, us_now, market='US')
+                is_recent = trade_diff < max_age
                 
                 if not is_same_dir:
                     self.log_message.emit(f"⚠️ [美股] {code} {bsp.type2str()} 5M 确认失败: 5M 最新信号为反向 {latest_b.type2str()} @ {latest_b.klu.time}")
                     return
                 if not is_recent:
-                    self.log_message.emit(f"⚠️ [美股] {code} {bsp.type2str()} 5M 确认失败: 5M 最新信号 {latest_b.type2str()} 已过时(>30min) @ {latest_b.klu.time}")
+                    self.log_message.emit(f"⚠️ [美股] {code} {bsp.type2str()} 5M 确认失败: 5M 最新信号 {latest_b.type2str()} 已过时(>{max_age}min, 实际交易时间:{trade_diff:.1f}min) @ {latest_b.klu.time}")
                     return
                     
                 self.log_message.emit(f"💎 [美股] {code} {bsp.type2str()} 30M+5M 多周期共振确认成功 (最新5M信号: {latest_b.type2str()})")
@@ -1725,17 +1826,27 @@ class BaseUSTradingController(QObject):
                 tasks = [self._initialize_single_tracker_async(p) for p in positions]
                 await asyncio.gather(*tasks)
             
-            # --- 💡 [补偿买入自愈] 清除今天已发出通知、但实际上「未持仓」的标的，让其可被重新扫描触发 ---
+            # --- 💡 [补偿买入自愈] 清除今天已发出「买入」通知、但实际上未进入持仓的标的，让其下轮扫描重新触发 ---
+            # ⚠️ sig_key 格式: "US.MU_2026/03/19_1"，需提取股票代码部分才能与 position_trackers 对比
             now_et_str = self.get_us_now().strftime("%Y-%m-%d")
+            held_codes = set(self.position_trackers.keys())  # e.g. {"US.MU", "US.AAPL"}
             cleanup_keys = []
             for sig_key, sig_time in list(self.notified_signals.items()):
-                if sig_time.startswith(now_et_str):
-                    # 如果标的不在当前持仓监控池里，说明报警了但没买入，释放它
-                    if sig_key not in self.position_trackers:
-                        cleanup_keys.append(sig_key)
-            
+                if not sig_time.startswith(now_et_str):
+                    continue
+                # 从 sig_key 提取股票代码: "US.MU_2026/03/19_1" → "US.MU"
+                parts = sig_key.split('_')
+                if len(parts) < 3:
+                    continue  # 格式异常，跳过
+                code_from_key = parts[0]  # "US.MU"
+                signal_type = parts[-1]   # "1", "2s", "2", etc.
+                # 仅对买型信号（非卖点）做漏单自愈；且标的确实不在当前持仓中
+                is_buy_signal = not signal_type.endswith('S') and not signal_type.endswith('s')
+                if is_buy_signal and code_from_key not in held_codes:
+                    cleanup_keys.append(sig_key)
+
             if cleanup_keys:
-                self.log_message.emit(f"♻️ [风控自愈] 发现 {len(cleanup_keys)} 只今天已达标但未成交/漏单的股票 ({', '.join(cleanup_keys)})，已从拦截池释放，下轮扫描将重新追踪补买！")
+                self.log_message.emit(f"♻️ [风控自愈] 发现 {len(cleanup_keys)} 只今天已发出买入通知但尚未成交的标的 ({', '.join(cleanup_keys)})，已从去重池释放，下轮扫描将重新追踪！")
                 for k in cleanup_keys:
                     del self.notified_signals[k]
                 self._save_notified_signals()
@@ -1763,7 +1874,16 @@ class BaseUSTradingController(QObject):
             available, total, positions = await self.get_account_assets_async()
             current_held_codes = {f"US.{p['symbol']}": p for p in positions}
             
-            # --- 自愈补救机制：为缺失的持仓冷启动加载 ATR ---
+            # 🚀 [Phase 12] 统一使用 Schwab 作为美股价格“事实来源”，解决 IB 延迟问题
+            schwab_prices = {}
+            if self.schwab_api and current_held_codes:
+                try:
+                    loop = asyncio.get_running_loop()
+                    schwab_prices = await loop.run_in_executor(self.executor, self.schwab_api.get_realtime_quotes, list(current_held_codes.keys()))
+                except Exception as e_quote:
+                    self.log_message.emit(f"⚠️ [美股-风控] 获取 Schwab 实时报价失败: {e_quote}")
+            
+            # --- 自愈补救机制：为缺失的持仓 cold start 加载 ATR ---
             for code, p in current_held_codes.items():
                 if code not in self.position_trackers:
                     asyncio.create_task(self._initialize_single_tracker_async(p))
@@ -1777,7 +1897,11 @@ class BaseUSTradingController(QObject):
                 
                 p = current_held_codes[code]
                 qty = abs(p['qty'])
-                current_price = p.get('mkt_price') or (p['mkt_value'] / p['qty'] if p['qty'] != 0 else 0)
+                
+                # 💡 优先使用 Schwab 价格，兜底使用券商汇报价格
+                current_price = schwab_prices.get(code)
+                if not current_price:
+                    current_price = p.get('mkt_price') or (p['mkt_value'] / p['qty'] if p['qty'] != 0 else 0)
                 
                 # 2. 获取追踪器
                 tracker = self.position_trackers[code]
@@ -1785,7 +1909,8 @@ class BaseUSTradingController(QObject):
                 # 3. 更新最高价
                 if current_price > tracker['highest_price']:
                     tracker['highest_price'] = current_price
-                    self.log_message.emit(f"📈 {code} 创美股持仓新高: ${current_price:.2f}")
+                    source_tag = " (Schwab)" if code in schwab_prices else ""
+                    self.log_message.emit(f"📈 {code} 创美股持仓新高{source_tag}: ${current_price:.2f}")
                 
                 # 4. 风控条件对齐
                 entry_price = tracker.get('entry_price', current_price)
@@ -1800,7 +1925,8 @@ class BaseUSTradingController(QObject):
                 elif "2买" in bsp_type_str or "3买" in bsp_type_str:
                     atr_init = 1.2
                     
-                atr_trail = TRADING_CONFIG.get('atr_stop_trail', 2.5)
+                # 🚀 [Phase 11] 使用针对美股优化的 3.0 ATR 移动止损
+                atr_trail = self.atr_stop_trail
                 atr_profit = TRADING_CONFIG.get('atr_profit_threshold', 1.5)
                 
                 # 触发状态：开启移动止损
@@ -1811,10 +1937,10 @@ class BaseUSTradingController(QObject):
                 
                 if tracker.get('trail_active', False):
                     stop_price = highest - (atr * atr_trail)
-                    stop_type = "移动止损"
+                    stop_type = "ATR移动止盈"
                 else:
                     stop_price = entry_price - (atr * atr_init)
-                    stop_type = "固定止损"
+                    stop_type = "ATR初始止损"
                 
                 self.log_message.emit(f"🛡️ [ATR监测] {code}: 现价 ${current_price:.2f}, 止损位 ${stop_price:.2f} ({stop_type}) [最高价 ${highest:.2f}, ATR ${atr:.4f}]")
                 

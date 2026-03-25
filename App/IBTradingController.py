@@ -23,14 +23,16 @@ class IBTradingController(BaseUSTradingController):
     async def _get_ib_assets_async(self):
         """原有的 IB 资金获取逻辑"""
         try:
-            # 1. 直接获取缓存值 (ib_insync 会自动维护同步)
-            vals = self.ib.accountValues()
-            port = self.ib.portfolio()
-            
-            if not vals:
-                await asyncio.sleep(0.8)
+            # 1. 尝试获取缓存值 (增加重试次数限制，防止死循环)
+            for i in range(5):
                 vals = self.ib.accountValues()
-                port = self.ib.portfolio()
+                if vals: break
+                await asyncio.sleep(0.5)
+            
+            port = self.ib.portfolio()
+            if not vals:
+                self.log_message.emit("⚠️  [IB-资产] 账户数据 (accountValues) 为空，跳过本次解析")
+                return 0.0, 0.0, []
             
             available, total = 0.0, 0.0
             found_tags = []
@@ -56,13 +58,29 @@ class IBTradingController(BaseUSTradingController):
             if not actual_items:
                 # 💡 [兜底读取] 如果 portfolio() 缓冲尚未同步，尝试调用同步 positions() 列表
                 pos_list = self.ib.positions()
+                
+                # 🛡️ [补救逻辑] 通过 reqTickers 获取实时价格，避免错误地将成本价 (avgCost) 报送为市价
+                ticker_contracts = [p.contract for p in pos_list if p.position != 0]
+                tickers = {}
+                if ticker_contracts:
+                    try:
+                        ticker_data = self.ib.reqTickers(*ticker_contracts)
+                        tickers = {t.contract.symbol: t for t in ticker_data}
+                    except: pass
+
                 for p in pos_list:
                     if p.position != 0:
+                        symbol = p.contract.symbol
+                        ticker = tickers.get(symbol)
+                        # 优先取 last, 兜底取 close 或 avgCost (极简兜底)
+                        mkt_price = getattr(ticker, 'last', 0) or getattr(ticker, 'close', 0) or p.avgCost
+                        
                         positions_data.append({
-                            'symbol': p.contract.symbol,
+                            'symbol': symbol,
                             'qty': int(p.position),
-                            'mkt_value': round(p.position * p.avgCost, 2),
-                            'avg_cost': round(p.avgCost, 2)
+                            'mkt_value': round(p.position * mkt_price, 2),
+                            'avg_cost': round(p.avgCost, 2),
+                            'mkt_price': mkt_price
                         })
             else:
                 for item in actual_items:
@@ -71,7 +89,8 @@ class IBTradingController(BaseUSTradingController):
                             'symbol': item.contract.symbol,
                             'qty': int(item.position),
                             'mkt_value': round(item.marketValue, 2),
-                            'avg_cost': round(item.averageCost, 2)
+                            'avg_cost': round(item.averageCost, 2),
+                            'mkt_price': item.marketPrice
                         })
             self.log_message.emit(f"🔌 [IB-持仓自愈] 资产查询返回: 可用资金=${available:.2f}, 总资产=${total:.2f}, 持仓数=${len(positions_data)}")
             return available, total, positions_data
