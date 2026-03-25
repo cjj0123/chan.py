@@ -1886,11 +1886,19 @@ class BaseUSTradingController(QObject):
             # --- 自愈补救机制：为缺失的持仓 cold start 加载 ATR ---
             for code, p in current_held_codes.items():
                 if code not in self.position_trackers:
+                    # 🛡️ [防卖出循环] 如果该股票最近 10 分钟内有过卖出记录，暂不建立追踪器，防止幽灵持仓复活
+                    if code in self.trade_cooldown:
+                        if (time.time() - self.trade_cooldown[code]) < 600: # 10分钟保护
+                             continue
                     asyncio.create_task(self._initialize_single_tracker_async(p))
             
             for code in list(self.position_trackers.keys()):
                 # 1. 检查是否存在持仓
                 if code not in current_held_codes:
+                    # 🛡️ [安全性检查] 给持仓清空留出 3.5 分钟同步冗余，防止网络颠簸误删追踪器
+                    if code in self.trade_cooldown and (time.time() - self.trade_cooldown[code]) < 210:
+                        continue
+                        
                     self.log_message.emit(f"🔄 {code} 已无持仓，停止移动止损追踪")
                     del self.position_trackers[code]
                     continue
@@ -1946,6 +1954,14 @@ class BaseUSTradingController(QObject):
                 
                 # 5. 触发则立刻下平仓单
                 if current_price < stop_price:
+                    # 🛡️ [风控加固 Phase 12] 严防死守：止损触发必须验证 20 分钟冷却期
+                    if code in self.trade_cooldown:
+                        elapsed = time.time() - self.trade_cooldown[code]
+                        if elapsed < 1200:
+                            if attempt % 5 == 0: # 减少重复日志
+                                self.log_message.emit(f"⏳ [美股-风控] {code} 触发止损但我方处于 20min 交易冷却期内({elapsed:.0f}s)，拦截重复触发")
+                            continue
+
                     self.log_message.emit(f"🚨 {code} 触发{stop_type}! 最高价=${highest:.2f}, 现价=${current_price:.2f}, 止损位=${stop_price:.2f}")
                     # 🟢 [风控加固] 队列去重
                     if code in self._pending_execute_codes:
