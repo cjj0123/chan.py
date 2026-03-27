@@ -48,6 +48,28 @@ TRADING_CONFIG = {
     }
 }
 
+# 各市场优化后的专属策略参数 (根据 2026-03-24 回测寻优结果更新)
+MARKET_SPECIFIC_CONFIG = {
+    'CN': {
+        'bs_type': '1,1p,2,2s,3a,3b',
+        'atr_stop_trail': 1.5,
+    },
+    'HK': {
+        'bs_type': '2,2s,3a,3b',
+        'atr_stop_trail': 1.5,
+    },
+    'US': {
+        'bs_type': '2,2s,3a,3b',
+        'atr_stop_trail': 3.0,
+    }
+}
+
+# 内存管理与上下文优化配置
+MEMORY_CONFIG = {
+    'archive_threshold_hours': 48,  # 信号归档阈值 (小时)
+    'keep_daily_reports': 30,       # 保留最近 30 天的每日简报
+}
+
 # 缠论配置
 CHAN_CONFIG = {
     "bi_strict": True,

@@ -100,6 +100,7 @@ class HKTradingController(QObject):
         # 延迟初始化富途连接 (在后台线程首次使用时创建，确保 socket 线程亲和性)
         self._quote_ctx = None
         self._trd_ctx = None
+        self._trd_acc_id = None # 🟢 [核心补强] 用于锁定目标账号 ID
         self.trd_env = TrdEnv.SIMULATE if self.dry_run else TrdEnv.REAL
 
         # 初始化 Discord Bot (将在启动扫描时真正启动)
@@ -188,9 +189,19 @@ class HKTradingController(QObject):
 
     @property
     def trd_ctx(self):
-        """延迟初始化 Futu 交易上下文，确保在使用线程上创建"""
+        """延迟初始化 Futu 交易上下文，确保在使用线程上创建，并锁定活跃账号"""
         if self._trd_ctx is None:
             self._trd_ctx = OpenHKTradeContext(host='127.0.0.1', port=11111)
+            
+            # 🚀 [核心补强] 自动锁定有资产的账户 ID
+            ret, data = self._trd_ctx.get_acc_list()
+            if ret == RET_OK and not data.empty:
+                env_str = 'SIMULATE' if self.trd_env == TrdEnv.SIMULATE else 'REAL'
+                filtered = data[data['trd_env'] == env_str]
+                if not filtered.empty:
+                    # 默认选第一个，但如果有多个，可以增加逻辑
+                    self._trd_acc_id = int(filtered.iloc[0]['acc_id'])
+                    self.log_message.emit(f"🎯 [HK-账户自检] 已锁定账户: {self._trd_acc_id} ({env_str})")
         return self._trd_ctx
 
     def _subscribe_stock_quote(self, code: str):
@@ -937,8 +948,22 @@ class HKTradingController(QObject):
             (可用资金金额, 总资产金额)
         """
         try:
-            ret, data = self.trd_ctx.accinfo_query(trd_env=self.trd_env)
+            # 0. [核心修复] 强制刷新模拟盘账户列表同步 (对齐 US/A股通道)
+            if self.trd_env == TrdEnv.SIMULATE:
+                self.trd_ctx.get_acc_list()
+
+            refresh = (self.trd_env == TrdEnv.SIMULATE)
+            ret, data = self.trd_ctx.accinfo_query(trd_env=self.trd_env, refresh_cache=refresh)
             if ret == RET_OK and not data.empty:
+                row = data.iloc[0]
+                # [详细调试] 打印所有资金组件
+                log_msg = (f"💹 [港股-资金详情]\n"
+                           f"   • 现金(cash): {row.get('cash', 'N/A')}\n"
+                           f"   • 总资产(total_assets): {row.get('total_assets', 'N/A')}\n"
+                           f"   • 购买力(power): {row.get('power', 'N/A')}\n"
+                           f"   • 证券市值(market_val): {row.get('market_val', 'N/A')}")
+                self.log_message.emit(log_msg)
+
                 # 优先使用 cash 字段 (总现金)
                 if 'cash' in data.columns:
                     available_funds = data.iloc[0]['cash']
@@ -1124,8 +1149,13 @@ class HKTradingController(QObject):
         获取交易控制器的实时状态摘要，供 Discord 或 GUI 显示。
         """
         try:
+            # 0. [核心修复] 强制刷新模拟盘账户列表同步
+            if self.trd_env == TrdEnv.SIMULATE:
+                self.trd_ctx.get_acc_list()
+
             # 1. 查询资金信息
-            ret_acc, data_acc = self.trd_ctx.accinfo_query(trd_env=self.trd_env)
+            refresh = (self.trd_env == TrdEnv.SIMULATE)
+            ret_acc, data_acc = self.trd_ctx.accinfo_query(trd_env=self.trd_env, refresh_cache=refresh)
             if ret_acc == RET_OK and not data_acc.empty:
                 row = data_acc.iloc[0]
                 # 尝试多个可能的字段名
@@ -1145,8 +1175,10 @@ class HKTradingController(QObject):
                 power = 0.0
                 unrealized_pl = 0.0
 
-            # 2. 查询持仓
-            ret_pos, data_pos = self.trd_ctx.position_list_query(trd_env=self.trd_env)
+            # 2. 查询持仓 (💡 [核心补强] 显式使用已锁定的账号 ID)
+            if refresh:
+                self.trd_ctx.accinfo_query(acc_id=self._trd_acc_id, trd_env=self.trd_env, refresh_cache=True)
+            ret_pos, data_pos = self.trd_ctx.position_list_query(acc_id=self._trd_acc_id, trd_env=self.trd_env, refresh_cache=False)
             pos_count = len(data_pos) if ret_pos == RET_OK and not data_pos.empty else 0
             
             # 3. 运行状态
@@ -1841,7 +1873,9 @@ class HKTradingController(QObject):
             # 查询当前实际持仓数量（从富途API实时获取，而非仅依赖本轮计数器）
             current_position_count = 0
             try:
-                ret, data = self.trd_ctx.position_list_query(trd_env=self.trd_env)
+                self._init_trd_ctx()
+                refresh = (self.trd_env == TrdEnv.SIMULATE)
+                ret, data = self.trd_ctx.position_list_query(acc_id=self._trd_acc_id, trd_env=self.trd_env, refresh_cache=False)
                 if ret == RET_OK and not data.empty:
                     # 只计算持仓数量 > 0 的股票
                     held = data[data['qty'].astype(float) > 0]
@@ -2037,7 +2071,6 @@ class HKTradingController(QObject):
 
         self.log_message.emit(f"🔍 [5M 逃顶快速轮询] 对 {len(codes_to_check)} 只持仓股快速检查 5M 卖点...")
 
-        from datetime import datetime, timedelta
         now = datetime.now()
         end_time_5m_str = now.strftime("%Y-%m-%d %H:%M:%S")
         start_time_5m_str = (now - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
@@ -2055,8 +2088,9 @@ class HKTradingController(QObject):
                      # 专门看 SELL 待成交
                      orders_active = ord_data[ord_data[status_col].isin(active_statuses) & (ord_data['trd_side'] == TrdSide.SELL)]
                      pending_orders_codes = set(orders_active['code'].tolist())
-                 
-                 ret_pos, pos_data = self.trd_ctx.position_list_query(trd_env=self.trd_env)
+                 self._init_trd_ctx()
+                 refresh = (self.trd_env == TrdEnv.SIMULATE)
+                 ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=self._trd_acc_id, trd_env=self.trd_env, refresh_cache=False)
                  if ret_pos == RET_OK and not pos_data.empty:
                      for _, prow in pos_data.iterrows():
                           positions_qty_map[prow['code']] = int(prow['qty'])
@@ -2298,7 +2332,11 @@ class HKTradingController(QObject):
              
         try:
             with self.futu_api_lock:
-                ret, data = self.trd_ctx.position_list_query(trd_env=self.trd_env)
+                refresh = (self.trd_env == TrdEnv.SIMULATE)
+                # 💡 [核心修复] 先刷新账户信息，再查持仓 (避开 market is required)
+                if refresh:
+                    self.trd_ctx.accinfo_query(acc_id=self._trd_acc_id, trd_env=self.trd_env, refresh_cache=True)
+                ret, data = self.trd_ctx.position_list_query(acc_id=self._trd_acc_id, trd_env=self.trd_env, refresh_cache=False)
                 if ret == RET_OK and not data.empty:
                     position = data[data['code'] == code]
                     if not position.empty:
@@ -2316,8 +2354,11 @@ class HKTradingController(QObject):
             
             def query_positions_and_funds():
                 with self.futu_api_lock:
-                    ret_pos, pos_data = self.trd_ctx.position_list_query(trd_env=self.trd_env)
-                    ret_acc, acc_data = self.trd_ctx.accinfo_query(trd_env=self.trd_env)
+                    refresh = (self.trd_env == TrdEnv.SIMULATE)
+                    # 💡 [核心修复] 先通过 accinfo_query(refresh=True) 强制服务端刷新缓存
+                    # 💡 [核心补强] 显式传递 acc_id 以免多账户漂移
+                    ret_acc, acc_data = self.trd_ctx.accinfo_query(acc_id=self._trd_acc_id, trd_env=self.trd_env, refresh_cache=refresh)
+                    ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=self._trd_acc_id, trd_env=self.trd_env, refresh_cache=False)
                     return (ret_pos, pos_data), (ret_acc, acc_data)
             
             (ret_pos, pos_data), (ret_acc, acc_data) = await loop.run_in_executor(None, query_positions_and_funds)
@@ -2325,17 +2366,64 @@ class HKTradingController(QObject):
             if ret_pos == RET_OK:
                 new_cache = {}
                 positions_list = []
+                
+                def safe_float(v, default=0.0):
+                    try:
+                        if v is None or v == 'N/A' or v == '': return default
+                        return float(v)
+                    except: return default
+
+                # 🛡️ [核心增强] 市值对账比对，剔除 API 缓存残留的“幽灵持仓”
+                total_mkt_val_reported = 0.0
+                if ret_acc == RET_OK and not acc_data.empty:
+                    # 💡 accinfo_query 结果已由 API 按 ID 筛选，且结果集中不含 acc_id 列
+                    total_mkt_val_reported = safe_float(acc_data.iloc[0].get('market_val', 0.0))
+                    self.log_message.emit(f"🔍 [同步调试] 账户:{self._trd_acc_id}, 报表市值:{total_mkt_val_reported:.2f}")
+                
+                sum_positions_mkt_val = 0.0
+                raw_positions = []
+                
                 if not pos_data.empty:
                     for _, row in pos_data.iterrows():
                         qty = int(row['qty'])
                         if qty > 0:
-                            new_cache[row['code']] = qty
+                            mkt_val = safe_float(row.get('market_val', 0.0))
+                            raw_positions.append((mkt_val, row))
+                            sum_positions_mkt_val += mkt_val
+
+                # 如果持仓总市值大于账户报表市值（偏差 > 2% 且 绝对值 > 500），说明存在过时缓存
+                ghost_codes = set()
+                if sum_positions_mkt_val > total_mkt_val_reported * 1.02 and sum_positions_mkt_val - total_mkt_val_reported > 100:
+                    msg = f"⚠️ [对账中心] 报表市值({total_mkt_val_reported:.2f}) < 持仓总计({sum_positions_mkt_val:.2f})，启动自动对齐"
+                    self.log_message.emit(msg)
+                    
+                    # 按市值从高到低排列，依次检查
+                    raw_positions.sort(key=lambda x: x[0], reverse=True)
+                    temp_sum = sum_positions_mkt_val
+                    for m_val, row in raw_positions:
+                        # 只要总市值还大于报表值的 102%，就继续屏蔽
+                        if temp_sum > total_mkt_val_reported * 1.02:
+                            ghost_codes.add(row['code'])
+                            temp_sum -= m_val
+                            self.log_message.emit(f"🚫 [拦截] 发现与账户报表冲突的过时持仓: {row['code']} (市值 {m_val:.2f})")
+
+                if not pos_data.empty:
+                    for _, row in pos_data.iterrows():
+                        code = row['code']
+                        if code in ghost_codes:
+                            self.log_message.emit(f"🚫 [幽灵拦截-确认] 正在从显示列表移除: {code}")
+                            continue
+                        
+                        qty = int(row['qty'])
+                        if qty > 0:
+                            new_cache[code] = qty
                             positions_list.append({
-                                'symbol': row['code'],
+                                'symbol': code.split('.')[-1],
+                                'code': code,
                                 'qty': qty,
-                                'mkt_value': float(row['market_val']),
-                                'pnl_ratio': float(row['pl_ratio']) if 'pl_ratio' in row else 0.0,
-                                'avg_cost': float(row['cost_price'])
+                                'mkt_value': safe_float(row.get('market_val', 0.0)),
+                                'pnl_ratio': safe_float(row.get('pl_ratio', 0.0)),
+                                'avg_cost': safe_float(row.get('cost_price', 0.0))
                             })
                 
                 self.position_cache = new_cache
@@ -2367,7 +2455,8 @@ class HKTradingController(QObject):
         """为现有持仓初始化追踪止损器"""
         self.log_message.emit("🛡️ 正在为现有持仓初始化风险监控...")
         try:
-            ret, data = self.trd_ctx.position_list_query(trd_env=self.trd_env)
+            refresh = (self.trd_env == TrdEnv.SIMULATE)
+            ret, data = self.trd_ctx.position_list_query(acc_id=self._trd_acc_id, trd_env=self.trd_env, refresh_cache=False)
             if ret == RET_OK and not data.empty:
                 held = data[data['qty'].astype(float) > 0]
                 for _, row in held.iterrows():
@@ -2875,8 +2964,9 @@ class HKTradingController(QObject):
         try:
             self.log_message.emit("🚨 正在启动一键清仓流程...")
             
+            refresh = (self.trd_env == TrdEnv.SIMULATE)
             # 1. 查询所有持仓
-            ret, data = self.trd_ctx.position_list_query(trd_env=self.trd_env)
+            ret, data = self.trd_ctx.position_list_query(acc_id=self._trd_acc_id, trd_env=self.trd_env, refresh_cache=False)
             if ret != RET_OK:
                 self.log_message.emit(f"❌ 获取持仓列表失败: {data}")
                 return False
@@ -2930,8 +3020,14 @@ class HKTradingController(QObject):
     def query_account_funds(self):
         """查询账户资金和持仓 (对齐 GUI 接口)"""
         try:
+            # 0. [核心修复] 强制刷新模拟盘账户列表同步 (解决模拟盘成交后数据不更新)
+            if self.trd_env == TrdEnv.SIMULATE:
+                self.trd_ctx.get_acc_list()
+            
+            refresh = (self.trd_env == TrdEnv.SIMULATE)
+            
             # 1. 查询资金
-            ret, data = self.trd_ctx.accinfo_query(trd_env=self.trd_env)
+            ret, data = self.trd_ctx.accinfo_query(trd_env=self.trd_env, refresh_cache=refresh)
             if ret != RET_OK:
                 self.log_message.emit(f"❌ 获取资金失败: {data}")
                 return
@@ -2941,7 +3037,7 @@ class HKTradingController(QObject):
             total = float(data["total_assets"].iloc[0]) if not data.empty else 0.0
             
             # 2. 查询持仓
-            ret, pos_data = self.trd_ctx.position_list_query(trd_env=self.trd_env)
+            ret, pos_data = self.trd_ctx.position_list_query(acc_id=self._trd_acc_id, trd_env=self.trd_env, refresh_cache=False)
             positions = []
             if ret == RET_OK and not pos_data.empty:
                 for _, row in pos_data.iterrows():

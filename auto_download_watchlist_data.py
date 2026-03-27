@@ -12,7 +12,7 @@ sys.path.append(str(Path(__file__).resolve().parent))
 
 from datetime import datetime, timedelta
 import pandas as pd
-from App.ashare_bsp_scanner_gui import get_futu_watchlist_stocks
+from Common.StockUtils import get_futu_watchlist_stocks
 from DataAPI.SQLiteAPI import download_and_save_all_stocks_multi_timeframe
 
 def get_watchlist_stocks_with_fallback():

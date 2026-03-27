@@ -1,0 +1,19 @@
+# IB 美股自动扫描监控池 (免富途)
+# 格式：每行一个代码（例如 NVX 或 US.NVX）
+# 符号 # 起始行为注释
+NVX
+LEU
+UEC
+WWR
+MP
+UAMY
+USAR
+CRML
+AAPL
+TSLA
+NVDA
+MSFT
+AMZN
+GOOGL
+QQQ
+SPY

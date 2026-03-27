@@ -65,10 +65,40 @@ class CFutuAPI(CCommonStockApi):
             page_token = None
             current_retry = 0
             
-            time.sleep(0.15)  # 限频保护：Hybrid 模式下仅拉取单日增量，缩减避让时间。
+            time.sleep(0.2)  # 🛡️ [风控加固] 略微增加基准延时，确保 30s/60次 物理安全 (30s / 60 = 0.5s，此处 0.2s + random 组合)
+            
+            # --- Proactive Optimization for "Today" Requests ---
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            use_cur_kline_directly = (self.begin_date == today_str) or (self.begin_date is None)
+            
             while current_retry < retries:
+                # 🛡️ [风控加固] 如果是“仅拉取今日”请求，且第一次尝试，优先走 get_cur_kline 节省历史额度
+                if use_cur_kline_directly and current_retry == 0:
+                    lock_acquired = CFutuAPI._futu_lock.acquire(timeout=25)
+                    if lock_acquired:
+                        try:
+                            quote_ctx.subscribe([stock_code], [f_ktype], subscribe_push=False)
+                            ret_live, data_live = quote_ctx.get_cur_kline(stock_code, num=1000, ktype=f_ktype)
+                            if ret_live == RET_OK and data_live is not None and not data_live.empty:
+                                all_data.append(data_live)
+                                ret = RET_OK
+                                break
+                        finally:
+                            CFutuAPI._futu_lock.release()
+                    else:
+                        print(f"💡 [FutuAPI] {stock_code} {f_ktype} 实时拉取因锁竞争超时 (25s)，跳过实时尝试。")
+                    
+                    if ret != RET_OK:
+                        print(f"💡 [FutuAPI] {stock_code} {f_ktype} 优先实时拉取失败，回退至历史接口。")
+
                 # 首次请求不需要 page_token，后续请求需要
-                with CFutuAPI._futu_lock:
+                # 🛡️ [架构优化] 改为非阻塞锁且带有 25s 超时，防止线程在 API 挂起时发生堆积
+                lock_acquired = CFutuAPI._futu_lock.acquire(timeout=25)
+                if not lock_acquired:
+                    print(f"🚨 [FutuAPI] {stock_code} 锁竞争超时 (25s)，强制跳过以保护执行池。")
+                    raise RuntimeError(f"FutuAPI Lock Timeout for {stock_code}")
+                
+                try:
                     if page_token is None:
                         ret, data, new_page_token = quote_ctx.request_history_kline(
                             stock_code,
@@ -89,6 +119,8 @@ class CFutuAPI(CCommonStockApi):
                     # 锁内预留微小时间间隙，保障 OpenD 绝对安全
                     if ret != RET_OK:
                         time.sleep(0.1)
+                finally:
+                    CFutuAPI._futu_lock.release()
                 
                 if ret == RET_OK:
                     if data is not None and not data.empty:
@@ -103,17 +135,25 @@ class CFutuAPI(CCommonStockApi):
                         continue  # 继续下一页，不增加重试计数
                 else:
                     error_msg = str(data)
-                    # 🛡️ [风控加固] 只要失败(None)、或明确额度耗尽，自适应降级为 get_cur_kline 免配额拉取
-                    if "额度不足" in error_msg or "额度" in error_msg or data is None or error_msg == "None":
-                        print(f"💡 [FutuAPI] {stock_code} {f_ktype} 异常({error_msg})，自适应降级至 get_cur_kline 实时拉取")
+                    # 🛡️ [风控加固] 额度不足 (Quota) 或 频率太高 (Frequency) 均触发 get_cur_kline 实时拉取降级
+                    is_limit = "频" in error_msg or "frequency" in error_msg.lower() or "额度" in error_msg or data is None or error_msg == "None"
+                    
+                    if is_limit:
+                        print(f"💡 [FutuAPI] {stock_code} {f_ktype} 受限({error_msg})，自适应降级至 get_cur_kline 实时拉取")
                         # get_cur_kline 依赖订阅，确保加锁订阅
-                        with CFutuAPI._futu_lock:
-                            quote_ctx.subscribe([stock_code], [f_ktype], subscribe_push=False)
-                            ret_live, data_live = quote_ctx.get_cur_kline(stock_code, num=300, ktype=f_ktype)
-                        if ret_live == RET_OK and data_live is not None and not data_live.empty:
-                            all_data.append(data_live)
-                            ret = RET_OK  # 标记为成功，防止上层触发异常
-                            break
+                        lock_acquired = CFutuAPI._futu_lock.acquire(timeout=25)
+                        if lock_acquired:
+                            try:
+                                quote_ctx.subscribe([stock_code], [f_ktype], subscribe_push=False)
+                                ret_live, data_live = quote_ctx.get_cur_kline(stock_code, num=1000, ktype=f_ktype)
+                                if ret_live == RET_OK and data_live is not None and not data_live.empty:
+                                    all_data.append(data_live)
+                                    ret = RET_OK  # 标记为成功，防止上层触发异常
+                                    break
+                            finally:
+                                CFutuAPI._futu_lock.release()
+                        else:
+                            print(f"💡 [FutuAPI] {stock_code} {f_ktype} 降级尝试因锁超时 (25s) 拦截。")
                     
                     print(f"⚠️ [FutuAPI] Request failed ({data}), retrying {current_retry+1}/{retries}...")
                     time.sleep(random.uniform(0.5, 1.0) * (2 ** current_retry))
@@ -171,11 +211,30 @@ class CFutuAPI(CCommonStockApi):
             if "Frequency limit" in str(e) or (ret != RET_OK and "limit" in str(data).lower()):
                  print(f"🚨 [FutuAPI] {stock_code} 疑似触发频率限制，建议在大循环中增加延时")
             print(f"🔥 [FutuAPI] Online Error for {stock_code}: {e}")
-            _futu_local.quote_ctx = None  # Reset bad connection on errors
+            
+            # 🛡️ [Fix] Close existing connection before resetting to prevent leaks (128 limit)
+            if hasattr(_futu_local, 'quote_ctx') and _futu_local.quote_ctx is not None:
+                try:
+                    _futu_local.quote_ctx.close()
+                except:
+                    pass
+            _futu_local.quote_ctx = None  
             raise e
         finally:
             # Reusing connection via thread-local, do not close here
             pass
+
+    @classmethod
+    def close_all(cls):
+        """显式关闭当前线程的所有 Futu 连接"""
+        global _futu_local
+        if hasattr(_futu_local, 'quote_ctx') and _futu_local.quote_ctx is not None:
+            try:
+                _futu_local.quote_ctx.close()
+                print("🔌 [FutuAPI] 已显式关闭 OpenQuoteContext")
+            except:
+                pass
+            _futu_local.quote_ctx = None
 
     def SetBasciInfo(self):
         self.name = self.code

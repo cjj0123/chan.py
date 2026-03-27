@@ -4,6 +4,58 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+def get_trading_minutes_diff(start_time: datetime, end_time: datetime, market: str = 'HK') -> float:
+    """
+    计算两个时间点之间该市场的交易分钟数（排除非交易时段）
+    
+    Args:
+        start_time: 信号产生时间
+        end_time: 当前时间
+        market: 'HK', 'CN', 'US'
+        
+    Returns:
+        交易分钟数（浮点数）
+    """
+    if start_time > end_time:
+        return 0.0
+        
+    # 定义交易时段 (H, M)
+    sessions = {
+        'HK': [((9, 30), (12, 0)), ((13, 0), (16, 10))],
+        'CN': [((9, 30), (11, 30)), ((13, 0), (15, 0))],
+        'US': [((9, 30), (16, 0))]
+    }
+    
+    market_sessions = sessions.get(market.upper(), sessions['HK'])
+    
+    total_seconds = 0
+    current_day = start_time.date()
+    end_day = end_time.date()
+    
+    import calendar
+    
+    curr = start_time
+    while curr.date() <= end_day:
+        # 周末跳过
+        if curr.weekday() < 5:
+            for (sh, sm), (eh, em) in market_sessions:
+                s_dt = datetime.combine(curr.date(), datetime.strptime(f"{sh:02d}:{sm:02d}", "%H:%M").time())
+                e_dt = datetime.combine(curr.date(), datetime.strptime(f"{eh:02d}:{em:02d}", "%H:%M").time())
+                
+                # 计算重叠部分
+                overlap_s = max(start_time, s_dt)
+                overlap_e = min(end_time, e_dt)
+                
+                if overlap_s < overlap_e:
+                    total_seconds += (overlap_e - overlap_s).total_seconds()
+                    
+        # 移动到下一天 00:00:00
+        curr = datetime.combine(curr.date() + timedelta(days=1), datetime.min.time())
+        if curr > end_time:
+            break
+            
+    return total_seconds / 60.0
+
 def get_trading_duration_hours(start_time: datetime, end_time: datetime) -> float:
     """
     计算两个时间点之间的港股交易小时数（排除非交易时段）

@@ -20,6 +20,11 @@ class FutuUSTradingController(BaseUSTradingController):
     async def get_account_assets_async(self) -> Tuple[float, float, list]:
         """异步获取账户资产 - 纯净 Futu 通道"""
         try:
+            # 0. [核心修复] 强制刷新账户列表同步 (解决模拟盘成交后资金不更新的 OpenD 缓存问题)
+            if self.trd_env == TrdEnv.SIMULATE:
+                # self.log_message.emit("🔄 [Futu-账户同步] 正在同步账户列表...")
+                self.trd_ctx.get_acc_list()
+
             # 1. 自动探查账户环境
             if self.futu_acc_id == 0:
                 actual_env_str = 'SIMULATE' if self.trd_env == TrdEnv.SIMULATE else 'REAL'
@@ -58,39 +63,60 @@ class FutuUSTradingController(BaseUSTradingController):
                         self.futu_acc_id = int(account_list.iloc[0]['acc_id'])
                         self.log_message.emit(f"⚠️ [Futu-兜底选择] 未找到精准匹配，使用列表首位账户: {self.futu_acc_id}")
 
-            # 2. 查询账户资金
-            # 💡 [策略调整] 尝试同时使用两种方式查询，彻底避开 "Nonexisting acc_id" 暗坑
-            ret, data = self.trd_ctx.accinfo_query(acc_id=self.futu_acc_id, trd_env=self.trd_env)
+            # 2. 查询账户资金 (增加 refresh_cache=True 解决模拟盘 stale cache 问题)
+            refresh = (self.trd_env == TrdEnv.SIMULATE)
+            ret, data = self.trd_ctx.accinfo_query(acc_id=self.futu_acc_id, trd_env=self.trd_env, refresh_cache=refresh)
             if ret != RET_OK:
                 # 尝试不带 acc_id 的缺省查询 (OpenD 会自动路由到当前 Context 的默认账户)
-                ret, data = self.trd_ctx.accinfo_query(trd_env=self.trd_env)
+                ret, data = self.trd_ctx.accinfo_query(trd_env=self.trd_env, refresh_cache=refresh)
                 
             available, total = 0.0, 0.0
             if ret == RET_OK and not data.empty:
                 row = data.iloc[0]
+                # [详细调试] 打印所有资金组件以对齐 APP
+                log_msg = (f"💹 [Futu-资金详情] ID: {self.futu_acc_id}\n"
+                           f"   • 现金(cash): {row.get('cash', 'N/A')}\n"
+                           f"   • 总资产(total_assets): {row.get('total_assets', 'N/A')}\n"
+                           f"   • 购买力(power): {row.get('power', 'N/A')}\n"
+                           f"   • 证券市值(market_val): {row.get('market_val', 'N/A')}\n"
+                           f"   • 可提金额(avl_withdrawal_cash): {row.get('avl_withdrawal_cash', 'N/A')}")
+                self.log_message.emit(log_msg)
+                
                 available = float(row.get('cash', row.get('usd_cash', 0.0)))
                 total = float(row.get('total_assets', row.get('usd_assets', row.get('power', 0.0))))
             else:
                 self.log_message.emit(f"⚠️ [Futu] 资金查询失败 (ID:{self.futu_acc_id}): {data if isinstance(data, str) else 'Empty'}")
             
-            # 3. 查询持仓
+            # 3. 查询持仓 (💡 [核心修复] 移除 position_list_query 的 refresh_cache=True 以防 'market is required')
             positions = []
-            ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=self.futu_acc_id, trd_env=self.trd_env)
+            ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=self.futu_acc_id, trd_env=self.trd_env, refresh_cache=False)
             if ret_pos != RET_OK:
-                ret_pos, pos_data = self.trd_ctx.position_list_query(trd_env=self.trd_env)
+                ret_pos, pos_data = self.trd_ctx.position_list_query(trd_env=self.trd_env, refresh_cache=False)
                 
+            def safe_float(v, default=0.0):
+                try:
+                    if v is None or v == 'N/A' or v == '': return default
+                    return float(v)
+                except: return default
+
             if ret_pos == RET_OK and not pos_data.empty:
                 for _, row in pos_data.iterrows():
                     qty = int(row['qty'])
-                    if qty == 0: continue
+                    can_sell = int(row.get('can_sell_qty', qty))
+                    today_qty = int(row.get('today_qty', 0))
+                    if qty == 0 and can_sell == 0: continue
+                    
                     symbol = row['code'].split('.')[-1]
+                    # [详细调试] 打印持仓明细
+                    self.log_message.emit(f"📦 [持仓明细] {symbol}: 总量={qty}, 可卖={can_sell}, 今日买={today_qty}")
+                    
                     positions.append({
                         'symbol': symbol,
                         'qty': qty,
-                        'can_sell_qty': int(row.get('can_sell_qty', qty)),
-                        'mkt_value': float(row['market_val']),
-                        'avg_cost': float(row['cost_price']),
-                        'mkt_price': float(row['nominal_price'])
+                        'can_sell_qty': can_sell,
+                        'mkt_value': safe_float(row.get('market_val', 0.0)),
+                        'avg_cost': safe_float(row.get('cost_price', 0.0)),
+                        'mkt_price': safe_float(row.get('nominal_price', 0.0))
                     })
             
             return available, total, positions

@@ -74,6 +74,7 @@ class MarketMonitorController(QObject):
         self._is_paused = False
         self.quote_ctx = None
         self.trd_ctx = None
+        self.trd_acc_id = None # 🟢 [核心补强] 用于锁定目标账号 ID
         self.trd_env = TrdEnv.SIMULATE
         self.trading_enabled = False  # 默认只监控，不交易
         self.discord_bot = discord_bot
@@ -211,6 +212,16 @@ class MarketMonitorController(QObject):
             host = futu_config.get('host', '127.0.0.1')
             port = futu_config.get('port', 11111)
             self.trd_ctx = OpenSecTradeContext(filter_trdmarket=TrdMarket.CN, host=host, port=port)
+            
+            # 🚀 [核心补强] 自动锁定有资产的账户 ID
+            ret, data = self.trd_ctx.get_acc_list()
+            if ret == RET_OK and not data.empty:
+                env_str = 'SIMULATE' if self.trd_env == TrdEnv.SIMULATE else 'REAL'
+                filtered = data[data['trd_env'] == env_str]
+                if not filtered.empty:
+                    self.trd_acc_id = int(filtered.iloc[0]['acc_id'])
+                    self.log_message.emit(f"🎯 [A股-账户自检] 已锁定账户: {self.trd_acc_id} ({env_str})")
+            
             self.log_message.emit(f"💰 [A股] 交易接口已就绪 (环境: {'模拟' if self.trd_env == TrdEnv.SIMULATE else '实盘'})")
 
     def _init_discord(self):
@@ -320,7 +331,8 @@ class MarketMonitorController(QObject):
             # --- 2. 动态仓位计算 (对齐港股 50,000 资金门槛 与 RiskManager 模型) ---
             if action.upper() == "BUY" and qty <= 0:
                 # 查询账户资产
-                ret_acct, acct_data = self.trd_ctx.accinfo_query(trd_env=self.trd_env)
+                refresh = (self.trd_env == TrdEnv.SIMULATE)
+                ret_acct, acct_data = self.trd_ctx.accinfo_query(trd_env=self.trd_env, refresh_cache=refresh)
                 if ret_acct != RET_OK or acct_data.empty:
                     self.log_message.emit(f"⚠️ [A股-交易] 资产查询失败，无法计算仓位")
                     return
@@ -566,26 +578,86 @@ class MarketMonitorController(QObject):
             return
         self._init_trd_ctx()
         try:
-            ret, data = self.trd_ctx.accinfo_query(trd_env=self.trd_env)
+            # 0. [核心修复] 强制刷新模拟盘账户同步 (对齐 US 通道)
+            if self.trd_env == TrdEnv.SIMULATE:
+                self.trd_ctx.get_acc_list()
+
+            refresh = (self.trd_env == TrdEnv.SIMULATE)
+            ret, data = self.trd_ctx.accinfo_query(trd_env=self.trd_env, refresh_cache=refresh)
             available, total = 0.0, 0.0
             if ret == RET_OK:
+                row = data.iloc[0]
+                # [详细调试] 打印所有资金组件
+                log_msg = (f"💹 [A股-资金详情]\n"
+                           f"   • 现金(cash): {row.get('cash', 'N/A')}\n"
+                           f"   • 总资产(total_assets): {row.get('total_assets', 'N/A')}\n"
+                           f"   • 购买力(power): {row.get('power', 'N/A')}\n"
+                           f"   • 证券市值(market_val): {row.get('market_val', 'N/A')}")
+                self.log_message.emit(log_msg)
+                
                 available = float(data.iloc[0]['cash'])
                 total = float(data.iloc[0].get('total_assets', data.iloc[0].get('power', 0.0)))
 
-            positions = []
-            ret_pos, pos_data = self.trd_ctx.position_list_query(trd_env=self.trd_env)
+            def safe_float(v, default=0.0):
+                try:
+                    if v is None or v == 'N/A' or v == '': return default
+                    return float(v)
+                except: return default
+
+            total_mkt_val_reported = 0.0
+            if ret == RET_OK and not data.empty:
+                # 💡 accinfo_query 结果已由 API 按 ID 筛选，直接取第0行
+                total_mkt_val_reported = safe_float(data.iloc[0].get('market_val', 0.0))
+                self.log_message.emit(f"🔍 [A股-同步调试] 账户:{self.trd_acc_id}, 报表市值:{total_mkt_val_reported:.2f}")
+            
+            # 💡 追加缺失的持仓列表查询
+            ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=self.trd_acc_id, trd_env=self.trd_env)
+            
+            sum_positions_mkt_val = 0.0
+            raw_positions = []
             if ret_pos == RET_OK and not pos_data.empty:
                 for _, row in pos_data.iterrows():
                     qty = int(row['qty'])
-                    if qty == 0:
+                    if qty > 0:
+                        mkt_val = safe_float(row.get('market_val', 0.0))
+                        raw_positions.append((mkt_val, row))
+                        sum_positions_mkt_val += mkt_val
+
+            ghost_codes = set()
+            if sum_positions_mkt_val > total_mkt_val_reported * 1.02 and sum_positions_mkt_val - total_mkt_val_reported > 100:
+                msg = f"⚠️ [A股-对账] 报表市值({total_mkt_val_reported:.2f}) < 持仓总计({sum_positions_mkt_val:.2f})，启动自动对齐"
+                self.log_message.emit(msg)
+                
+                raw_positions.sort(key=lambda x: x[0], reverse=True)
+                temp_sum = sum_positions_mkt_val
+                for m_val, row in raw_positions:
+                    if temp_sum > total_mkt_val_reported * 1.02:
+                        ghost_codes.add(row['code'])
+                        temp_sum -= m_val
+                        self.log_message.emit(f"🚫 [拦截] 发现与账户报表冲突的过时持仓: {row['code']} (市值 {m_val:.2f})")
+
+            positions = []
+            if ret_pos == RET_OK and not pos_data.empty:
+                for _, row in pos_data.iterrows():
+                    code = row['code']
+                    if code in ghost_codes: continue
+                    
+                    qty = int(row['qty'])
+                    can_sell = int(row.get('can_sell_qty', qty))
+                    today_qty = int(row.get('today_qty', 0))
+                    if qty == 0 and can_sell == 0:
                         continue
+                    
+                    symbol = code
+                    self.log_message.emit(f"📦 [A股-持仓明细] {symbol}: 总量={qty}, 可卖={can_sell}, 今日买={today_qty}")
+                    
                     positions.append({
-                        'symbol': row['code'],
+                        'symbol': symbol,
                         'qty': qty,
-                        'mkt_value': float(row['market_val']),
-                        'avg_cost': float(row['cost_price']),
-                        'mkt_price': float(row['nominal_price']),
-                        'can_sell_qty': int(row.get('can_sell_qty', qty))
+                        'mkt_value': safe_float(row.get('market_val', 0.0)),
+                        'avg_cost': safe_float(row.get('cost_price', 0.0)),
+                        'mkt_price': safe_float(row.get('nominal_price', 0.0)),
+                        'can_sell_qty': can_sell
                     })
 
             self.funds_updated.emit(available, total, positions)
@@ -599,7 +671,11 @@ class MarketMonitorController(QObject):
         self.log_message.emit("🔥 [A股-交易] 正在尝试清空所有可卖持仓...")
 
         try:
-            ret, data = self.trd_ctx.position_list_query(trd_env=self.trd_env)
+            refresh = (self.trd_env == TrdEnv.SIMULATE)
+            # 💡 [核心修复] 先刷新账户信息
+            if refresh:
+                self.trd_ctx.accinfo_query(trd_env=self.trd_env, refresh_cache=True)
+            ret, data = self.trd_ctx.position_list_query(acc_id=self.trd_acc_id, trd_env=self.trd_env, refresh_cache=False)
             if ret == RET_OK and not data.empty:
                 count = 0
                 for _, row in data.iterrows():
@@ -638,7 +714,8 @@ class MarketMonitorController(QObject):
         if not self.trd_ctx:
             self._init_trd_ctx()
         try:
-            ret, data = self.trd_ctx.position_list_query(trd_env=self.trd_env)
+            refresh = (self.trd_env == TrdEnv.SIMULATE)
+            ret, data = self.trd_ctx.position_list_query(acc_id=self.trd_acc_id, trd_env=self.trd_env, refresh_cache=False)
             if ret == RET_OK and not data.empty:
                 # 只算 Qty > 0 的
                 held = data[data['qty'].astype(float) > 0]
@@ -660,7 +737,8 @@ class MarketMonitorController(QObject):
         # 查询当前实际持仓
         self._init_trd_ctx()
         try:
-            ret, pos_data = self.trd_ctx.position_list_query(trd_env=self.trd_env)
+            refresh = (self.trd_env == TrdEnv.SIMULATE)
+            ret, pos_data = self.trd_ctx.position_list_query(acc_id=self.trd_acc_id, trd_env=self.trd_env, refresh_cache=False)
             current_positions = {}
             if ret == RET_OK and not pos_data.empty:
                 for _, row in pos_data.iterrows():
@@ -751,9 +829,7 @@ class MarketMonitorController(QObject):
                     self._unsubscribe_stock_quote(code) # 🚫 释放推送配额
                     
                     # 🛡️ [风控加固 Phase 8] 录入锁区锚点：记录锁区触发时的 CTime 戳记
-                    from Common.CTime import CTime
                     if code not in getattr(self, 'structure_barrier', {}):
-                        from datetime import datetime
                         now = datetime.now()
                         self.structure_barrier[code] = {
                             'lock_time_ts': CTime(now.year, now.month, now.day, now.hour, now.minute).ts
@@ -776,8 +852,6 @@ class MarketMonitorController(QObject):
                     self._unsubscribe_stock_quote(code) # 🚫 释放推送配额
                     
                     # 录入锁区锚点
-                    from Common.CTime import CTime
-                    from datetime import datetime
                     now = datetime.now()
                     self.structure_barrier[code] = {
                         'lock_time_ts': CTime(now.year, now.month, now.day, now.hour, now.minute).ts
@@ -829,7 +903,9 @@ class MarketMonitorController(QObject):
         total_assets = 0
         available_cash = 0
         try:
-            ret_acct, acct_data = self.trd_ctx.accinfo_query(trd_env=self.trd_env)
+            from futu import RET_OK
+            refresh = (self.trd_env == TrdEnv.SIMULATE)
+            ret_acct, acct_data = self.trd_ctx.accinfo_query(trd_env=self.trd_env, refresh_cache=refresh)
             if ret_acct == 0 and not acct_data.empty:
                 total_assets = float(acct_data.iloc[0].get('total_assets', 0))
                 available_cash = float(acct_data.iloc[0].get('cash', 0))
@@ -1215,9 +1291,10 @@ class MarketMonitorController(QObject):
                     if not hasattr(self, 'trd_ctx') or self.trd_ctx is None:
                         self._init_trd_ctx()
                     
-                    ret_p, p_data = self.trd_ctx.position_list_query(trd_env=self.trd_env)
-                    if ret_p == 0 and not p_data.empty: # 0 = RET_OK
-                        sub_df = p_data[(p_data['code'] == code) & (p_data['qty'].astype(float) > 0)]
+                    refresh = (self.trd_env == TrdEnv.SIMULATE)
+                    ret, data = self.trd_ctx.position_list_query(acc_id=self.trd_acc_id, trd_env=self.trd_env, refresh_cache=False)
+                    if ret == 0 and not data.empty: # 0 = RET_OK
+                        sub_df = data[(data['code'] == code) & (data['qty'].astype(float) > 0)]
                         if not sub_df.empty:
                             has_pos = True
                 except Exception as e_p:
@@ -1455,7 +1532,8 @@ class MarketMonitorController(QObject):
         from futu import RET_OK
         try:
             self._init_trd_ctx()
-            ret, data = self.trd_ctx.position_list_query(trd_env=self.trd_env)
+            refresh = (self.trd_env == TrdEnv.SIMULATE)
+            ret, data = self.trd_ctx.position_list_query(trd_env=self.trd_env, refresh_cache=False)
             if ret != RET_OK or data.empty:
                 return
                 

@@ -1,0 +1,29 @@
+Connecting to Futu OpenD at 127.0.0.1:11111...
+
+=== [Futu Account List] ===
+               acc_id   trd_env sim_acc_type          card_num
+0  281756480542296375      REAL          N/A  1001323098091095
+1            18252566  SIMULATE        STOCK               N/A
+2            18252567  SIMULATE       OPTION               N/A
+
+🎯 Locked US Simulation Account ID: 18252566
+
+--- [Asset Info] ---
+   power max_power_short net_cash_power  total_assets  securities_assets fund_assets bond_assets         cash  market_val    long_mv   short_mv pending_asset  interest_charged_amount  frozen_cash  avl_withdrawal_cash max_withdrawal currency available_funds unrealized_pl realized_pl risk_level risk_status initial_margin margin_call_margin  maintenance_margin hk_cash hk_avl_withdrawal_cash hkd_net_cash_power hkd_assets us_cash us_avl_withdrawal_cash usd_net_cash_power usd_assets cn_cash cn_avl_withdrawal_cash cnh_net_cash_power cnh_assets jp_cash jp_avl_withdrawal_cash jpy_net_cash_power jpy_assets sg_cash sg_avl_withdrawal_cash sgd_net_cash_power sgd_assets au_cash au_avl_withdrawal_cash aud_net_cash_power aud_assets is_pdt pdt_seq beginning_dtbp remaining_dtbp dt_call_amount dt_status
+0    0.0             N/A            N/A    982744.631         982744.631         N/A         N/A  1061427.181   -78682.55  143964.58 -222647.13           N/A                      0.0          0.0                  0.0            N/A      N/A             N/A           N/A         N/A        N/A         N/A            N/A                N/A          133588.278     N/A                    N/A                N/A        N/A     N/A                    N/A                N/A        N/A     N/A                    N/A                N/A        N/A     N/A                    N/A                N/A        N/A     N/A                    N/A                N/A        N/A     N/A                    N/A                N/A        N/A    N/A     N/A            N/A            N/A            N/A       N/A
+
+--- [Positions List] ---
+      code           stock_name     qty  can_sell_qty  cost_price  nominal_price  market_val
+0   US.FIG            Figma Inc   459.0         459.0   21.720000          21.87    10038.33
+1   US.PDD                  拼多多   102.0         102.0   97.190000          98.09    10005.18
+2    US.KO                 可口可乐   132.0         132.0   75.620000          74.67     9856.44
+3   US.BAC                 美国银行   431.0         431.0   46.354733          48.14    20748.34
+4     US.F                 福特汽车   866.0         866.0   11.540000          11.84    10253.44
+5   US.PGY  Pagaya Technologies   955.0         955.0   10.570000          11.25    10743.75
+6  US.UUUU         Energy Fuels   575.0         575.0   17.430000          18.06    10384.50
+7   US.YMM                   满帮  2406.0        2406.0    8.323408           8.21    19753.26
+8   US.NKE                   耐克   188.0         188.0   53.000000          53.49    10056.12
+9    US.VZ              Verizon   805.0         805.0   49.557404          50.91    40982.55
+
+--- [Today Order List] ---
+No orders today.

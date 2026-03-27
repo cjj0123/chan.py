@@ -1,0 +1,90 @@
+{
+  "initial_funds": 100000,
+  "final_cash": 101643.36363489999,
+  "final_portfolio_value": 101643.36363489999,
+  "total_return_pct": 0.01643363634899986,
+  "final_positions": {},
+  "trades_count": 4,
+  "total_buys": 2,
+  "total_sells": 2,
+  "total_profit_loss_no_cost": 1922.0,
+  "profit_factor": 0.019319359475589767,
+  "max_drawdown_pct": 0.0006848712711098039,
+  "equity_curve": [
+    {
+      "time": "2025-03-12 16:00:00",
+      "value": 100000.0
+    },
+    {
+      "time": "2025-03-12 16:00:00",
+      "value": 99931.29333395
+    },
+    {
+      "time": "2025-03-13 00:00:00",
+      "value": 100383.3901349
+    },
+    {
+      "time": "2025-03-13 14:00:00",
+      "value": 100314.6404349
+    },
+    {
+      "time": "2025-03-14 10:00:00",
+      "value": 101643.36363489999
+    }
+  ],
+  "trade_log": [
+    {
+      "time": "2025-03-12 16:00:00",
+      "code": "HK.00836",
+      "action": "BUY",
+      "qty": 2900,
+      "price": 17.133,
+      "amount": 49685.7,
+      "cost": 68.70666605,
+      "funds_after": 50245.593333950004
+    },
+    {
+      "time": "2025-03-13 00:00:00",
+      "code": "HK.00836",
+      "action": "SELL",
+      "qty": 2900,
+      "price": 17.313,
+      "amount": 50207.7,
+      "cost": 69.90319905,
+      "funds_after": 100383.3901349
+    },
+    {
+      "time": "2025-03-13 14:00:00",
+      "code": "HK.00700",
+      "action": "BUY",
+      "qty": 100,
+      "price": 498.0,
+      "amount": 49800.0,
+      "cost": 68.74969999999999,
+      "funds_after": 50514.64043489999
+    },
+    {
+      "time": "2025-03-14 10:00:00",
+      "code": "HK.00700",
+      "action": "SELL",
+      "qty": 100,
+      "price": 512.0,
+      "amount": 51200.0,
+      "cost": 71.2768,
+      "funds_after": 101643.36363489999
+    }
+  ],
+  "cost_statistics": {
+    "total_cost": 278.6363651,
+    "total_commission": 60.26801999999999,
+    "total_stamp_duty": 203,
+    "total_trading_fee": 11.350477099999997,
+    "total_clearing_fee": 4.017868
+  },
+  "win_rate": 1.0,
+  "avg_profit": 960.9999999999995,
+  "avg_loss": 0,
+  "profit_loss_ratio": Infinity,
+  "annualized_return": 0.39170429359233205,
+  "trades_per_month": 4.0
+}

@@ -1,0 +1,29 @@
+{
+    "CN": {
+        "bs_type": "1,1p,2,2s,3a,3b",
+        "atr_multiplier": 1.5,
+        "total_return_pct": 0.08384103383499983,
+        "max_drawdown_pct": 0.0010905561805928216,
+        "calmar_ratio": 76.87915150728338,
+        "trades_count": 28,
+        "win_rate": 0.6153846153846154
+    },
+    "HK": {
+        "bs_type": "2,2s,3a,3b",
+        "atr_multiplier": 1.5,
+        "total_return_pct": 0.24134816378000046,
+        "max_drawdown_pct": 0.013323155491958767,
+        "calmar_ratio": 18.11494010751934,
+        "trades_count": 34,
+        "win_rate": 0.625
+    },
+    "US": {
+        "bs_type": "2,2s,3a,3b",
+        "atr_multiplier": 3.0,
+        "total_return_pct": 0.1887,
+        "max_drawdown_pct": 0.0272419440509915,
+        "calmar_ratio": 6.926818425542287,
+        "trades_count": 42,
+        "win_rate": 0.5714285714285714
+    }
+}

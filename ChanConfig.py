@@ -40,6 +40,7 @@ class CChanConfig:
         )
 
         self.trigger_step = conf.get("trigger_step", False)
+        self.autofix = conf.get("autofix", False)
         self.skip_step = conf.get("skip_step", 0)
 
         self.kl_data_check = conf.get("kl_data_check", True)

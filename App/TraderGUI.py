@@ -93,6 +93,7 @@ except ImportError:
     pass # 🗂️ 异步控制器按需在各自的 toggle 方法中局部导入，避免循环引用
 
 from App.BacktestTab import BacktestTab
+from App.InsightTab import InsightTab
 
 class TraderGUI(QMainWindow):
     def __init__(self):
@@ -147,7 +148,7 @@ class TraderGUI(QMainWindow):
                 outline: 0px;
             }
             
-            QTableWidget { border: none; alternate-background-color: #f8f9fa; selection-background-color: #e8f0fe; color: #202124; }
+            QTableWidget { border: none; background-color: #ffffff; alternate-background-color: #f8f9fa; selection-background-color: #e8f0fe; color: #202124; }
             QHeaderView::section { background-color: #f1f3f4; padding: 6px; border: none; font-weight: bold; color: #202124; }
             
             QTextEdit { 
@@ -196,6 +197,10 @@ class TraderGUI(QMainWindow):
         # --- Create Backtest Tab ---
         self.backtest_tab = BacktestTab(self)
         self.tabs.addTab(self.backtest_tab, "🔬 策略回测分析")
+        
+        # --- Create Insight Tab ---
+        self.insight_tab = InsightTab(self)
+        self.tabs.addTab(self.insight_tab, "🌡️ 市场感知引擎")
         
         self.create_settings_tab()
 
@@ -482,8 +487,10 @@ class TraderGUI(QMainWindow):
         hk_manual_layout.addWidget(self.hk_manual_ticker_combo)
         
         hk_manual_layout.addWidget(QLabel(" 价格:"))
+        from PyQt6.QtCore import QLocale
         self.hk_manual_price_spin = QDoubleSpinBox()
         self.hk_manual_price_spin.setRange(0, 999999); self.hk_manual_price_spin.setDecimals(3)
+        self.hk_manual_price_spin.setLocale(QLocale(QLocale.Language.English, QLocale.Country.UnitedStates))
         hk_manual_layout.addWidget(self.hk_manual_price_spin)
         
         hk_manual_layout.addWidget(QLabel(" 数量:"))
@@ -729,8 +736,10 @@ class TraderGUI(QMainWindow):
         cn_manual_layout.addWidget(self.cn_manual_ticker_combo)
         
         cn_manual_layout.addWidget(QLabel(" 价格:"))
+        from PyQt6.QtCore import QLocale
         self.cn_manual_price_spin = QDoubleSpinBox()
         self.cn_manual_price_spin.setRange(0, 999999); self.cn_manual_price_spin.setDecimals(2)
+        self.cn_manual_price_spin.setLocale(QLocale(QLocale.Language.English, QLocale.Country.UnitedStates))
         cn_manual_layout.addWidget(self.cn_manual_price_spin)
         
         cn_manual_layout.addWidget(QLabel(" 数量:"))
@@ -787,9 +796,11 @@ class TraderGUI(QMainWindow):
         manual_inputs_layout.addWidget(self.manual_ticker_combo)
         
         manual_inputs_layout.addWidget(QLabel(" 价格:"))
+        from PyQt6.QtCore import QLocale
         self.manual_price_spin = QDoubleSpinBox()
         self.manual_price_spin.setRange(0, 999999)
-        self.manual_price_spin.setDecimals(2)
+        self.manual_price_spin.setDecimals(4) # 增加美股精度到4位
+        self.manual_price_spin.setLocale(QLocale(QLocale.Language.English, QLocale.Country.UnitedStates))
         self.manual_price_spin.setToolTip("设为 0 则底层自动处理")
         manual_inputs_layout.addWidget(self.manual_price_spin)
         

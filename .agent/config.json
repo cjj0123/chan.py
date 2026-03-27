@@ -1,0 +1,37 @@
+{
+  "project_name": "Chanlun_Bot_Project",
+  "knowledge_sources": [
+    {
+      "type": "notebooklm_sync",
+      "path": "~/.gemini/antigravity/knowledge/chanlun_bot/artifacts/*.md",
+      "description": "从 NotebookLM 导出的项目说明与防漏风控总结"
+    }
+  ],
+  "agents": [
+    {
+      "role": "chanlun_architect",
+      "mode": "planning",
+      "context": "high_precision_strategy"
+    },
+    {
+      "role": "chanlun_coder",
+      "mode": "act",
+      "tools": ["futu_api_connector", "ibkr_webapi_driver", "schwab_caller", "sqlite_manager"]
+    },
+    {
+      "role": "chanlun_qa",
+      "mode": "review"
+    }
+  ],
+  "pipelines": {
+    "strategy_update": [
+      "architect.analyze_market_structure",
+      "coder.implement_indicator",
+      "qa.run_backtest"
+    ],
+    "risk_audit": [
+      "architect.verify_atr_thresholds",
+      "qa.test_cooldown_leakage"
+    ]
+  }
+}

@@ -50,29 +50,36 @@ except ImportError as e:
 # 港股精确交易成本计算
 # ============================================================================
 
-class HKStockBroker(BacktestBroker):
+class MultiMarketBroker(BacktestBroker):
     """
-    港股交易经纪商，精确计算交易成本
-    
-    港股交易费用明细：
-    - 佣金：0.03% (最低 3 港元)
-    - 印花税：0.1% (向上取整，买卖双边)
-    - 交易费：0.00565% (买卖双边)
-    - 中央结算费：0.002% (买卖双边)
+    多市场交易经纪商，支持 A股/港股/美股 精确计算交易成本
     """
     
-    # 港股费用标准
-    HK_COST_RATES = {
-        'commission_rate': 0.0003,      # 佣金费率 0.03%
-        'commission_min': 3.0,          # 最低佣金 3 港元
-        'stamp_duty_rate': 0.001,       # 印花税 0.1%
-        'trading_fee_rate': 0.0000565,  # 交易费 0.00565%
-        'clearing_fee_rate': 0.00002,   # 中央结算费 0.002%
+    # 市场费用标准
+    COST_CONFIGS = {
+        'HK': {
+            'commission_rate': 0.0003,      # 佣金费率 0.03%
+            'commission_min': 3.0,          # 最低佣金 3 港元
+            'stamp_duty_rate': 0.001,       # 印花税 0.1% (卖边) -> 为了简便，目前代码统一计算，后续可细化
+            'trading_fee_rate': 0.0000565,  # 交易费 0.00565%
+            'clearing_fee_rate': 0.00002,   # 中央结算费 0.002%
+        },
+        'CN': {
+            'commission_rate': 0.0002,      # 佣金费率 0.02%
+            'commission_min': 5.0,          # 最低佣金 5 元
+            'stamp_duty_rate': 0.0005,      # 印花税 0.05% (仅卖出)
+            'transfer_fee_rate': 0.00001,   # 过户费 0.001%
+        },
+        'US': {
+            'commission_per_share': 0.005,  # 每股 0.005 美元
+            'commission_min': 1.0,          # 最低 1 美元
+        }
     }
     
     def __init__(self, initial_funds: float = 100000.0, 
                  lot_size_map: Dict[str, int] = None,
-                 use_hk_costs: bool = True,
+                 market: str = 'HK',
+                 use_precise_costs: bool = True,
                  hard_stop_pct: float = 0.07,
                  trailing_stop_pct: float = 0.10,
                  risk_per_trade_pct: float = 0.02,
@@ -84,7 +91,7 @@ class HKStockBroker(BacktestBroker):
         Args:
             initial_funds: 初始资金
             lot_size_map: 每手股数配置
-            use_hk_costs: 是否使用港股精确成本计算
+            use_precise_costs: 是否使用各市场精确成本计算
             hard_stop_pct: 硬止损比例（入场价跌幅触发）
             trailing_stop_pct: 追踪止损回撤比例（持仓期最高价缩水触发）
             risk_per_trade_pct: 每笔允许亏损的资金比例（ATR仓位法）
@@ -92,7 +99,8 @@ class HKStockBroker(BacktestBroker):
             enable_stop_loss: 是否启用止损机制
         """
         super().__init__(initial_funds, lot_size_map)
-        self.use_hk_costs = use_hk_costs
+        self.market = market.upper()
+        self.use_precise_costs = use_precise_costs
         self.cost_details: List[Dict] = []  # 记录每笔交易的成本明细
 
         # ---- 止损参数 ----
@@ -107,41 +115,35 @@ class HKStockBroker(BacktestBroker):
         self.stop_loss_state: Dict[str, Dict[str, float]] = {}
         self.stop_loss_triggered: int = 0  # 统计止损次数
     
-    def calculate_hk_cost(self, amount: float, is_buy: bool) -> Tuple[float, Dict]:
-        """
-        计算港股交易总成本
+    def calculate_cost(self, amount: float, quantity: int, is_buy: bool) -> Tuple[float, Dict]:
+        """计算交易总成本"""
+        if not self.use_precise_costs:
+            total_cost = amount * 0.001
+            return total_cost, {'total': total_cost}
+
+        config = self.COST_CONFIGS.get(self.market, self.COST_CONFIGS['HK'])
         
-        Args:
-            amount: 交易金额
-            is_buy: 是否为买入
+        if self.market == 'HK':
+            commission = max(config['commission_min'], amount * config['commission_rate'])
+            stamp_duty = math.ceil(amount * config['stamp_duty_rate'])
+            trading_fee = amount * config['trading_fee_rate']
+            clearing_fee = amount * config['clearing_fee_rate']
+            total_cost = commission + stamp_duty + trading_fee + clearing_fee
+            return total_cost, {'commission': commission, 'stamp_duty': stamp_duty, 'total': total_cost}
             
-        Returns:
-            (总成本，成本明细字典)
-        """
-        # 佣金
-        commission = max(self.HK_COST_RATES['commission_min'], 
-                        amount * self.HK_COST_RATES['commission_rate'])
-        
-        # 印花税 (向上取整)
-        stamp_duty = math.ceil(amount * self.HK_COST_RATES['stamp_duty_rate'])
-        
-        # 交易费
-        trading_fee = amount * self.HK_COST_RATES['trading_fee_rate']
-        
-        # 中央结算费
-        clearing_fee = amount * self.HK_COST_RATES['clearing_fee_rate']
-        
-        total_cost = commission + stamp_duty + trading_fee + clearing_fee
-        
-        cost_detail = {
-            'commission': commission,
-            'stamp_duty': stamp_duty,
-            'trading_fee': trading_fee,
-            'clearing_fee': clearing_fee,
-            'total': total_cost
-        }
-        
-        return total_cost, cost_detail
+        elif self.market == 'CN':
+            commission = max(config['commission_min'], amount * config['commission_rate'])
+            stamp_duty = amount * config['stamp_duty_rate'] if not is_buy else 0
+            transfer_fee = amount * config['transfer_fee_rate']
+            total_cost = commission + stamp_duty + transfer_fee
+            return total_cost, {'commission': commission, 'stamp_duty': stamp_duty, 'total': total_cost}
+            
+        elif self.market == 'US':
+            commission = max(config['commission_min'], quantity * config['commission_per_share'])
+            total_cost = commission
+            return total_cost, {'commission': commission, 'total': total_cost}
+            
+        return amount * 0.001, {'total': amount * 0.001}
     
     def get_available_position_quantity(self, code: str) -> int:
         """获取当前可卖出的持仓数量 (T+1)"""
@@ -181,9 +183,9 @@ class HKStockBroker(BacktestBroker):
         trade_amount = price * quantity
         action_upper = action.upper()
         
-        if self.use_hk_costs:
-            # 使用港股精确成本
-            cost, cost_detail = self.calculate_hk_cost(trade_amount, is_buy=(action_upper == 'BUY'))
+        if self.use_precise_costs:
+            # 使用精确成本
+            cost, cost_detail = self.calculate_cost(trade_amount, quantity, is_buy=(action_upper == 'BUY'))
         else:
             # 使用简化成本
             cost = trade_amount * self.transaction_cost_rate
@@ -354,9 +356,9 @@ class HKStockBroker(BacktestBroker):
 class EnhancedBacktestReporter(BacktestReporter):
     """增强的回测报告生成器"""
     
-    def __init__(self, broker: HKStockBroker, strategy_adapter: Any, config: Any = None):
+    def __init__(self, broker: MultiMarketBroker, strategy_adapter: Any, config: Any = None):
         super().__init__(broker, strategy_adapter, config)
-        self.broker: HKStockBroker = broker  # 类型提示
+        self.broker: MultiMarketBroker = broker  # 类型提示
     
     def calculate_performance(self, end_time: pd.Timestamp) -> Dict[str, Any]:
         """计算增强的绩效指标"""
@@ -439,7 +441,8 @@ class EnhancedBacktestReporter(BacktestReporter):
         report.append(f"- **回测范围**: {start_time_str} 至 {end_time_str}")
         report.append(f"- **初始资金**: {results['initial_funds']:,.2f} HKD")
         report.append(f"- **主频率**: 30M")
-        report.append(f"- **使用港股精确成本**: {self.broker.use_hk_costs}")
+        report.append(f"- **市场**: {self.broker.market}")
+        report.append(f"- **使用精确成本**: {self.broker.use_precise_costs}")
         report.append("")
         
         # 2. 核心绩效指标
@@ -667,10 +670,13 @@ class EnhancedBacktestEngine:
                  start_date: str = "2024-01-01",
                  end_date: str = "2025-12-31",
                  watchlist: List[str] = None,
+                 market: str = 'HK',
                  lot_size_file: str = "stock_cache/lot_size_config.json",
-                 use_hk_costs: bool = True,
+                 use_precise_costs: bool = True,
+                 use_hk_costs: bool = None,  # 新增兼容参数
                  use_ml: bool = False,
-                 freq: str = "30M"):
+                 freq: str = "30M",
+                 **kwargs):  # 增加 kwargs 以提高容错
         """
         初始化回测引擎
         
@@ -680,14 +686,21 @@ class EnhancedBacktestEngine:
             end_date: 结束日期
             watchlist: 股票列表
             lot_size_file: 每手股数配置文件
-            use_hk_costs: 是否使用港股精确成本
+            use_precise_costs: 是否使用各市场精确成本
+            use_hk_costs: 是否使用港股精确成本 (兼容逻辑)
             use_ml: 是否使用机器学习过滤信号
         """
         self.initial_funds = initial_funds
         self.start_date = start_date
         self.end_date = end_date
         self.watchlist = watchlist or ["HK.00700", "HK.00836", "HK.02688"]
-        self.use_hk_costs = use_hk_costs
+        self.market = market.upper()
+        
+        # 兼容逻辑：优先使用 use_hk_costs 如果被指定
+        if use_hk_costs is not None:
+            self.use_precise_costs = use_hk_costs
+        else:
+            self.use_precise_costs = use_precise_costs
         self.use_ml = use_ml
         self.freq = freq
         
@@ -696,7 +709,8 @@ class EnhancedBacktestEngine:
         
         # 初始化组件
         self.loader = BacktestDataLoader()
-        self.chan_config = self._create_chan_config()
+        self.chan_config_dict = self._get_default_chan_config_dict()
+        self.chan_config = self._create_chan_config(self.chan_config_dict.copy())
         
         self.logger = logging.getLogger(__name__)
 
@@ -723,26 +737,32 @@ class EnhancedBacktestEngine:
             "HK.02688": 1000,
         }
     
-    def _create_chan_config(self):
+    def _get_default_chan_config_dict(self) -> Dict[str, Any]:
+        """获取默认缠论配置字典 (必须与 ChanConfig.py 中的消费逻辑完全一致)"""
+        return {
+            "bi_strict": True,
+            "bi_algo": "normal",
+            "bi_fx_check": "strict",
+            "one_bi_zs": False,
+            "zs_algo": "normal",
+            "seg_algo": "chan",
+            "macd": {"fast": 12, "slow": 26, "signal": 9},
+            "bs_type": '1,1p,2,2s,3a,3b',
+            "divergence_rate": float("inf"),
+            "min_zs_cnt": 0,
+            "bsp2_follow_1": False,
+            "bsp3_follow_1": False,
+            "bs1_peak": False,
+            "macd_algo": "peak",
+        }
+
+    def _create_chan_config(self, conf_dict: Dict):
         """创建缠论配置"""
         try:
             from ChanConfig import CChanConfig
-            return CChanConfig({
-                "bi_strict": True,
-                "one_bi_zs": False,
-                "seg_algo": "chan",
-                "bs_type": '1,1p,2,2s,3a,3b',
-                "macd": {"fast": 12, "slow": 26, "signal": 9},
-                "divergence_rate": float("inf"),
-                "min_zs_cnt": 0,
-                "bsp2_follow_1": False,
-                "bsp3_follow_1": False,
-                "bs1_peak": False,
-                "macd_algo": "peak",
-                "zs_algo": "normal",
-            })
-        except ImportError:
-            self.logger.warning("⚠️ CChanConfig 未找到，使用默认配置")
+            return CChanConfig(conf_dict)
+        except Exception as e:
+            self.logger.warning(f"⚠️ CChanConfig 创建失败: {e}")
             return None
     
     def _calculate_atr(self, kline_list: List, period: int = 14) -> float:
@@ -891,33 +911,25 @@ class EnhancedBacktestEngine:
         broker_kwargs = {
             'initial_funds': self.initial_funds, 
             'lot_size_map': self.lot_size_map,
-            'use_hk_costs': self.use_hk_costs
+            'market': self.market,
+            'use_precise_costs': self.use_precise_costs
         }
         if config_override:
             for k in ['hard_stop_pct', 'trailing_stop_pct', 'risk_per_trade_pct', 'atr_multiplier', 'enable_stop_loss']:
                 if k in config_override:
                     broker_kwargs[k] = config_override[k]
-        broker = HKStockBroker(**broker_kwargs)
+        broker = MultiMarketBroker(**broker_kwargs)
         
         # 创建策略适配器
         chan_config = self.chan_config
         if config_override and 'bs_type' in config_override:
             try:
                 from ChanConfig import CChanConfig
-                conf_dict = {}
-                if hasattr(self.chan_config, 'to_dict'):
-                    conf_dict = self.chan_config.to_dict()
-                elif hasattr(self.chan_config, 'config'):
-                    conf_dict = self.chan_config.config.copy()
-                else:
-                    conf_dict = {
-                        'bi_strict': True, 'one_bi_zs': False, 'seg_algo': 'chan',
-                        'bs_type': '1,1p,2,2s,3a,3b', 'macd_algo': 'peak', 'zs_algo': 'normal'
-                    }
+                conf_dict = self.chan_config_dict.copy()
                 conf_dict['bs_type'] = config_override['bs_type']
                 chan_config = CChanConfig(conf_dict)
             except Exception as e:
-                print(f'Override chan_config bs_type 失败: {e}')
+                self.logger.error(f'Override chan_config bs_type 失败: {e}')
 
         strategy_adapter = BacktestStrategyAdapter(
             live_trader_instance=None,
@@ -1115,10 +1127,11 @@ class EnhancedBacktestEngine:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         
         # 创建报告器
-        broker = HKStockBroker(
+        broker = MultiMarketBroker(
             initial_funds=self.initial_funds,
             lot_size_map=self.lot_size_map,
-            use_hk_costs=self.use_hk_costs
+            market=self.market,
+            use_precise_costs=self.use_precise_costs
         )
         reporter = EnhancedBacktestReporter(broker, None, self.chan_config)
         
@@ -1154,11 +1167,12 @@ def run_backtest(config: Dict = None) -> Dict[str, Any]:
         start_date=config.get('start_date', '2024-01-01'),
         end_date=config.get('end_date', '2025-12-31'),
         watchlist=config.get('watchlist'),
-        use_hk_costs=config.get('use_hk_costs', True),
+        market=config.get('market', 'HK'),
+        use_precise_costs=config.get('use_precise_costs', True),
         use_ml=config.get('use_ml', False)
     )
     
-    return engine.run()
+    return engine.run(config_override=config)
 
 
 def main():
@@ -1168,9 +1182,9 @@ def main():
     parser.add_argument('--start', type=str, default='2024-01-01', help='开始日期')
     parser.add_argument('--end', type=str, default='2025-12-31', help='结束日期')
     parser.add_argument('--watchlist', type=str, nargs='+', default=None, help='股票列表')
-    parser.add_argument('--no-hk-costs', action='store_true', help='不使用港股精确成本')
+    parser.add_argument('--market', type=str, default='HK', choices=['HK', 'CN', 'US'], help='回测市场')
+    parser.add_argument('--no-precise-costs', action='store_true', help='不使用精确成本计算')
     parser.add_argument('--use-ml', action='store_true', help='启用机器学习校验')
-    parser.add_argument('--output-dir', type=str, default='backtest_reports', help='输出目录')
     
     args = parser.parse_args()
     
@@ -1179,7 +1193,8 @@ def main():
         start_date=args.start,
         end_date=args.end,
         watchlist=args.watchlist,
-        use_hk_costs=not args.no_hk_costs,
+        market=args.market,
+        use_precise_costs=not args.no_precise_costs,
         use_ml=getattr(args, 'use_ml', False)
     )
     

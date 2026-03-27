@@ -490,24 +490,27 @@ class NewsCollectorThread(QThread):
     def run(self):
         try:
             from DataAPI.NewsCollector import NewsCollector
-            self.log_signal.emit("🚀 启动市场感知引擎...")
+            self.log_signal.emit("🚀 启动市场感知引擎 (动态监测三地热点股票)...")
             c = NewsCollector()
-            self.log_signal.emit("📡 正在从东方财富获取多市场资讯...")
-            raw = c._fetch_raw_news()
-            self.log_signal.emit(f"📥 获取 {len(raw)} 条原始资讯，正在过滤...")
-            filtered = c._pre_filter(raw)
-            self.log_signal.emit(f"🤖 {len(filtered)} 条待 Gemini AI 分析...")
-            analyzed = []
-            for i in range(0, len(filtered), 15):
-                analyzed.extend(c._batch_analyze(filtered[i:i+15]))
-            final = c._post_process(analyzed)
-            self.log_signal.emit(f"💾 保存 {len(final)} 条高质量资讯...")
-            c._save_news(final)
-            self.log_signal.emit("🔥 正在抓取板块热度...")
+            
+            # Using the new automated cycle which handles dynamic seeds and analysis
+            c.run_cycle()
+            
+            # Also capture sector heat with calculation updates
+            self.log_signal.emit("🔥 正在抓取港股及美股板块资金联动...")
             c.save_sectors(c.collect_sector_heat('HK'))
             c.save_sectors(c.collect_sector_heat('US'))
+            
+            # Check for morning summary opportunity (e.g. 08:00 - 09:30)
+            from datetime import datetime
+            now = datetime.now()
+            if now.hour == 8 or (now.hour == 9 and now.minute < 30):
+                self.log_signal.emit("🌍 正在生成跨市场隔夜联动分析简报...")
+                summary = c.generate_global_summary()
+                self.log_signal.emit(f"AI 简报: {summary[:100]}...")
+
             c.close()
-            self.log_signal.emit(f"✅ 完成: {len(final)} 条资讯已入库")
+            self.log_signal.emit("✅ 市场感知更新完成！")
         except Exception as e:
             import traceback
             traceback.print_exc()

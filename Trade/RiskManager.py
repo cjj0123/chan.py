@@ -207,6 +207,11 @@ class RiskManager:
                 logger.warning(f"达到最大持仓数量限制 ({self.max_total_positions})，跳过 {code}")
                 return 0
             
+            # 🛡️ [风控加固] 价格合法性校验，防止除零异常
+            if current_price <= 0:
+                logger.warning(f"价格异常 (<= 0)，无法计算仓位: {code} (Price={current_price})")
+                return 0
+            
             # 基于信号评分调整最大投入比例
             score_factor = min(signal_score / 100.0, 1.0)
             if signal_score < self.min_visual_score:
@@ -341,15 +346,11 @@ class RiskManager:
             elif action == 'SELL':
                 self.total_positions = max(0, self.total_positions - 1)
             
-            # 保存到数据库
-            try:
-                self.db.execute_query(
-                    "INSERT INTO risk_logs (code, action, quantity, price, signal_score, pnl, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (code, action, quantity, price, signal_score, pnl, now.isoformat())
-                )
-            except Exception as e:
-                logger.warning(f"记录风险日志失败: {e}")
+                # 保存到数据库
+                try:
+                    self.db.record_risk_log(code, action, quantity, price, signal_score, pnl)
+                except Exception as e:
+                    logger.warning(f"记录风险日志失败: {e}")
     
     def get_risk_status(self) -> Dict:
         """获取当前风险状态"""

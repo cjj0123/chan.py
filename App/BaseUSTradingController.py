@@ -890,9 +890,11 @@ class BaseUSTradingController(QObject):
             try:
                 if hasattr(self, 'trd_ctx') and self.trd_ctx:
                     from futu import TrdEnv
+                    refresh = (self.trd_env == TrdEnv.SIMULATE)
                     ret, data = self.trd_ctx.position_list_query(
                         code=f"US.{symbol}",
-                        trd_env=self.trd_env
+                        trd_env=self.trd_env,
+                        refresh_cache=refresh
                     )
                     if ret == 0 and not data.empty:
                         row = data[data['code'] == f"US.{symbol}"]
@@ -1878,8 +1880,9 @@ class BaseUSTradingController(QObject):
     async def _check_trailing_stops(self):
         """活性持仓止损检查算法 (方案丙) - 异步高频安全哨兵"""
         try:
+            from datetime import datetime as _dt
             # 🛡️ [每日重置] 开启新的一天时，清空卖出锁定名单
-            curr_date = datetime.now().strftime("%Y-%m-%d")
+            curr_date = _dt.now().strftime("%Y-%m-%d")
             if curr_date != self._last_reset_date:
                 self.log_message.emit(f"📅 [美股-新交易日] 自动清空昨日平仓锁定清单 (曾锁定: {len(self.sold_today)} 只)")
                 self.sold_today.clear()
@@ -1908,7 +1911,7 @@ class BaseUSTradingController(QObject):
                              continue
                     asyncio.create_task(self._initialize_single_tracker_async(p))
             
-            for code in list(self.position_trackers.keys()):
+            for attempt, code in enumerate(list(self.position_trackers.keys()), 1):
                 # 1. 检查是否存在持仓
                 if code not in current_held_codes:
                     # 🛡️ [安全性检查] 给持仓清空留出 3.5 分钟同步冗余，防止网络颠簸误删追踪器
@@ -1998,9 +2001,7 @@ class BaseUSTradingController(QObject):
                     }))
                     del self.position_trackers[code]
                     
-                    from Common.CTime import CTime
-                    from datetime import datetime
-                    now = datetime.now()
+                    now = _dt.now()
                     self.structure_barrier[code] = {
                         'lock_time_ts': CTime(now.year, now.month, now.day, now.hour, now.minute).ts
                     }
@@ -2011,6 +2012,10 @@ class BaseUSTradingController(QObject):
     async def _get_futu_assets_async(self) -> Tuple[float, float, list]:
         """通过 Futu API 获取美股账户资产及持仓 (支持模拟与真实自适应)"""
         try:
+            # 0. [核心修复] 强制刷新模拟盘账户列表同步 (解决模拟盘成交后资金不更新的 OpenD 缓存问题)
+            if self.trd_env == TrdEnv.SIMULATE:
+                self.trd_ctx.get_acc_list()
+
             # 1. 自动探查账户环境
             acc_id = 0
             actual_env = 'REAL'
@@ -2037,9 +2042,19 @@ class BaseUSTradingController(QObject):
                 actual_env = target_env_str
 
             # 2. 查询账户资金
-            ret, data = self.trd_ctx.accinfo_query(acc_id=acc_id, trd_env=actual_env)
+            refresh = (self.trd_env == TrdEnv.SIMULATE)
+            ret, data = self.trd_ctx.accinfo_query(acc_id=acc_id, trd_env=actual_env, refresh_cache=refresh)
             available, total = 0.0, 0.0
             if ret == RET_OK and not data.empty:
+                row = data.iloc[0]
+                # [详细调试] 打印所有资金组件
+                log_msg = (f"💹 [美股-Futu-资金详情] ID: {acc_id}\n"
+                           f"   • 现金(cash): {row.get('cash', 'N/A')}\n"
+                           f"   • 总资产(total_assets): {row.get('total_assets', 'N/A')}\n"
+                           f"   • 购买力(power): {row.get('power', 'N/A')}\n"
+                           f"   • 证券市值(market_val): {row.get('market_val', 'N/A')}")
+                self.log_message.emit(log_msg)
+                
                 available = float(data.iloc[0]['cash'])
                 total = float(data.iloc[0].get('total_assets', data.iloc[0].get('power', 0.0)))
             else:
@@ -2047,17 +2062,21 @@ class BaseUSTradingController(QObject):
             
             # 3. 查询持仓
             positions = []
-            ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=acc_id, trd_env=actual_env)
+            ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=acc_id, trd_env=actual_env, refresh_cache=refresh)
             if ret_pos == RET_OK and not pos_data.empty:
                 for _, row in pos_data.iterrows():
                     qty = int(row['qty'])
-                    if qty == 0: continue
+                    can_sell = int(row.get('can_sell_qty', qty))
+                    today_qty = int(row.get('today_qty', 0))
+                    if qty == 0 and can_sell == 0: continue
+                    
                     symbol = row['code'].split('.')[-1]
-                    can_sell_qty = int(row.get('can_sell_qty', qty))
+                    self.log_message.emit(f"📦 [美股-Futu-持仓明细] {symbol}: 总量={qty}, 可卖={can_sell}, 今日买={today_qty}")
+                    
                     positions.append({
                         'symbol': symbol,
                         'qty': qty,
-                        'can_sell_qty': can_sell_qty,
+                        'can_sell_qty': can_sell,
                         'mkt_value': float(row['market_val']),
                         'avg_cost': float(row['cost_price']),
                         'mkt_price': float(row['nominal_price'])

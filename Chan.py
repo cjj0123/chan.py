@@ -7,7 +7,7 @@ from typing import Dict, Iterable, List, Optional, Union
 
 from BuySellPoint.BS_Point import CBS_Point
 from ChanConfig import CChanConfig
-from Common.CEnum import AUTYPE, DATA_SRC, KL_TYPE
+from Common.CEnum import AUTYPE, DATA_SRC, KL_TYPE, DATA_FIELD
 from Common.ChanException import CChanException, ErrCode
 from Common.CTime import CTime
 from Common.func_util import check_kltype_order, kltype_lte_day

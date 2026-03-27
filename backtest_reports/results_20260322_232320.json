@@ -1,0 +1,91 @@
+{
+  "initial_funds": 100000,
+  "final_cash": 102416.12434514999,
+  "final_portfolio_value": 102416.12434514999,
+  "total_return_pct": 0.024161243451499902,
+  "final_positions": {},
+  "trades_count": 4,
+  "total_buys": 2,
+  "total_sells": 2,
+  "total_profit_loss_no_cost": 2689.5,
+  "profit_factor": 0.5301315744954451,
+  "max_drawdown_pct": 0.0006659699523643743,
+  "equity_curve": [
+    {
+      "time": "2025-04-07 10:00:00",
+      "value": 100000.0
+    },
+    {
+      "time": "2025-04-07 10:00:00",
+      "value": 99932.75191095
+    },
+    {
+      "time": "2025-04-14 10:00:00",
+      "value": 101255.97973389999
+    },
+    {
+      "time": "2025-06-16 10:00:00",
+      "value": 101188.5462939
+    },
+    {
+      "time": "2025-06-19 10:00:00",
+      "value": 102416.12434514999
+    }
+  ],
+  "trade_log": [
+    {
+      "time": "2025-04-07 10:00:00",
+      "code": "HK.00836",
+      "action": "BUY",
+      "qty": 2900,
+      "price": 16.713,
+      "amount": 48467.700000000004,
+      "cost": 67.24808904999999,
+      "funds_after": 51465.051910949995
+    },
+    {
+      "time": "2025-04-14 10:00:00",
+      "code": "HK.00836",
+      "action": "SELL",
+      "qty": 2900,
+      "price": 17.193,
+      "amount": 49859.700000000004,
+      "cost": 68.77217705,
+      "funds_after": 101255.97973389999
+    },
+    {
+      "time": "2025-06-16 10:00:00",
+      "code": "HK.00836",
+      "action": "BUY",
+      "qty": 2500,
+      "price": 19.584,
+      "amount": 48960.0,
+      "cost": 67.43344,
+      "funds_after": 52228.54629389999
+    },
+    {
+      "time": "2025-06-19 10:00:00",
+      "code": "HK.00836",
+      "action": "SELL",
+      "qty": 2500,
+      "price": 20.103,
+      "amount": 50257.50000000001,
+      "cost": 69.92194875000001,
+      "funds_after": 102416.12434514999
+    }
+  ],
+  "cost_statistics": {
+    "total_cost": 273.37565485,
+    "total_commission": 59.26347,
+    "total_stamp_duty": 199,
+    "total_trading_fee": 11.161286850000002,
+    "total_clearing_fee": 3.9508980000000005
+  },
+  "win_rate": 1.0,
+  "avg_profit": 1344.750000000003,
+  "avg_loss": 0,
+  "profit_loss_ratio": Infinity,
+  "annualized_return": 0.11069725732801605,
+  "trades_per_month": 1.4457831325301205,
+  "sell_freq": "5M"
+}

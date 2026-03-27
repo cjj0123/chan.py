@@ -190,41 +190,75 @@ class CChanDB:
         
         # 移除了由于 PRIMARY KEY 存在而不需要的重复及冗余日期索引
         
-        # 为交易信号表添加索引
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_trading_signals_code_status ON trading_signals(stock_code, status)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_trading_signals_add_date ON trading_signals(add_date)')
+        # 📰 市场资讯表 (Market Insight - Phase 1)
+        cursor.execute('''
+                CREATE TABLE IF NOT EXISTS market_news (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                market TEXT NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT,
+                symbols TEXT,
+                sectors TEXT,
+                sentiment_score REAL DEFAULT 0.0,
+                linkage TEXT,
+                analysis_type TEXT,
+                source TEXT,
+                news_hash TEXT UNIQUE,
+                created_at TEXT DEFAULT (datetime('now', 'localtime'))
+            )
+        ''')
+        # Add new columns if table exists without them
+        try:
+            cursor.execute("ALTER TABLE market_news ADD COLUMN linkage TEXT")
+            cursor.execute("ALTER TABLE market_news ADD COLUMN analysis_type TEXT")
+        except:
+            pass
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_news_hash ON market_news(news_hash)')
+
+        # 🔥 每日板块热度表 (Sector Linkage - Phase 1)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sector_heat_daily (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                market TEXT NOT NULL,
+                sector_name TEXT NOT NULL,
+                money_flow REAL,
+                top_movers TEXT,
+                news_count INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                UNIQUE(date, market, sector_name)
+            )
+        ''')
+
+        # 为市场资讯表添加索引
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_market_news_timestamp ON market_news(timestamp)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_market_news_market ON market_news(market)')
         
-        # 为订单表添加索引
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_orders_code_status ON orders(code, order_status)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at)')
-        
-        # 为持仓表添加索引
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_positions_code ON positions(code)')
-        
-        # 为风险日志表添加索引
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_risk_logs_code_action ON risk_logs(code, action)')
-        cursor.execute('CREATE INDEX IF NOT EXISTS idx_risk_logs_created_at ON risk_logs(created_at)')
+        # 为板块热度表添加索引
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_sector_heat_date ON sector_heat_daily(date)')
         
         conn.commit()
         conn.close()
     
     def execute_query(self, query: str, params: tuple = ()) -> pd.DataFrame:
         """
-        执行SQL查询并返回DataFrame
-        
-        Args:
-            query (str): SQL查询语句
-            params (tuple): 查询参数
-            
-        Returns:
-            pd.DataFrame: 查询结果
+        执行SQL查询并返回DataFrame (仅限 SELECT)
         """
         with sqlite3.connect(self.db_path) as conn:
-            # 设置连接参数以优化查询性能
-            conn.execute("PRAGMA cache_size = 10000")  # 增加缓存页数
-            conn.execute("PRAGMA temp_store = memory")  # 使用内存临时存储
+            conn.execute("PRAGMA cache_size = 10000")
+            conn.execute("PRAGMA temp_store = memory")
             df = pd.read_sql_query(query, conn, params=params)
         return df
+
+    def execute_non_query(self, query: str, params: tuple = ()):
+        """
+        执行非查询SQL语句 (INSERT, UPDATE, DELETE)
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            conn.commit()
 
     def save_signal(self, code: str, signal_type: str, score: float, chart_path: str) -> int:
         """
@@ -391,7 +425,7 @@ class CChanDB:
             conn.commit()
             return cursor.lastrowid
 
-    def close_live_trade(self, code: str, exit_price: float, exit_reason: str, exit_time: str = None):
+    def close_live_trade(self, code: str, exit_price: float, exit_reason: str, exit_time: str = None, market: str = None):
         """
         关闭指定股票的最早一笔开仓交易 (优化F)
         """
@@ -402,12 +436,12 @@ class CChanDB:
             cursor = conn.cursor()
             # 找到该股票最早的 'open' 订单
             cursor.execute(
-                "SELECT id, entry_price, quantity FROM live_trades WHERE code = ? AND status = 'open' ORDER BY entry_time ASC LIMIT 1",
+                "SELECT id, entry_price, quantity, market FROM live_trades WHERE code = ? AND status = 'open' ORDER BY entry_time ASC LIMIT 1",
                 (code,)
             )
             row = cursor.fetchone()
             if row:
-                trade_id, entry_price, quantity = row
+                trade_id, entry_price, quantity, db_market = row
                 pnl = (exit_price - entry_price) * quantity
                 pnl_pct = (exit_price / entry_price - 1) * 100 if entry_price != 0 else 0
                 
@@ -423,13 +457,30 @@ class CChanDB:
                     (exit_time, exit_price, exit_reason, pnl, pnl_pct, trade_id)
                 )
             else:
-                # 🛡️ [风控加固 Phase 9] 如果找不到 Open 持仓记录 (例如跨周期或补单)，插入一条独立卖出记录保证汇总报告不漏单
+                # 🛡️ [风控加固 Phase 9] 如果找不到 Open 持仓记录 (例如跨周期或补单)
+                # 自动推断市场
+                if market is None:
+                    if code.startswith('HK.'): market = 'HK'
+                    elif code.startswith('US.'): market = 'US'
+                    elif code.startswith('SH.') or code.startswith('SZ.'): market = 'CN'
+                    else: market = 'UNKNOWN'
+                
                 cursor.execute(
                     """INSERT INTO live_trades 
                        (code, market, exit_time, exit_price, exit_reason, status, entry_price, quantity) 
                        VALUES (?, ?, ?, ?, ?, 'closed', ?, ?)""",
-                    (code, 'HK', exit_time, exit_price, exit_reason, 0.0, 0)
+                    (code, market, exit_time, exit_price, exit_reason, 0.0, 0)
                 )
+            conn.commit()
+            
+    def record_risk_log(self, code: str, action: str, quantity: int, price: float, score: int, pnl: float = 0.0):
+        """记录风险管理日志 (修正了 execute_query 不支持 INSERT 的问题)"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO risk_logs (code, action, quantity, price, signal_score, pnl, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (code, action, quantity, price, score, pnl, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+            )
             conn.commit()
 
     def save_stop_loss_tracker(self, code: str, entry_price: float, highest_price: float, atr: float, trail_active: int):
@@ -464,6 +515,47 @@ class CChanDB:
             return result
         except:
             return {}
+
+    def record_news(self, item: Dict[str, Any]):
+        """
+        Record a news item into market_news table.
+        """
+        import hashlib
+        # Generate hash if not provided
+        news_hash = item.get('news_hash')
+        if not news_hash:
+            msg = f"{item.get('title')}_{item.get('timestamp')}"
+            news_hash = hashlib.md5(msg.encode('utf-8')).hexdigest()
+            
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            columns = [
+                'timestamp', 'market', 'title', 'content', 
+                'symbols', 'sectors', 'sentiment_score', 'linkage', 'analysis_type', 'source', 'news_hash'
+            ]
+            placeholders = ', '.join(['?'] * len(columns))
+            sql = f"INSERT OR IGNORE INTO market_news ({', '.join(columns)}) VALUES ({placeholders})"
+            
+            data = [item.get(col) if col != 'news_hash' else news_hash for col in columns]
+            cursor.execute(sql, data)
+            conn.commit()
+
+    def record_sector_heat(self, item: Dict[str, Any]):
+        """
+        Record sector heat data into sector_heat_daily table.
+        Uses INSERT OR REPLACE based on (date, market, sector_name).
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            columns = [
+                'date', 'market', 'sector_name', 'money_flow', 'top_movers', 'news_count'
+            ]
+            placeholders = ', '.join(['?'] * len(columns))
+            sql = f"INSERT OR REPLACE INTO sector_heat_daily ({', '.join(columns)}) VALUES ({placeholders})"
+            
+            data = [item.get(col) for col in columns]
+            cursor.execute(sql, data)
+            conn.commit()
 
     def delete_stop_loss_tracker(self, code: str):
         """
