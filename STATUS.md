@@ -25,3 +25,5 @@
 - **紧急热修 (2026-03-26)**: 修复 `BaseUSTradingController.py` 浮动止损异常。引入 `enumerate` 补全缺失的 `attempt` 变量，并通过局部作用域限定解决 `datetime` 访问冲突，保障美股风控哨兵持续运行。
 - **致命 Bug 修复 (2026-03-26)**: 发现 `position_list_query(refresh_cache=True)` 触发 `market is required` 报错。已通过“间接刷新 + 智能对账滤波”方案彻底解决。
 - **对策**: 采用 `accinfo_query(refresh=True)` 同步余额，并引入“市值一致性检查”自动屏蔽 API 缓存残留的“幽灵持仓”（如 HK.09880）。
+- **致命 Bug 修复 (2026-03-27)**: 修复 `HKTradingController.py` 因调用不存在的 `_init_trd_ctx()` 导致的 `AttributeError`。
+- **对策**: 移除冗余的显式初始化调用，交由 `trd_ctx` 属性通过延迟加载机制自动处理，确保 5M 逃顶逻辑在大规模预分析时不因环境切换崩溃。

@@ -1873,7 +1873,7 @@ class HKTradingController(QObject):
             # 查询当前实际持仓数量（从富途API实时获取，而非仅依赖本轮计数器）
             current_position_count = 0
             try:
-                self._init_trd_ctx()
+                # self.trd_ctx 属性会自动处理延迟初始化
                 refresh = (self.trd_env == TrdEnv.SIMULATE)
                 ret, data = self.trd_ctx.position_list_query(acc_id=self._trd_acc_id, trd_env=self.trd_env, refresh_cache=False)
                 if ret == RET_OK and not data.empty:
@@ -2088,7 +2088,7 @@ class HKTradingController(QObject):
                      # 专门看 SELL 待成交
                      orders_active = ord_data[ord_data[status_col].isin(active_statuses) & (ord_data['trd_side'] == TrdSide.SELL)]
                      pending_orders_codes = set(orders_active['code'].tolist())
-                 self._init_trd_ctx()
+                 # self.trd_ctx 属性会自动处理延迟初始化
                  refresh = (self.trd_env == TrdEnv.SIMULATE)
                  ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=self._trd_acc_id, trd_env=self.trd_env, refresh_cache=False)
                  if ret_pos == RET_OK and not pos_data.empty:
