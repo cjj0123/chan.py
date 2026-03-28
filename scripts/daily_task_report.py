@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 async def get_launchd_status():
     """Check launchctl list for relevant tasks"""
     tasks = [
-        "com.jijunchen.chanlun.hot_scanner",
         "com.chanlun.daily_sync",
+        "com.chanlun.daily_report",
         "com.chanlun.ib_watchdog"
     ]
     results = {}
@@ -48,8 +48,8 @@ async def get_launchd_status():
         logger.error(f"Error checking launchctl: {e}")
     return results
 
-def get_last_log_summary(log_path, lines=5):
-    """Get the last few lines of a log file and check for errors"""
+def get_log_section(log_path, start_marker, lines=10):
+    """Find a specific section in the log and return its tail"""
     if not os.path.exists(log_path):
         return "Log file not found."
     try:
@@ -57,8 +57,20 @@ def get_last_log_summary(log_path, lines=5):
             all_lines = f.readlines()
             if not all_lines:
                 return "Empty log file."
-            last_lines = all_lines[-lines:]
-            summary = "".join(last_lines).strip()
+            
+            # Find the last occurrence of the start marker
+            start_index = -1
+            for i in range(len(all_lines) - 1, -1, -1):
+                if start_marker in all_lines[i]:
+                    start_index = i
+                    break
+            
+            if start_index == -1:
+                return f"Marker '{start_marker}' not found in log."
+            
+            # Get the relevant lines after the marker
+            section = all_lines[start_index:start_index + lines]
+            summary = "".join(section).strip()
             if "ERROR" in summary or "Exception" in summary:
                 return "🚨 Potential issues detected:\n" + summary
             return "Success/Normal:\n" + summary
@@ -71,14 +83,17 @@ async def main():
     # 1. Check Launchd Status
     launchd_results = await get_launchd_status()
     
-    # 2. Check Logs
-    hot_scanner_log = get_last_log_summary("/tmp/daily_hot_scanner.log", 3)
-    daily_sync_log = get_last_log_summary("/tmp/daily_incremental_sync.log", 3)
-    ib_watchdog_log = get_last_log_summary("/tmp/ib_watchdog_stderr.log", 3)
+    # 2. Check Logs (Unified under daily_incremental_sync.log)
+    sync_log_path = "/tmp/daily_incremental_sync.log"
+    hot_scanner_log = get_log_section(sync_log_path, "Hot stock scan started", 4)
+    daily_sync_log = get_log_section(sync_log_path, "K-line sync started", 4)
+    ib_watchdog_log = get_log_section("/tmp/ib_watchdog_stderr.log", "starting", 3)
     
     # 3. Check Schwab Token
+    # Use fallback if hot_scanner module fails to import locally
     schwab_status = "Unknown"
     try:
+        from scripts.daily_hot_scanner import get_schwab_movers
         codes = get_schwab_movers(5)
         if codes:
             schwab_status = f"✅ Normal (Fetched {len(codes)} movers)"
@@ -88,24 +103,34 @@ async def main():
         schwab_status = f"❌ Error: {str(e)[:100]}"
     
     # 4. Construct Report
+    now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     report = [
         "## 🌅 缠论机器人 - 每日定时任务审计报告",
-        f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n",
+        f"时间: {now_str}\n",
         "### 1. Launchd 任务状态",
     ]
     for task, status in launchd_results.items():
-        icon = "✅" if "Running" in status or "Exit: 0" in status else "❌"
+        # Better status logic: if Idle, Check Exit 0
+        icon = "✅"
+        if "Running" in status:
+            icon = "✅"
+        elif "Last Exit: 0" in status:
+            icon = "✅"
+        else:
+            icon = "❌"
+        
         report.append(f"{icon} **{task.split('.')[-1]}**: `{status}`")
     
-    report.append("\n### 2. 关键任务日志摘要")
+    report.append("\n### 2. 关键阶段日志摘要")
     report.append(f"🔥 **热点扫描 (Hot Scanner)**:\n```\n{hot_scanner_log}\n```")
-    report.append(f"🔄 **数据同步 (Daily Sync)**:\n```\n{daily_sync_log}\n```")
+    report.append(f"🔄 **增量同步 (Daily Sync)**:\n```\n{daily_sync_log}\n```")
     report.append(f"🐕 **IB 守护进程 (Watchdog)**:\n```\n{ib_watchdog_log}\n```")
     
     report.append("\n### 3. API 联通性")
     report.append(f"🔗 **Schwab Token**: {schwab_status}")
     
     full_report = "\n".join(report)
+
     logger.info("Report constructed. Sending to Discord...")
     
     # 5. Send to Discord
