@@ -10,5 +10,9 @@ google-generativeai
 dashscope
 discord.py
 PyQt6
-pycryptodomeib-insync
+pycryptodome
+ib-insync
 nest-asyncio
+fastapi
+uvicorn
+websockets
