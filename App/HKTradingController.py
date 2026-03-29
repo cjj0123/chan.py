@@ -19,10 +19,21 @@ from pathlib import Path
 import asyncio
 import queue
 
-from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
+import os
+if os.environ.get('WEB_MODE') == '1':
+    from App.WebControllerAdapter import WebSignal as pyqtSignal, WebObject as QObject, pyqtSlot
+else:
+    try:
+        from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
+    except ImportError:
+        from App.WebControllerAdapter import WebSignal as pyqtSignal, WebObject as QObject, pyqtSlot
 
 # 将项目根目录加入路径
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# 解决 Matplotlib 与 GUI session 的冲突 ([Errno 5] I/O error)
+import matplotlib
+matplotlib.use('Agg')
 
 # 导入配置和核心库
 from config import TRADING_CONFIG, CHAN_CONFIG, CHART_PARA, MARKET_SPECIFIC_CONFIG
@@ -30,8 +41,6 @@ from Chan import CChan
 from ChanConfig import CChanConfig
 from Common.CEnum import KL_TYPE, DATA_SRC
 from Plot.PlotDriver import CPlotDriver
-import matplotlib
-matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -74,7 +83,7 @@ class HKTradingController(QObject):
     trade_signal_found = pyqtSignal(dict)      # 发现交易信号
     scan_finished = pyqtSignal(int, int, int, int)  # 成功卖出, 成功买入, 失败卖出, 失败买入
     trade_executed = pyqtSignal(dict)          # 交易执行结果
-    funds_updated = pyqtSignal(float, float, list)      # 资金持仓更新: 可用, 总资产, 持仓列表
+    funds_updated = pyqtSignal(float, float, float, list)      # 资金持仓更新: 可用, 总资产, 今日盈亏, 持仓列表
 
     def __init__(self,
                  hk_watchlist_group: str = None,
@@ -370,32 +379,30 @@ class HKTradingController(QObject):
         self.log_message.emit(f"🕹️ [手动-港股] 指令已入队: {action} {code} {qty}股 @ ${price}")
 
     def get_watchlist_data(self) -> Dict[str, str]:
-        """获取所选自选股分组的代码和名称清单（支持逗号分隔的多分组合并）"""
+        """获取所选自选股分组的代码和名称清单（支持港/美/A全市场自选股同步）"""
         try:
             # 支持多分组合并: "港股,热点_实盘" -> 分别拉取再合并
+            # 如果配置为 "全部" 或 ""，则拉取全量自选股
             groups = [g.strip() for g in self.hk_watchlist_group.split(',') if g.strip()]
-            if not groups:
-                groups = [""]
+            if not groups or any(g in ["全部", "All", "自选股"] for g in groups):
+                groups = [""] # 富途 API 空字符串表示全量自选股
             
             merged_watchlist = {}
             for group in groups:
-                if group in ["全部", "All", ""]:
-                    group = ""
-                ret, data = self.quote_ctx.get_user_security(group_name=group)
-                if ret == RET_OK and not data.empty:
-                    # 过滤出以 'HK.' 开头的代码
-                    hk_data = data[data['code'].str.startswith('HK.')]
-                    name_col = 'name' if 'name' in hk_data.columns else 'stock_name'
-                    partial = dict(zip(hk_data['code'].tolist(), hk_data[name_col].tolist()))
-                    merged_watchlist.update(partial)
-                    # self.log_message.emit(f"分组 [{group or '全部'}] 获取到 {len(partial)} 只港股")
-                else:
-                    self.log_message.emit(f"获取分组 [{group}] 失败: {data}")
+                with self.futu_api_lock:
+                    ret, data = self.quote_ctx.get_user_security(group_name=group)
+                    if ret == RET_OK and not data.empty:
+                        # 不再仅限于 'HK.'，支持 'US.', 'SH.', 'SZ.' 以及港股
+                        name_col = 'name' if 'name' in data.columns else 'stock_name'
+                        partial = dict(zip(data['code'].tolist(), data[name_col].tolist()))
+                        merged_watchlist.update(partial)
+                        # self.log_message.emit(f"✅ 分组 [{group or '全量自选'}] 获取到 {len(partial)} 只证券")
+                    else:
+                        self.log_message.emit(f"⚠️ 获取分组 [{group}] 失败: {data}")
             
-            # self.log_message.emit(f"合计获取 {len(merged_watchlist)} 只港股自选股 (去重后)")
             return merged_watchlist
         except Exception as e:
-            self.log_message.emit(f"获取自选股列表异常: {e}")
+            self.log_message.emit(f"❌ 获取自选股列表异常: {e}")
             return {}
 
     def get_stock_info(self, code: str) -> Optional[Dict]:
@@ -2436,6 +2443,24 @@ class HKTradingController(QObject):
                     
                     return (ret_pos, pos_data), (ret_acc, acc_data)
             
+            # 🚀 [影子账本-HK-预览] 在同步前先加载底仓，确保 UI 响应极速
+            manual_hk_pos = {
+                'HK.00699': {'qty': 5000, 'cost': 14.31, 'name': '均胜电子'}
+            }
+            preview_positions = []
+            for m_code, m_info in manual_hk_pos.items():
+                preview_positions.append({
+                    'symbol': m_code.split('.')[-1],
+                    'code': m_code,
+                    'name': m_info['name'],
+                    'qty': m_info['qty'],
+                    'mkt_value': m_info['qty'] * m_info['cost'],
+                    'pnl_ratio': 0.0,
+                    'avg_cost': m_info['cost']
+                })
+            # 发射一次预览信号，防止 API 挂起导致 UI 长时间黑屏
+            self.funds_updated.emit(0.0, 0.0, 0.0, preview_positions)
+
             (ret_pos, pos_data), (ret_acc, acc_data) = await loop.run_in_executor(None, query_positions_and_funds)
             
             def safe_float(v, default=0.0):
@@ -2444,11 +2469,12 @@ class HKTradingController(QObject):
                     return float(v)
                 except: return default
 
+            # Initialize basic structures
+            new_cache = {}
+            positions_list = []
+            total_pos_mkt_val = 0.0
+
             if ret_pos == RET_OK:
-                new_cache = {}
-                positions_list = []
-                total_pos_mkt_val = 0.0
-                
                 if not pos_data.empty:
                     for _, row in pos_data.iterrows():
                         code = row['code']
@@ -2460,52 +2486,79 @@ class HKTradingController(QObject):
                             positions_list.append({
                                 'symbol': code.split('.')[-1],
                                 'code': code,
+                                'name': row.get('stock_name', code.split('.')[-1]),
                                 'qty': qty,
                                 'mkt_value': mkt_val,
                                 'pnl_ratio': safe_float(row.get('pl_ratio', 0.0)),
                                 'avg_cost': safe_float(row.get('cost_price', 0.0))
                             })
-                
-                # 🛡️ [影子账本 - 强制隔离区穿透]
-                # 即使 API 返回空，也根据 hard-coded 的底仓进行补齐展示
-                manual_hk_pos = {
-                    'HK.00699': {'qty': 5000, 'cost': 14.31, 'name': '均胜电子'}
-                }
-                for m_code, m_info in manual_hk_pos.items():
-                    # 检查是否已在列表中 (避免重复)
-                    if not any(p['code'] == m_code for p in positions_list):
-                        new_cache[m_code] = m_info['qty']
-                        positions_list.append({
-                            'symbol': m_code.split('.')[-1],
-                            'code': m_code,
-                            'qty': m_info['qty'],
-                            'mkt_value': m_info['qty'] * 14.86,
-                            'pnl_ratio': round((14.86 - m_info['cost']) / m_info['cost'] * 100, 2),
-                            'avg_cost': m_info['cost']
-                        })
-                        self.log_message.emit(f"🛡️ [影子账本-HK] 已从内存加载硬核底仓: {m_code}")
+            else:
+                pass
+            
+            # 🛡️ [影子账本 - 强制隔离区穿透]
+            # 即使 API 返回空，也根据 hard-coded 的底仓进行补齐展示
+            manual_hk_pos = {
+                'HK.00699': {'qty': 5000, 'cost': 14.31, 'name': '均胜电子'}
+            }
+            for m_code, m_info in manual_hk_pos.items():
+                # 检查是否已在列表中 (避免重复)
+                if not any(p['code'] == m_code for p in positions_list):
+                    new_cache[m_code] = m_info['qty']
+                    positions_list.append({
+                        'symbol': m_code.split('.')[-1],
+                        'code': m_code,
+                        'name': m_info['name'],
+                        'qty': m_info['qty'],
+                        'mkt_value': m_info['qty'] * m_info['cost'],
+                        'pnl_ratio': 0.0,
+                        'avg_cost': m_info['cost']
+                    })
+                    self.log_message.emit(f"🛡️ [影子账本-HK] 已从内存加载硬核底仓: {m_code}")
 
-                self.position_cache = new_cache
-                self.last_pos_sync_time = time.time()
-                
-                # 发射信号同步 UI
-                available = 0.0; total = 0.0
-                if ret_acc == RET_OK and not acc_data.empty:
-                    available = float(acc_data['cash'].iloc[0])
-                    total = float(acc_data['total_assets'].iloc[0])
-                
-                self.funds_updated.emit(available, total, positions_list)
-                
-                # 🧹 [持仓大扫除] 清理 position_trackers 中的僵尸代码
-                if hasattr(self, 'position_trackers'):
-                    trackers = list(self.position_trackers.keys())
-                    for code in trackers:
-                        if self.position_cache.get(code, 0) <= 0:
-                            self.log_message.emit(f"🧹 [HK-清理] {code} 已无持仓，移除僵尸止损追踪器。")
-                            del self.position_trackers[code]
-                            self._unsubscribe_stock_quote(code)
+            self.position_cache = new_cache
+            self.last_pos_sync_time = time.time()
+            
+            # 🚀 [行情实时刷新] 为所有持仓获取最新的 Futu 市场快照 (含影子账本)
+            all_codes = [p['code'] for p in positions_list]
+            if all_codes and self.quote_ctx:
+                try:
+                    ret_snap, snap_data = self.quote_ctx.get_market_snapshot(all_codes)
+                    if ret_snap == RET_OK and not snap_data.empty:
+                        for _, s_row in snap_data.iterrows():
+                            s_code = s_row['code']
+                            last_price = safe_float(s_row.get('last_done', 0.0))
+                            if last_price <= 0: continue
                             
-                self.log_message.emit(f"🔄 [HK-持仓同步] 已同步 {len(new_cache)} 只持仓标的。")
+                            for p in positions_list:
+                                if p['code'] == s_code:
+                                    p['mkt_price'] = last_price
+                                    # 重新计算市值和盈亏比例
+                                    p['mkt_value'] = p['qty'] * last_price
+                                    if p.get('avg_cost', 0) > 0:
+                                        p['pnl_ratio'] = round((last_price - p['avg_cost']) / p['avg_cost'] * 100, 2)
+                                    break
+                except Exception as snap_e:
+                    self.log_message.emit(f"⚠️ [HK-行情] 获取实时快照失败: {snap_e}")
+            
+            # 发射信号同步 UI
+            available = 0.0; total = 0.0; today_pl = 0.0
+            if ret_acc == RET_OK and not acc_data.empty:
+                available = float(acc_data['cash'].iloc[0])
+                total = float(acc_data['total_assets'].iloc[0])
+                today_pl = float(acc_data.iloc[0].get('today_pl', 0.0))
+            
+            self.funds_updated.emit(available, total, today_pl, positions_list)
+                
+            # 🧹 [持仓大扫除] 清理 position_trackers 中的僵尸代码
+            if hasattr(self, 'position_trackers'):
+                trackers = list(self.position_trackers.keys())
+                for code in trackers:
+                    if self.position_cache.get(code, 0) <= 0:
+                        self.log_message.emit(f"🧹 [HK-清理] {code} 已无持仓，移除僵尸止损追踪器。")
+                        del self.position_trackers[code]
+                        self._unsubscribe_stock_quote(code)
+                        
+            self.log_message.emit(f"🔄 [HK-持仓同步] 已同步 {len(new_cache)} 只持仓标的。")
         except Exception as e:
             self.log_message.emit(f"⚠️ [HK-持仓同步] 失败: {e}")
 
@@ -3140,7 +3193,9 @@ class HKTradingController(QObject):
                 self.last_pos_sync_time = time.time()
                 
                 # 4. 发射信号 (UI 主线程会自动接收)
-                self.funds_updated.emit(available, total, positions)
+                # 💡 [关键修正] 对齐 pyqtSignal(float, float, float, list) 信号签名
+                today_pl = float(data.iloc[0].get('today_pl', 0.0)) if not data.empty else 0.0
+                self.funds_updated.emit(available, total, today_pl, positions)
             
         except Exception as e:
             self.log_message.emit(f"❌ 查询账户状态异常: {e}")

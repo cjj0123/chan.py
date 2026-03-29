@@ -28,19 +28,29 @@ from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor
 
-from PyQt6.QtCore import QObject, pyqtSignal
+import os
+if os.environ.get('WEB_MODE') == '1':
+    from App.WebControllerAdapter import WebSignal as pyqtSignal, WebObject as QObject
+else:
+    try:
+        from PyQt6.QtCore import QObject, pyqtSignal
+    except ImportError:
+        from App.WebControllerAdapter import WebSignal as pyqtSignal, WebObject as QObject
 
 # 将项目根目录加入路径
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# 解决 Matplotlib 与 GUI session 的冲突 ([Errno 5] I/O error)
+import matplotlib
+matplotlib.use('Agg')
+
+# 导入配置和核心库
 from config import TRADING_CONFIG, CHAN_CONFIG, CHART_CONFIG, CHART_PARA, MARKET_SPECIFIC_CONFIG
 from Chan import CChan
 from ChanConfig import CChanConfig
 from Common.CEnum import KL_TYPE, DATA_SRC, AUTYPE
 from Plot.PlotDriver import CPlotDriver
 from App.ScannerThreads import LEVEL_DATA_DAYS
-import matplotlib
-matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 # 导入 Futu
@@ -65,7 +75,7 @@ class MarketMonitorController(QObject):
     A股自动化交易控制器 (asyncio 版)
     """
     log_message = pyqtSignal(str)
-    funds_updated = pyqtSignal(float, float, list)  # available, total, positions
+    funds_updated = pyqtSignal(float, float, float, list)  # available, total, today_pl, positions
 
     def __init__(self, watchlist_group: str, discord_bot: DiscordBot = None, parent=None):
         super().__init__(parent)
@@ -635,9 +645,35 @@ class MarketMonitorController(QObject):
     # ============================= 资金与持仓查询 =============================
 
     def _do_query_funds(self):
-        if not getattr(self, 'trading_enabled', False):
-            return
+        # Allow fund queries for status display even if trading is not enabled
         self._init_trd_ctx()
+
+        # 🚀 [影子账本-CN-预览] 在同步前先加载底仓，确保 UI 响应极速 (对齐港股)
+        manual_cn_pos = {
+            'SH.600644': {'qty': 900, 'cost': 11.99, 'name': '乐山电力'},
+            'SH.600505': {'qty': 1000, 'cost': 13.69, 'name': '西昌电力'},
+            'SZ.301517': {'qty': 500, 'cost': 52.09, 'name': '乖宝宠物'},
+            'SZ.301589': {'qty': 200, 'cost': 60.48, 'name': '诺瓦星云'},
+            'SZ.000063': {'qty': 1700, 'cost': 32.22, 'name': '中兴通讯'},
+            'SZ.000977': {'qty': 2400, 'cost': 56.21, 'name': '浪潮信息'},
+            'SZ.300288': {'qty': 1800, 'cost': 12.33, 'name': '朗玛信息'},
+            'SZ.300263': {'qty': 3700, 'cost': 9.87, 'name': '隆华科技'}
+        }
+        preview_positions = []
+        for m_code, m_info in manual_cn_pos.items():
+            preview_positions.append({
+                'code': m_code,
+                'symbol': m_code,
+                'name': m_info.get('name', 'A股持仓'),
+                'qty': m_info['qty'],
+                'mkt_value': m_info['qty'] * m_info['cost'],
+                'avg_cost': m_info['cost'],
+                'mkt_price': m_info['cost'],
+                'pnl_ratio': 0.0,
+                'can_sell_qty': m_info['qty'] if self.trd_env == TrdEnv.SIMULATE else 0
+            })
+        # 发送初步预览数据
+        self.funds_updated.emit(0.0, 0.0, 0.0, preview_positions)
         try:
             refresh = (self.trd_env == TrdEnv.SIMULATE)
             # 💡 [核心修复] 强制双重刷新：accinfo 唤醒 -> position_list 同步
@@ -717,14 +753,17 @@ class MarketMonitorController(QObject):
             }
             
             for m_code, m_info in manual_cn_pos.items():
-                if not any(p['symbol'] == m_code for p in positions):
+                if not any(p.get('code') == m_code for p in positions):
                     self.shadow_ledger[m_code] = m_info['qty']
                     positions.append({
+                        'code': m_code,
                         'symbol': m_code,
+                        'name': m_info.get('name', 'A股持仓'),
                         'qty': m_info['qty'],
                         'mkt_value': m_info['qty'] * m_info['cost'],
                         'avg_cost': m_info['cost'],
                         'mkt_price': m_info['cost'],
+                        'pnl_ratio': 0.0,
                         'can_sell_qty': m_info['qty'] if self.trd_env == TrdEnv.SIMULATE else 0
                     })
                     self.log_message.emit(f"🛡️ [影子账本-CN] 已从内存召回底仓: {m_info['name']}")
@@ -738,7 +777,34 @@ class MarketMonitorController(QObject):
                         # 账户显示有市值但持仓为空，疑似同步延迟，仅打印日志提示，不再 return (对齐港股)
                         self.log_message.emit(f"⚠️ [A股-对账警告] API 同步中，已自动激活影子账本保护模式。")
             
-            self.funds_updated.emit(available, total, positions)
+            # 🚀 [行情实时刷新] A 股全量持仓行情更新
+            all_codes = list(set([p.get('code') or p.get('symbol') for p in positions]))
+            if all_codes and self.quote_ctx:
+                try:
+                    ret_snap, snap_data = self.quote_ctx.get_market_snapshot(all_codes)
+                    if ret_snap == RET_OK and not snap_data.empty:
+                        for _, s_row in snap_data.iterrows():
+                            s_code = s_row['code']
+                            last_price = safe_float(s_row.get('last_done', 0.0))
+                            if last_price <= 0: continue
+                            
+                            for p in positions:
+                                if (p.get('code') == s_code or p.get('symbol') == s_code):
+                                    p['mkt_price'] = last_price
+                                    # 重新计算市值和比例
+                                    p['mkt_value'] = p['qty'] * last_price
+                                    if p.get('avg_cost', 0) > 0:
+                                        p['pnl_ratio'] = round((last_price - p['avg_cost']) / p['avg_cost'] * 100, 2)
+                except Exception as snap_e:
+                    self.log_message.emit(f"⚠️ [A股-行情] 获取实时快照失败: {snap_e}")
+
+            available = 0.0; total = 0.0; today_pl = 0.0
+            if ret_acc == RET_OK and not acc_data.empty:
+                available = float(acc_data['cash'].iloc[0])
+                total = float(acc_data['total_assets'].iloc[0])
+                today_pl = float(acc_data.iloc[0].get('today_pl', 0.0))
+
+            self.funds_updated.emit(available, total, today_pl, positions)
         except Exception as e:
             self.log_message.emit(f"⚠️ [A股-交易] 资产查询失败: {e}")
 

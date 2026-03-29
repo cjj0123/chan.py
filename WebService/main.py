@@ -1,5 +1,15 @@
+import matplotlib
+matplotlib.use('Agg')
+print(f"✅ Matplotlib backend set to: {matplotlib.get_backend()}")
+
+import sys
 import os
+# [CRITICAL] Force WEB_MODE for signal handling adapter selection
 os.environ['WEB_MODE'] = '1'
+import logging
+from pathlib import Path
+# Add project root to path to allow running as a script and importing from WebService
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -84,6 +94,43 @@ async def get_portfolio():
             "cn": terminal_manager.cn_status
         }
     return {"message": "Initializing controllers..."}
+
+@app.get("/api/signals")
+async def get_signals():
+    # Fetch recent signals from the database
+    if terminal_manager:
+        signals = terminal_manager.get_recent_signals()
+        return {"signals": signals}
+    return {"signals": []}
+
+@app.get("/api/analyze/{symbol}")
+async def analyze_symbol(symbol: str, lv: str = "30M"):
+    if terminal_manager:
+        try:
+            result = terminal_manager.generate_analysis_chart(symbol, lv)
+            return result
+        except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            logging.error(f"Failed to generate analysis chart for {symbol}:\n{error_details}")
+            return {
+                "success": False,
+                "error": str(e),
+                "traceback": error_details
+            }
+    return {"success": False, "error": "Terminal manager not initialized"}
+
+@app.post("/api/system/restart")
+async def restart_system():
+    if terminal_manager:
+        async def delayed_restart():
+            await asyncio.sleep(0.5)
+            # Exit process, wrapper script will handle the restart
+            os._exit(0)
+        
+        asyncio.create_task(delayed_restart())
+        return {"success": True, "message": "Backend system is restarting..."}
+    return {"success": False, "error": "System not initialized"}
 
 if __name__ == "__main__":
     import uvicorn
