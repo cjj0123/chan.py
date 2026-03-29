@@ -12,11 +12,17 @@ if [ ! -d "$PROJECT_DIR" ]; then
 fi
 cd "$PROJECT_DIR"
 
-# 0. 清理残留进程 (Cleanup zombie processes on ports 3000 and 8000)
-echo "🧹 正在检查并清理端口 3000 (前端) 和 8000 (后端) 的残留进程..."
+# 0. 清理残留进程 (Cleanup zombie processes)
+echo "🧹 正在彻底清理残留进程..."
+# 1. 杀掉 Python 后端所有实例 (Target by module name)
+pkill -f "WebService.main" 2>/dev/null
+# 2. 杀掉 Node 前端所有实例 (Target by directory/command)
+pkill -f "next-dev" 2>/dev/null
+# 3. 释放端口 (Port based fallback)
 lsof -ti :3000 | xargs kill -9 2>/dev/null
 lsof -ti :8000 | xargs kill -9 2>/dev/null
-sleep 1
+echo "⏳ 等待端口释放..."
+sleep 2
 
 # 2. 检查 .venv 虚拟环境
 VENV_PATH="./.venv/bin/activate"

@@ -256,4 +256,22 @@ class DiscordBot:
         print(f"✅ [Discord] 机器人后台线程已启动")
         
     async def stop(self):
-        await self.bot.close()
+        """异步关闭机器人"""
+        if self.bot:
+            await self.bot.close()
+
+    def stop_sync(self):
+        """同步关闭机器人 (从其他线程调用)"""
+        if self.token and self.loop and self.loop.is_running():
+            logger.info("📡 [Discord] 正在同步停止机器人...")
+            future = asyncio.run_coroutine_threadsafe(self.stop(), self.loop)
+            try:
+                future.result(timeout=5)
+            except Exception as e:
+                logger.error(f"❌ [Discord] 同步停止失败: {e}")
+            finally:
+                # 尽量停止循环
+                try:
+                    self.loop.call_soon_threadsafe(self.loop.stop)
+                except:
+                    pass

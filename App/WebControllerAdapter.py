@@ -36,7 +36,7 @@ class WebSignal:
             except Exception as e:
                 logging.error(f"Error in signal callback: {e}")
 
-def pyqtSlot(*types):
+def pyqtSlot(*types, **kwargs):
     """Mock pyqtSlot decorator"""
     def decorator(func):
         return func

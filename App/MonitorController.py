@@ -317,6 +317,11 @@ class MarketMonitorController(QObject):
         if self.trd_ctx:
             self.trd_ctx.close()
             self.trd_ctx = None
+        if self.discord_bot:
+            try:
+                self.discord_bot.stop_sync()
+            except:
+                pass
         self.log_message.emit("🛑 [A股] 监控与交易进程已停止")
 
     def force_scan(self):

@@ -345,7 +345,7 @@ class HKTradingController(QObject):
         self._is_running = False
         if self.discord_bot:
             try:
-                self.discord_bot.stop()
+                self.discord_bot.stop_sync()
             except:
                 pass
         self.log_message.emit("🛑 收到停止信号，正在安全退出...")
