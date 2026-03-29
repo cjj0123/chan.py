@@ -1,43 +1,89 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
 
-:root {
-  --background: #0a0a0b;
-  --foreground: #ededed;
-  --card-bg: #111113;
-  --accent: #10b981; /* Emerald 500 */
+@theme {
+  --color-background: #050507;
+  --color-surface: #0a0a0c;
+  --color-surface-hover: #0d0d0f;
+  --color-foreground: #f0f0f2;
+  --color-muted: #64748b;
+  --color-border-dim: rgba(255, 255, 255, 0.06);
+  --color-border-bright: rgba(255, 255, 255, 0.12);
+  
+  --color-primary: #6366f1;
+  --color-success: #10b981;
+  --color-danger: #f43f5e;
+  --color-warning: #f59e0b;
+  --color-info: #3b82f6;
+
+  --font-inter: var(--font-inter), 'Inter', sans-serif;
+  --font-mono: var(--font-mono), 'JetBrains Mono', monospace;
 }
 
-body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif;
+@layer base {
+  body {
+    @apply bg-background text-foreground font-sans antialiased selection:bg-indigo-500/30;
+    letter-spacing: -0.01em;
+  }
 }
 
-/* Glassmorphism Classes */
-.glass {
-  background: rgba(17, 17, 19, 0.7);
-  backdrop-filter: blur(8px);
-  border: 1px solid rgba(255, 255, 255, 0.05);
+@layer components {
+  .glass-pro {
+    @apply bg-surface/60 backdrop-blur-2xl border border-white/[0.05] shadow-[0_8px_32px_rgba(0,0,0,0.5)];
+  }
+  
+  .glass-pro-header {
+    @apply bg-background/80 backdrop-blur-md border-b border-white/[0.05];
+  }
+
+  .text-header {
+    @apply text-lg font-black tracking-tighter uppercase italic text-white;
+  }
+
+  .text-label {
+    @apply text-[10px] font-black uppercase tracking-[0.2em] text-slate-500;
+  }
+
+  .text-data {
+    @apply font-mono font-bold tracking-tight text-white;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    @apply bg-white/[0.05] rounded-full hover:bg-white/[0.1] transition-colors;
+  }
 }
 
-.terminal-scroll::-webkit-scrollbar {
-  width: 6px;
+/* Trading Animations */
+@keyframes breath {
+  0% { opacity: 0.8; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.02); }
+  100% { opacity: 0.8; transform: scale(1); }
 }
 
-.terminal-scroll::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
-  border-radius: 3px;
+.animate-breath {
+  animation: breath 3s ease-in-out infinite;
 }
 
-/* Custom Animations */
-@keyframes pulse-emerald {
-  0% { transform: scale(1); opacity: 0.8; }
-  50% { transform: scale(1.05); opacity: 1; }
-  100% { transform: scale(1); opacity: 0.8; }
+@keyframes scan-line {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100%); }
 }
 
-.status-pulse {
-  animation: pulse-emerald 2s infinite;
+.scan-line-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--color-success), transparent);
+  animation: scan-line 4s linear infinite;
+  opacity: 0.2;
 }

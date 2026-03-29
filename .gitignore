@@ -20,3 +20,10 @@ email_config.env
 *.db
 chan_trading.db
 pipeline_post_sync.out
+
+# 忽略临时生成图像
+App/charts/*.png
+App/charts/*.jpg
+
+# 忽略敏感信息文件 (如果之前已在git中，可能需要 git rm --cached)
+schwab_token.json

@@ -132,6 +132,54 @@ async def restart_system():
         return {"success": True, "message": "Backend system is restarting..."}
     return {"success": False, "error": "System not initialized"}
 
+from pydantic import BaseModel
+
+class TradingToggle(BaseModel):
+    market: str
+    auto_trade: bool = None
+    live_mode: bool = None
+
+class ManualOrder(BaseModel):
+    market: str
+    symbol: str
+    action: str
+    price: float
+    qty: int
+
+@app.get("/api/trading/config")
+async def get_trading_config():
+    if terminal_manager:
+        return terminal_manager.get_trading_config()
+    return {}
+
+@app.post("/api/trading/toggle")
+async def toggle_trading(config: TradingToggle):
+    if terminal_manager:
+        return terminal_manager.set_trading_config(
+            market=config.market, 
+            auto_trade=config.auto_trade, 
+            live_mode=config.live_mode
+        )
+    return {"success": False}
+
+@app.post("/api/trading/order")
+async def place_order(order: ManualOrder):
+    if terminal_manager:
+        return terminal_manager.execute_manual_order(
+            market=order.market,
+            symbol=order.symbol,
+            action=order.action,
+            price=order.price,
+            qty=order.qty
+        )
+    return {"success": False}
+
+@app.post("/api/trading/emergency_stop")
+async def emergency_stop(market: str):
+    if terminal_manager:
+        return terminal_manager.emergency_stop(market)
+    return {"success": False}
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)

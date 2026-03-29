@@ -20,6 +20,7 @@ import {
 import Terminal from '../components/Terminal';
 import Scanner from '../components/Scanner';
 import Analyzer from '../components/Analyzer';
+import TradingPanel from '../components/TradingPanel';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function Dashboard() {
@@ -253,13 +254,16 @@ export default function Dashboard() {
                 </div>
                 
                 {/* Console & Positions */}
-                <div className="col-span-8 h-[760px]">
+                <div className="col-span-8 h-[820px]">
                   <Terminal />
                 </div>
-                <div className="col-span-4 flex flex-col gap-8">
-                  <div className="flex-1 glass-pro rounded-[24px] p-8 overflow-hidden flex flex-col">
-                    <div className="flex items-center justify-between mb-6">
-                       <h3 className="text-[14px] font-black uppercase tracking-wider text-white">Live Positions</h3>
+                <div className="col-span-4 flex flex-col gap-6 h-[820px]">
+                  <div className="h-[460px] shrink-0">
+                    <TradingPanel />
+                  </div>
+                  <div className="flex-1 glass-pro rounded-[24px] p-6 overflow-hidden flex flex-col">
+                    <div className="flex items-center justify-between mb-4">
+                       <h3 className="text-[12px] font-black uppercase tracking-wider text-white">Live Positions</h3>
                        <div className="flex items-center gap-2">
                           <span className="text-[9px] font-black text-emerald-400 uppercase tracking-widest">Streaming</span>
                           <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_10px_#10b981]"></div>

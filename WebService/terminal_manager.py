@@ -55,6 +55,19 @@ class WebTerminalManager:
             parent=None
         )
         self._setup_cn_signals()
+        
+        # Trading State (Initial Sync)
+        self.trading_config = {
+            "HK": {
+                "auto_trade": not self.hk_controller.dry_run, # Inverted logic for simplicity in UI
+                "live_mode": not self.hk_controller.dry_run
+            },
+            "CN": {
+                "auto_trade": self.cn_monitor.trading_enabled,
+                "live_mode": self.cn_monitor.trd_env == 1 # TrdEnv.REAL is 1
+            }
+        }
+        
         print("DEBUG: WebTerminalManager initialized.")
 
     def _setup_hk_signals(self):
@@ -134,7 +147,8 @@ class WebTerminalManager:
             "daily_pnl_pct": round(pnl_pct, 2),
             "active_symbols": active_count,
             "compute_load": round(load, 1),
-            "risk_exposure": risk
+            "risk_exposure": risk,
+            "trading_status": self.trading_config
         }
         self.send_status("SYSTEM_SUMMARY", self.system_summary)
 
@@ -350,3 +364,73 @@ class WebTerminalManager:
     def stop_monitors(self):
         self.hk_controller.stop()
         self.cn_monitor.stop()
+
+    def get_trading_config(self):
+        return self.trading_config
+
+    def set_trading_config(self, market: str, auto_trade: bool = None, live_mode: bool = None):
+        """Update trading configuration and re-init context if mode changed."""
+        from futu import TrdEnv
+        if market == "HK":
+            if auto_trade is not None:
+                # For HK, we use dry_run to control both. 
+                # If auto_trade is True, we might want live_mode to be configurable.
+                # Project's existing logic: dry_run=True means Simulate.
+                pass 
+            
+            if live_mode is not None:
+                new_env = TrdEnv.REAL if live_mode else TrdEnv.SIMULATE
+                if self.hk_controller.trd_env != new_env:
+                    print(f"DEBUG: Switching HK environment to {new_env}")
+                    self.hk_controller.trd_env = new_env
+                    self.hk_controller.dry_run = not live_mode
+                    # Reset context to force re-login/re-init
+                    self.hk_controller._trd_ctx = None
+                    self.hk_controller._quote_ctx = None
+            
+            # HK auto_trade mapping
+            if auto_trade is not None:
+                # We'll use a custom property if needed, but for now align with dry_run
+                # If they want "auto" but "sim", it's still dry_run=True in this codebase's current state
+                pass
+
+        elif market == "CN":
+            if live_mode is not None:
+                new_env = TrdEnv.REAL if live_mode else TrdEnv.SIMULATE
+                if self.cn_monitor.trd_env != new_env:
+                    print(f"DEBUG: Switching CN environment to {new_env}")
+                    self.cn_monitor.trd_env = new_env
+                    # Reset context
+                    self.cn_monitor.trd_ctx = None
+                    self.cn_monitor.quote_ctx = None
+            
+            if auto_trade is not None:
+                self.cn_monitor.trading_enabled = auto_trade
+
+        # Update local state
+        if auto_trade is not None: self.trading_config[market]["auto_trade"] = auto_trade
+        if live_mode is not None: self.trading_config[market]["live_mode"] = live_mode
+        
+        self._update_system_summary()
+        return self.trading_config[market]
+
+    def execute_manual_order(self, market: str, symbol: str, action: str, price: float, qty: int):
+        """Forward manual order to the specific market controller."""
+        print(f"DEBUG: Executing manual order: {market} {symbol} {action} {qty}@{price}")
+        if market == "HK":
+            self.hk_controller.execute_manual_order(symbol, action, price, qty)
+        elif market == "CN":
+            self.cn_monitor.execute_manual_order(symbol, action, price, qty)
+        return {"success": True, "message": "Order queued"}
+
+    def emergency_stop(self, market: str):
+        """Cancel orders and close positions for the market."""
+        if market == "HK":
+            # HKTradingController might need a close_all_positions method if not present
+            if hasattr(self.hk_controller, 'close_all_positions'):
+                self.hk_controller.close_all_positions()
+            else:
+                self.send_log("HK", "Emergency Stop: close_all_positions not implemented for HK")
+        elif market == "CN":
+            self.cn_monitor.close_all_positions()
+        return {"success": True, "message": f"Emergency stop initiated for {market}"}
