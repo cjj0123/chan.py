@@ -33,11 +33,15 @@ class WebTerminalManager:
         }
         self.HKD_TO_CNY = 0.92
         self.MAX_CAPACITY = 300
+        self.start_time = time.time()
         
         # Initialize HK Controller
+        # Initialize HK Controller
         print("DEBUG: Setting up HK Controller...")
+        from config import TRADING_CONFIG
+        hk_group = TRADING_CONFIG.get('hk_watchlist_group', '港股')
         self.hk_controller = HKTradingController(
-            hk_watchlist_group="港股", # Default group
+            hk_watchlist_group=hk_group,
             dry_run=True,
             parent=None
         )
@@ -45,8 +49,9 @@ class WebTerminalManager:
         
         # Initialize A-Share Monitor
         print("DEBUG: Setting up CN Monitor...")
+        cn_group = TRADING_CONFIG.get('cn_watchlist_group', '沪深')
         self.cn_monitor = MarketMonitorController(
-            watchlist_group="沪深",
+            watchlist_group=cn_group,
             parent=None
         )
         self._setup_cn_signals()
@@ -95,11 +100,18 @@ class WebTerminalManager:
         pnl_pct = (total_pnl / total_assets_cny * 100) if total_assets_cny > 0 else 0.0
         
         # Active symbols from both HK and CN watchlists
+        active_count = 0
         try:
             hk_watchlist = self.hk_controller.get_watchlist_data()
-            cn_watchlist = self.cn_monitor.get_watchlist_data() if hasattr(self.cn_monitor, 'get_watchlist_data') else {}
+            cn_watchlist = {}
+            if hasattr(self.cn_monitor, 'get_watchlist_data'):
+                cn_watchlist = self.cn_monitor.get_watchlist_data()
             active_count = len(hk_watchlist) + len(cn_watchlist)
-        except:
+            
+            if active_count == 0:
+                print(f"DEBUG: Watchlist count is 0. HK Group: {self.hk_controller.hk_watchlist_group}, CN Group: {self.cn_monitor.watchlist_group}")
+        except Exception as e:
+            print(f"ERROR: Failed to fetch watchlist: {e}")
             active_count = 0
 
         # Compute Load based on 300 capacity
@@ -125,6 +137,7 @@ class WebTerminalManager:
             "risk_exposure": risk
         }
         self.send_status("SYSTEM_SUMMARY", self.system_summary)
+
 
     def send_log(self, source: str, message: str):
         payload = {
@@ -160,6 +173,17 @@ class WebTerminalManager:
         import threading
         print("DEBUG: Starting monitor threads...")
         
+        # Initial trigger for system summary (don't wait for signals)
+        self.loop.call_later(2, self._update_system_summary)
+        
+        # Periodic update for active symbols count (every 60s)
+        async def periodic_status_sync():
+            while True:
+                await asyncio.sleep(60)
+                self._update_system_summary()
+        
+        asyncio.create_task(periodic_status_sync())
+
         # 1. Start HK Controller
         def start_hk():
             print("DEBUG: HK thread started.")
