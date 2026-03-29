@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, LineChart, Cpu, Clock, Maximize2, RefreshCw, AlertCircle } from 'lucide-react';
+import { Search, LineChart, Cpu, Clock, Maximize2, RefreshCw, AlertCircle, BarChart3, X, ZoomIn } from 'lucide-react';
 
 export default function Analyzer() {
     const [symbol, setSymbol] = useState('');
@@ -10,6 +10,7 @@ export default function Analyzer() {
     const [loading, setLoading] = useState(false);
     const [result, setResult] = useState<any>(null);
     const [error, setError] = useState<string | null>(null);
+    const [isExpanded, setIsExpanded] = useState(false);
 
     const handleAnalyze = async () => {
         if (!symbol) return;
@@ -23,172 +24,188 @@ export default function Analyzer() {
             if (data.success) {
                 setResult(data);
             } else {
-                setError(data.error || '分析失败，请检查证券代码。');
+                setError(data.error || 'ERROR_ANALYSIS_FAILED');
             }
         } catch (err) {
-            setError('无法连接到后端服务器。');
+            setError('ERROR_SERVER_UNREACHABLE');
         } finally {
             setLoading(false);
         }
     };
 
     return (
-        <div className="flex flex-col gap-10">
-            {/* Header Control Bar */}
-            <div className="glass-pro rounded-[32px] p-10 flex flex-col xl:flex-row xl:items-center justify-between gap-8">
-                <div className="flex items-center gap-6">
-                    <div className="w-16 h-16 bg-emerald-500/10 rounded-[22px] flex items-center justify-center border border-emerald-500/20 shadow-inner">
-                        <LineChart className="w-8 h-8 text-emerald-400" />
+        <div className="min-h-full pb-20 px-6">
+            {/* Header Control Panel - Now scrolls with page */}
+            <div className="glass-pro rounded-[32px] p-6 border-white/[0.05] mb-8">
+                <div className="flex items-center justify-between mb-6">
+                    <div className="flex flex-col gap-1">
+                        <h2 className="text-[18px] font-black italic uppercase tracking-tighter text-white flex items-center gap-3">
+                            <BarChart3 size={20} className="text-indigo-400" />
+                            Strategy Performance Analyzer
+                        </h2>
+                        <p className="text-[9px] font-black uppercase tracking-[0.2em] text-slate-500">Backtest Reports / Simulation Metrics / Edge Analysis</p>
                     </div>
-                    <div>
-                        <h2 className="text-header uppercase italic">缠论深度策略分析 (Analyzer)</h2>
-                        <p className="text-label tracking-[0.2em] font-black opacity-60">多级别几何结构映射与买卖点解析</p>
-                    </div>
+                    {result && (
+                         <div className="flex items-center gap-4 text-[10px] font-black uppercase tracking-widest text-indigo-400/60 bg-indigo-500/5 px-4 py-2 rounded-full border border-indigo-500/10">
+                            <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+                            {result.symbol} • {result.lv}
+                         </div>
+                    )}
                 </div>
-
-                <div className="flex flex-wrap items-center gap-5">
-                    {/* Symbol Search */}
-                    <div className="relative group flex-1 min-w-[320px]">
-                        <Search className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500 group-focus-within:text-emerald-400 transition-colors" />
+                
+                <div className="flex items-center gap-4">
+                    <div className="relative group flex-1">
+                        <Search className="absolute left-5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-600 group-focus-within:text-indigo-500 transition-colors" />
                         <input 
                             type="text" 
-                            placeholder="输入证券代码 (如 HK.00700)"
-                            className="bg-slate-900 border border-white/5 rounded-2xl pl-14 pr-6 py-4 text-sm font-bold text-white placeholder:text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500/40 w-full transition-all"
+                            placeholder="SEARCH TICKER (e.g. HK.00700)..."
+                            className="bg-[#050507] border border-white/[0.05] rounded-xl pl-14 pr-6 py-4 text-[13px] font-bold text-white placeholder:text-slate-800 focus:outline-none focus:border-indigo-500/30 w-full transition-all"
                             value={symbol}
                             onChange={(e) => setSymbol(e.target.value)}
                             onKeyDown={(e) => e.key === 'Enter' && handleAnalyze()}
                         />
                     </div>
 
-                    {/* Timeframe Selector */}
                     <div className="relative">
                         <select 
-                            className="bg-slate-900 border border-white/5 rounded-2xl pl-6 pr-12 py-4 text-sm font-black text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 transition-all appearance-none cursor-pointer uppercase tracking-widest"
+                            className="bg-[#050507] border border-white/[0.05] rounded-xl pl-6 pr-12 py-4 text-[13px] font-black text-slate-400 focus:outline-none focus:border-indigo-500/30 transition-all appearance-none cursor-pointer uppercase tracking-widest"
                             value={timeframe}
                             onChange={(e) => setTimeframe(e.target.value)}
                         >
-                            <option value="5M" className="bg-slate-950 px-4 py-2">5分钟 (5M)</option>
-                            <option value="30M" className="bg-slate-950 px-4 py-2">30分钟 (30M)</option>
-                            <option value="DAY" className="bg-slate-950 px-4 py-2">日线 (DAY)</option>
+                            <option value="5M">5-Min</option>
+                            <option value="30M">30-Min</option>
+                            <option value="DAY">Daily</option>
                         </select>
                         <Clock className="absolute right-5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-600 pointer-events-none" />
                     </div>
 
-                    <motion.button 
-                        whileHover={{ scale: 1.02, backgroundColor: '#10b981' }}
-                        whileTap={{ scale: 0.98 }}
+                    <button 
                         onClick={handleAnalyze}
                         disabled={loading || !symbol}
-                        className="bg-emerald-500/90 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-600 text-black font-black py-4 px-10 rounded-2xl transition-all flex items-center gap-3 uppercase text-xs tracking-widest shadow-xl"
+                        className="bg-indigo-500 hover:bg-indigo-600 disabled:bg-slate-900 disabled:text-slate-700 text-white font-black py-4 px-10 rounded-xl transition-all flex items-center gap-3 uppercase text-[11px] tracking-widest shadow-[0_0_20px_rgba(99,102,241,0.2)]"
                     >
                         {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Cpu className="w-4 h-4" />}
-                        {loading ? '正在处理' : '执行缠论分析'}
-                    </motion.button>
+                        {loading ? 'PROCESSING' : 'EXECUTE AUDIT'}
+                    </button>
                 </div>
             </div>
 
-            {/* Main Content Area */}
-            <div className="flex-1">
+            {/* Content Display - Dynamic Height */}
+            <div className="relative">
                 <AnimatePresence mode="wait">
                     {error && (
                         <motion.div 
                             initial={{ opacity: 0, y: 10 }}
                             animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: -10 }}
-                            className="bg-rose-500/5 border border-rose-500/20 p-8 rounded-3xl flex flex-col gap-4 text-rose-400"
+                            className="bg-rose-500/5 border border-rose-500/10 p-10 rounded-3xl flex flex-col gap-6"
                         >
-                            <div className="flex items-center gap-4 text-sm font-black uppercase tracking-wider">
-                                <AlertCircle className="w-6 h-6 flex-shrink-0" />
-                                {error}
-                            </div>
-                            {result?.traceback && (
-                                <pre className="mt-4 p-6 bg-black/40 rounded-2xl text-[11px] font-mono overflow-x-auto border border-rose-500/10 text-rose-300/60 leading-relaxed max-h-[400px]">
-                                    {result.traceback}
-                                </pre>
-                            )}
+                             <div className="flex items-center gap-4 text-rose-500">
+                                <AlertCircle size={24} />
+                                <span className="text-[14px] font-black uppercase tracking-widest">{error}</span>
+                             </div>
+                             <p className="text-slate-600 text-[12px] font-bold">The analytical engine was unable to resolve the requested asset structure. Please verify the symbol identifier or check network connectivity.</p>
                         </motion.div>
                     )}
 
                     {!result && !loading && !error && (
-                        <motion.div 
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            className="min-h-[600px] border-2 border-dashed border-white/5 rounded-[3rem] flex flex-col items-center justify-center text-slate-700 gap-6 opacity-40"
-                        >
-                            <div className="w-24 h-24 bg-white/[0.02] rounded-full flex items-center justify-center border border-white/5">
-                                <Search className="w-10 h-10 opacity-20" />
-                            </div>
-                            <div className="text-center">
-                                <p className="text-sm font-black uppercase tracking-[0.4em]">输入证券标识符以开始</p>
-                                <p className="text-[11px] mt-2 font-bold uppercase italic tracking-widest leading-loose">支持 港股 / 美股 / A股 多数据源实时解析</p>
-                            </div>
+                        <motion.div className="border-2 border-dashed border-white/[0.03] rounded-[40px] flex flex-col items-center justify-center opacity-20 py-40">
+                            <BarChart3 size={64} className="text-slate-700 mb-8" />
+                            <p className="text-[12px] font-black uppercase tracking-[0.4em] text-slate-600">Awaiting Signal Input For Mapping</p>
                         </motion.div>
                     )}
 
                     {loading && (
-                        <motion.div 
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            className="min-h-[600px] glass-pro rounded-[3rem] flex flex-col items-center justify-center gap-10"
-                        >
-                            <div className="relative">
-                                <div className="w-24 h-24 border-[6px] border-emerald-500/10 border-t-emerald-500 rounded-full animate-spin shadow-[0_0_30px_rgba(16,185,129,0.1)]" />
-                                <div className="absolute inset-0 flex items-center justify-center">
-                                    <div className="w-12 h-12 bg-emerald-500/20 rounded-full blur-2xl animate-pulse" />
-                                </div>
-                            </div>
-                            <div className="text-center">
-                                <p className="text-white font-black tracking-[0.3em] text-sm uppercase animate-pulse">正在构建神经绘图结构...</p>
-                                <p className="text-slate-600 text-[10px] mt-4 font-black uppercase tracking-widest italic font-mono flex items-center justify-center gap-3">
-                                   <RefreshCw size={12} className="animate-spin" />
-                                   正在抓取 L1 高级行情管道
-                                </p>
-                            </div>
+                        <motion.div className="flex flex-col items-center justify-center gap-10 py-40 grayscale opacity-50">
+                             <div className="w-12 h-12 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                             <p className="text-[10px] font-black uppercase tracking-[0.3em] text-indigo-400 animate-pulse">Constructing Neural Geometry...</p>
                         </motion.div>
                     )}
 
                     {result && !loading && (
                         <motion.div 
-                            initial={{ opacity: 0, scale: 0.98 }}
+                            initial={{ opacity: 0, scale: 0.99 }}
                             animate={{ opacity: 1, scale: 1 }}
-                            className="flex flex-col gap-8"
+                            className="flex flex-col gap-10"
                         >
-                            {/* Analysis Information Bar */}
-                            <div className="flex items-center justify-between px-10 py-6 glass-pro rounded-3xl">
-                                <div className="flex items-center gap-10">
-                                    <div className="flex flex-col gap-1">
-                                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">证券焦点</span>
-                                        <span className="text-white font-mono font-black text-lg uppercase tracking-tighter">{result.symbol}</span>
+                            {/* Analytics Detail Card */}
+                            {result.metrics && (
+                                <div className="grid grid-cols-3 gap-6">
+                                    <div className="glass-pro rounded-2xl p-6 border-white/[0.03] flex flex-col gap-2">
+                                        <span className="text-[9px] font-black text-slate-600 tracking-[0.2em] uppercase">Calculation Time</span>
+                                        <span className="text-white font-mono font-black text-lg">{result.metrics.calculation_s}s</span>
                                     </div>
-                                    <div className="h-10 w-[1px] bg-white/5" />
-                                    <div className="flex flex-col gap-1">
-                                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">分析级别</span>
-                                        <span className="px-3 py-0.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[12px] font-black rounded-lg uppercase">{result.lv}</span>
+                                    <div className="glass-pro rounded-2xl p-6 border-white/[0.03] flex flex-col gap-2">
+                                        <span className="text-[9px] font-black text-slate-600 tracking-[0.2em] uppercase">Plotting Time</span>
+                                        <span className="text-white font-mono font-black text-lg">{result.metrics.plotting_s}s</span>
                                     </div>
-                                    <div className="h-10 w-[1px] bg-white/5" />
-                                    <div className="flex flex-col gap-1">
-                                        <span className="text-[10px] font-black uppercase tracking-widest text-slate-500">计算时间戳</span>
-                                        <span className="text-slate-300 text-[12px] font-mono font-bold tracking-tight"> {new Date(result.timestamp).toLocaleString()}</span>
+                                    <div className="glass-pro rounded-2xl p-6 border-white/[0.03] flex flex-col gap-2 relative group overflow-hidden">
+                                        <div className="absolute top-0 right-0 p-2 opacity-50"><BarChart3 size={12} /></div>
+                                        <span className="text-[9px] font-black text-indigo-400/80 tracking-[0.2em] uppercase">Total Latency</span>
+                                        <span className="text-indigo-400 font-mono font-black text-lg">{result.metrics.total_s}s</span>
                                     </div>
                                 </div>
-                                <button className="w-10 h-10 bg-slate-900 hover:bg-emerald-500/10 border border-white/5 rounded-xl flex items-center justify-center transition-all group">
-                                    <Maximize2 className="w-5 h-5 text-slate-500 group-hover:text-emerald-400" />
-                                </button>
-                            </div>
+                            )}
 
-                            {/* Chart Viewer */}
-                            <div className="relative group bg-slate-950 rounded-[3rem] overflow-hidden border border-white/5 p-6 shadow-2xl">
+                            {/* Main Chart Card - No height clipping */}
+                            <div className="bg-[#0a0a0c] p-10 rounded-[48px] border border-white/[0.05] group relative shadow-2xl transition-all duration-500 hover:border-indigo-500/20">
+                                <div className="absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-black/20 to-transparent pointer-events-none z-10 rounded-t-[48px]" />
+                                <div className="absolute inset-0 bg-indigo-500/[0.01] pointer-events-none rounded-[48px]" />
+                                
                                 <img 
                                     src={`http://localhost:8000${result.url}?t=${Date.now()}`} 
-                                    alt="Chanlun Strategy Map"
-                                    className="w-full h-auto rounded-[2rem] shadow-2xl transition-all duration-1000 group-hover:scale-[1.01]"
+                                    alt="Chanlun Strategy"
+                                    className="w-full h-auto rounded-[32px] shadow-3xl"
                                 />
-                                <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-700" />
+
+                                <div className="mt-12 flex items-center justify-between opacity-50 border-t border-white/[0.05] pt-8">
+                                     <p className="text-[9px] font-black uppercase tracking-[0.5em] text-slate-600">Multiframe Geometric Mapping Pipeline v2.4.0</p>
+                                     <button 
+                                        onClick={() => setIsExpanded(true)}
+                                        className="text-[10px] font-black text-indigo-400 uppercase tracking-widest hover:text-white transition-colors"
+                                     >
+                                         [ Expand to Full-Screen Mode ]
+                                     </button>
+                                </div>
                             </div>
                         </motion.div>
                     )}
                 </AnimatePresence>
             </div>
+
+            {/* KEEP MODAL AS OPTIONAL BACKUP */}
+            <AnimatePresence>
+                {isExpanded && result && (
+                    <motion.div 
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-[1000] bg-black/98 backdrop-blur-3xl flex flex-col p-10"
+                    >
+                        <div className="flex items-center justify-between mb-8 opacity-80">
+                            <div className="flex items-center gap-8">
+                                <div className="flex flex-col gap-1">
+                                    <span className="text-label text-slate-400">High Resolution Review</span>
+                                    <span className="text-white font-black text-2xl tracking-tighter uppercase italic">{result.symbol} • {result.lv}</span>
+                                </div>
+                            </div>
+                            <button 
+                                onClick={() => setIsExpanded(false)}
+                                className="w-16 h-16 bg-white/5 hover:bg-rose-500 text-white rounded-2xl flex items-center justify-center transition-all group"
+                            >
+                                <X className="w-8 h-8 group-hover:scale-110 transition-transform" />
+                            </button>
+                        </div>
+                        
+                        <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col items-center p-10 bg-slate-900/30 rounded-[64px] border border-white/[0.03]">
+                            <img 
+                                src={`http://localhost:8000${result.url}?t=${Date.now()}`} 
+                                alt="Expanded Chanlun Analysis"
+                                className="w-full h-auto shadow-[0_40px_100px_rgba(0,0,0,0.8)] rounded-2xl border border-white/[0.05]"
+                            />
+                        </div>
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </div>
     );
 }

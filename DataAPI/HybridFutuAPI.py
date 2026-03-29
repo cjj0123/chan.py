@@ -21,7 +21,7 @@ class HybridFutuAPI(CCommonStockApi):
         now = datetime.now()
         today_str = now.strftime("%Y-%m-%d")
         
-        # 🟢 [动态路由] 根据代码前缀分配在线增量接口 (美股优先使用 Schwab)
+        # 🟢 [动态路由] 根据代码前缀分配在线增量接口 (美股优先使用 Schwab, 港股/A股使用 Futu)
         online_api_cls = CFutuAPI
         if self.code.startswith('US.'):
             # 引入 SchwabAPI 避免循环依赖
@@ -29,7 +29,12 @@ class HybridFutuAPI(CCommonStockApi):
                 from DataAPI.SchwabAPI import CSchwabAPI
                 online_api_cls = CSchwabAPI
             except ImportError:
-                 print("⚠️ [HybridFutuAPI] CSchwabAPI 导入失败，降级回 CFutuAPI")
+                 print(f"⚠️ [HybridFutuAPI] {self.code} CSchwabAPI 导入失败，降级回 CFutuAPI")
+        elif self.code.startswith('HK.'):
+             online_api_cls = CFutuAPI
+        elif self.code.startswith('SH.') or self.code.startswith('SZ.'):
+             # 用户指定使用 Futu 补齐 A 股增量
+             online_api_cls = CFutuAPI
         
         # 1. 计算理论上的 SQLite 截止时间 (昨天)
         yesterday = now - timedelta(days=1)

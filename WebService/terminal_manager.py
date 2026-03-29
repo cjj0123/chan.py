@@ -256,7 +256,8 @@ class WebTerminalManager:
             return []
 
     def generate_analysis_chart(self, symbol: str, lv_str: str = '30M'):
-        """Generate a Chanlun chart for a specific symbol and timeframe."""
+        """Generate a Chanlun chart with high-precision bottleneck diagnostics."""
+        start_total = time.time()
         try:
             # Map string level to KL_TYPE
             lv_map = {
@@ -269,37 +270,19 @@ class WebTerminalManager:
             }
             target_lv = lv_map.get(lv_str.upper(), KL_TYPE.K_30M)
             
-            # Market routing and data source selection
+            # Market routing - Now Unified via Hybrid API
             symbol = symbol.upper()
-            if symbol.startswith("US."):
-                src = DATA_SRC.SCHWAB
-            elif symbol.startswith("HK."):
-                src = DATA_SRC.FUTU
-            elif symbol.startswith("SH.") or symbol.startswith("SZ."):
-                src = DATA_SRC.BAO_STOCK
+            if symbol.startswith("HK.") or symbol.startswith("SH.") or symbol.startswith("SZ.") or symbol.startswith("US."):
+                src = "custom:HybridFutuAPI.HybridFutuAPI"
             else:
-                # Heuristic for un-prefixed symbols
+                # Handle raw digit input by appending prefix and using Hybrid source
                 if any(c.isdigit() for c in symbol) and len(symbol) <= 6:
-                    # Likely CN/HK stock
-                    if len(symbol) == 5:
-                        symbol = f"HK.{symbol}"
-                        src = DATA_SRC.FUTU
-                    elif symbol.startswith('6'):
-                        symbol = f"SH.{symbol}"
-                        src = DATA_SRC.BAO_STOCK
-                    else:
-                        symbol = f"SZ.{symbol}"
-                        src = DATA_SRC.BAO_STOCK
-                else:
-                    # Likely US stock
-                    symbol = f"US.{symbol}"
-                    src = DATA_SRC.SCHWAB
+                    if len(symbol) == 5: symbol = f"HK.{symbol}"
+                    elif symbol.startswith('6'): symbol = f"SH.{symbol}"
+                    else: symbol = f"SZ.{symbol}"
+                else: symbol = f"US.{symbol}"
+                src = "custom:HybridFutuAPI.HybridFutuAPI"
             
-            # Dynamic data window selection
-            # Day level: 365 days (1 year) for full macro structure
-            # 30M level: 90 days (3 months)
-            # 5M level: 30 days (1 month) to optimize speed
-            # 1M level: 7 days
             days_map = {
                 KL_TYPE.K_DAY: 365,
                 KL_TYPE.K_60M: 120,
@@ -309,7 +292,8 @@ class WebTerminalManager:
             }
             lookback_days = days_map.get(target_lv, 90)
             
-            # Initialize CChan for analysis
+            # STEP 1: CChan Initialization (Data Fetching & Calculation)
+            t_chan_start = time.time()
             chan = CChan(
                 code=symbol,
                 begin_time=(datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d"),
@@ -317,31 +301,22 @@ class WebTerminalManager:
                 lv_list=[target_lv],
                 config=None
             )
+            t_chan_end = time.time()
+            calc_time = t_chan_end - t_chan_start
             
-            # Generate chart
+            # STEP 2: Plot Generation
+            t_plot_start = time.time()
             plot_config = {
                 target_lv: {
-                    'plot_kline': True,
-                    'plot_bi': True,
-                    'plot_seg': True,
-                    'plot_zs': True,
-                    'plot_bsp': True,
-                    'plot_macd': True,
+                    'plot_kline': True, 'plot_bi': True, 'plot_seg': True,
+                    'plot_zs': True, 'plot_bsp': True, 'plot_macd': True,
                 }
             }
-            
-            # Adjust figure size for web display (more compact/balanced)
-            plot_para = {
-                'figure': {
-                    'w': 18,
-                    'h': 10,
-                    'macd_h': 0.25
-                }
-            }
+            # Balanced figure for web (14x8)
+            plot_para = {'figure': {'w': 16, 'h': 9, 'macd_h': 0.25}}
             
             driver = CPlotDriver(chan, plot_config=plot_config, plot_para=plot_para)
             
-            # Save to static directory
             charts_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "App/charts")
             os.makedirs(charts_dir, exist_ok=True)
             
@@ -349,21 +324,28 @@ class WebTerminalManager:
             filepath = os.path.join(charts_dir, filename)
             
             driver.save2img(filepath)
+            t_plot_end = time.time()
+            plot_time = t_plot_end - t_plot_start
+            
+            total_time = time.time() - start_total
+            print(f"📊 [PROFILER] {symbol} Analysis: Total={total_time:.2f}s | Calc={calc_time:.2f}s | Plot={plot_time:.2f}s")
             
             return {
                 "success": True,
                 "url": f"/charts/{filename}",
                 "symbol": symbol,
                 "lv": lv_str,
+                "metrics": {
+                    "calculation_s": round(calc_time, 2),
+                    "plotting_s": round(plot_time, 2),
+                    "total_s": round(total_time, 2)
+                },
                 "timestamp": datetime.now().isoformat()
             }
             
         except Exception as e:
             logging.error(f"Failed to generate analysis chart for {symbol}: {e}")
-            return {
-                "success": False,
-                "error": str(e)
-            }
+            return {"success": False, "error": str(e)}
 
     def stop_monitors(self):
         self.hk_controller.stop()

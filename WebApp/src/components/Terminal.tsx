@@ -45,48 +45,54 @@ export default function Terminal() {
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#0d0d0f]/80 backdrop-blur-xl rounded-xl border border-white/10 overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.5)]">
-      <div className="flex items-center justify-between px-5 py-3 border-b border-white/5 bg-gradient-to-r from-[#161618] to-[#0d0d0f]">
+    <div className="flex flex-col h-full bg-[#0a0a0c] rounded-2xl border border-white/[0.05] overflow-hidden shadow-2xl relative">
+      <div className="scan-line-overlay pointer-events-none"></div>
+      <div className="flex items-center justify-between px-6 py-4 border-b border-white/[0.05] bg-white/[0.02]">
         <div className="flex items-center gap-3">
-          <div className="p-1.5 rounded-md bg-emerald-500/10 border border-emerald-500/20">
-            <Cpu size={14} className="text-emerald-400" />
+          <div className="p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
+            <Cpu size={16} className="text-emerald-400" />
           </div>
-          <span className="text-[11px] font-bold uppercase tracking-[0.2em] text-slate-300">实时交易控制台</span>
+          <span className="text-[11px] font-black uppercase tracking-[0.2em] text-white italic">Core Live Execution Shell</span>
         </div>
         <div className="flex items-center gap-4">
-          <div className="flex gap-1.5">
-            <div className="w-1.5 h-1.5 rounded-full bg-slate-800"></div>
-            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)] animate-pulse"></div>
+          <div className="flex items-center gap-2 px-3 py-1 bg-emerald-500/5 rounded-full border border-emerald-500/10">
+            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
+            <span className="text-[9px] text-emerald-500/80 font-mono font-bold">STREAM_STABLE</span>
           </div>
-          <span className="text-[10px] text-emerald-500/70 font-mono tracking-tighter italic">SYS_LINK_STABLE</span>
         </div>
       </div>
       
       <div 
         ref={scrollRef}
-        className="flex-1 overflow-y-auto p-5 font-mono text-[13px] leading-relaxed terminal-scroll bg-[#080809]/50"
+        className="flex-1 overflow-y-auto p-6 font-mono text-[13px] leading-relaxed custom-scrollbar bg-[#050507]/30 selection:bg-emerald-500/20"
       >
         {logs.length === 0 && (
-          <div className="text-slate-700 flex flex-col items-center justify-center h-full gap-4 opacity-40">
-             <Activity size={32} className="animate-pulse text-emerald-500/20" />
-             <div className="flex flex-col items-center">
-                <p className="text-xs uppercase tracking-[0.3em] font-bold italic">等待指令流中...</p>
-                <p className="text-[9px] mt-1 font-mono uppercase">Neural Engine Connection Established / Standby</p>
+          <div className="flex flex-col items-center justify-center h-full gap-5 opacity-20 transition-opacity duration-1000 grayscale">
+             <Activity size={48} className="animate-breath text-emerald-500" />
+             <div className="flex flex-col items-center gap-2">
+                <p className="text-[11px] font-black uppercase tracking-[0.4em] italic">Awaiting Signal Stream</p>
+                <div className="flex items-center gap-2">
+                   <div className="w-8 h-[1px] bg-emerald-500/30"></div>
+                   <p className="text-[8px] font-mono uppercase tracking-widest">Connection: NOMINAL</p>
+                   <div className="w-8 h-[1px] bg-emerald-500/30"></div>
+                </div>
              </div>
           </div>
         )}
         {logs.map((log, i) => (
-          <div key={i} className="mb-2 flex gap-4 group hover:bg-white/[0.02] transition-colors py-0.5 rounded px-2 -mx-2">
-            <span className="text-slate-600 shrink-0 text-[10px] font-medium pt-1">[{log.timestamp}]</span>
-            <div className={`shrink-0 flex items-center gap-1.5 w-12`}>
-               <div className={`w-1 h-3 rounded-full ${log.source === '港股' ? 'bg-blue-500' : 'bg-orange-500'}`} />
-               <span className={`font-bold text-[10px] ${log.source === '港股' ? 'text-blue-400' : 'text-orange-400'}`}>
-                 {log.source}
+          <div key={i} className="mb-1.5 flex gap-5 group hover:bg-white/[0.02] transition-all py-1 rounded-lg px-3 -mx-3 border border-transparent hover:border-white/[0.03]">
+            <span className="text-slate-600 shrink-0 text-[10px] font-bold font-mono pt-1">
+              {log.timestamp}
+            </span>
+            <div className="shrink-0 flex items-center gap-2 w-14">
+               <div className={`w-[2px] h-3 rounded-full ${log.source === '港股' ? 'bg-blue-500' : 'bg-orange-500'}`} />
+               <span className={`font-black text-[9px] uppercase tracking-tighter ${log.source === '港股' ? 'text-blue-500' : 'text-orange-500'}`}>
+                 {log.source === '港股' ? 'HK_MKT' : 'CN_MKT'}
                </span>
             </div>
-            <span className={`flex-1 break-all tracking-tight ${
-               log.type === 'trade' ? 'text-emerald-400 drop-shadow-[0_0_5px_rgba(52,211,153,0.3)]' : 
-               log.type === 'error' ? 'text-rose-400' : 
+            <span className={`flex-1 break-all tracking-tight font-medium ${
+               log.type === 'trade' ? 'text-emerald-400 font-bold' : 
+               log.type === 'error' ? 'text-rose-400 font-bold' : 
                log.type === 'warning' ? 'text-amber-400' : 'text-slate-300'
             }`}>
               {log.message}
