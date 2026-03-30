@@ -34,8 +34,8 @@ export default function Scanner() {
   }, []);
 
   const filteredSignals = signals.filter(s => 
-    s.stock_code.toLowerCase().includes(filter.toLowerCase()) ||
-    s.bstype.toLowerCase().includes(filter.toLowerCase())
+    (s.stock_code && s.stock_code.toLowerCase().includes(filter.toLowerCase())) ||
+    (s.bstype && s.bstype.toLowerCase().includes(filter.toLowerCase()))
   );
 
   return (

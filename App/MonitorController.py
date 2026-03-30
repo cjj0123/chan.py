@@ -817,13 +817,15 @@ class MarketMonitorController(QObject):
                 except Exception as snap_e:
                     self.log_message.emit(f"⚠️ [A股-行情] 获取实时快照失败: {snap_e}")
 
-            available = 0.0; total = 0.0; today_pl = 0.0
-            if ret_acc == RET_OK and not acc_data.empty:
-                available = float(acc_data['cash'].iloc[0])
-                total = float(acc_data['total_assets'].iloc[0])
-                today_pl = float(acc_data.iloc[0].get('today_pl', 0.0))
+            if not hasattr(self, '_cached_acc_funds'):
+                self._cached_acc_funds = {'available': 0.0, 'total': 0.0, 'today_pl': 0.0}
 
-            self.funds_updated.emit(available, total, today_pl, positions)
+            if ret_acc == RET_OK and not acc_data.empty:
+                self._cached_acc_funds['available'] = float(acc_data['cash'].iloc[0])
+                self._cached_acc_funds['total'] = float(acc_data['total_assets'].iloc[0])
+                self._cached_acc_funds['today_pl'] = float(acc_data.iloc[0].get('today_pl', 0.0))
+
+            self.funds_updated.emit(self._cached_acc_funds['available'], self._cached_acc_funds['total'], self._cached_acc_funds['today_pl'], positions)
         except Exception as e:
             self.log_message.emit(f"⚠️ [A股-交易] 资产查询失败: {e}")
 
@@ -895,8 +897,9 @@ class MarketMonitorController(QObject):
             if not hasattr(self, '_last_atr_summary_time'):
                 self._last_atr_summary_time = time.time() - 3600 # 初始立刻触发
                 
-            if time.time() - self._last_atr_summary_time >= 1800 and getattr(self, 'position_trackers', {}):
-                self.log_message.emit(f"🔍 [A股-风控] ATR心跳: 正在为 {len(self.position_trackers)} 只标的提供动态止损监控。")
+            if time.time() - self._last_atr_summary_time >= 60:
+                tracker_count = len(getattr(self, 'position_trackers', {}))
+                self.log_message.emit(f"🔍 [A股-风控] ATR心跳: 正在为 {tracker_count} 只标的提供动态止损监控。")
                 self._last_atr_summary_time = time.time()
 
             refresh = (self.trd_env == TrdEnv.SIMULATE)

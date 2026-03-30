@@ -15,20 +15,44 @@ export default function Terminal() {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const ws = new WebSocket('ws://localhost:8000/ws/logs');
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
-      if (data.type === 'log') {
-        const timestamp = new Date().toLocaleTimeString('zh-CN', { hour12: false });
-        setLogs(prev => [...prev, {
-          source: data.source === 'HK' ? '港股' : 'A股',
-          message: data.message,
-          timestamp: timestamp,
-          type: determineLogType(data.message)
-        }].slice(-300));
+    let ws: WebSocket;
+
+    // Fetch historical logs first
+    fetch('http://localhost:8000/api/logs')
+      .then(res => res.json())
+      .then(data => {
+        if (data.logs && Array.isArray(data.logs)) {
+          const historicalLogs = data.logs.map((log: any) => ({
+            source: log.source === 'HK' ? '港股' : 'A股',
+            message: log.message,
+            timestamp: log.time_str || new Date(log.timestamp * 1000).toLocaleTimeString('zh-CN', { hour12: false }),
+            type: determineLogType(log.message)
+          })).slice(-300);
+          setLogs(historicalLogs);
+        }
+
+        // Start WebSocket after fetching historical logs
+        ws = new WebSocket('ws://localhost:8000/ws/logs');
+        ws.onmessage = (event) => {
+          const wsData = JSON.parse(event.data);
+          if (wsData.type === 'log') {
+            const timestamp = wsData.time_str || new Date().toLocaleTimeString('zh-CN', { hour12: false });
+            setLogs(prev => [...prev, {
+              source: wsData.source === 'HK' ? '港股' : 'A股',
+              message: wsData.message,
+              timestamp: timestamp,
+              type: determineLogType(wsData.message)
+            }].slice(-300));
+          }
+        };
+      })
+      .catch(err => console.error("Failed to fetch historical logs:", err));
+
+    return () => {
+      if (ws) {
+        ws.close();
       }
     };
-    return () => ws.close();
   }, []);
 
   useEffect(() => {

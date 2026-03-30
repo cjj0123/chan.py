@@ -103,6 +103,13 @@ async def get_signals():
         return {"signals": signals}
     return {"signals": []}
 
+@app.get("/api/logs")
+async def get_logs():
+    # Fetch recent logs from cache
+    if terminal_manager:
+        return {"logs": terminal_manager.recent_logs}
+    return {"logs": []}
+
 @app.get("/api/analyze/{symbol}")
 async def analyze_symbol(symbol: str, lv: str = "30M"):
     if terminal_manager:

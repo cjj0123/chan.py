@@ -34,6 +34,7 @@ class WebTerminalManager:
         self.HKD_TO_CNY = 0.92
         self.MAX_CAPACITY = 300
         self.start_time = time.time()
+        self.recent_logs = []
         
         # Initialize HK Controller
         # Initialize HK Controller
@@ -154,12 +155,17 @@ class WebTerminalManager:
 
 
     def send_log(self, source: str, message: str):
+        time_str = datetime.now().strftime('%H:%M:%S')
         payload = {
             "type": "log",
             "source": source,
             "message": message,
-            "timestamp": time.time()
+            "timestamp": time.time(),
+            "time_str": time_str
         }
+        self.recent_logs.append(payload)
+        if len(self.recent_logs) > 1000:
+            self.recent_logs.pop(0)
         try:
             # Use run_coroutine_threadsafe to send from potentially background threads
             if self.loop and self.loop.is_running():
@@ -245,26 +251,7 @@ class WebTerminalManager:
             results = []
             for _, row in df.iterrows():
                 try:
-                    raw_date = row['add_date']
-                    # Use pandas aware handling if it's already a Timestamp
-                    if hasattr(raw_date, 'to_pydatetime'):
-                        dt = raw_date.to_pydatetime()
-                    elif isinstance(raw_date, str):
-                        dt = datetime.strptime(raw_date, '%Y-%m-%d %H:%M:%S')
-                    else:
-                        dt = raw_date
-                    
-                    # Exclude weekends
-                    if dt.weekday() >= 5: 
-                        continue
-                    
-                    # Check trading hours
-                    time_str = dt.strftime('%H:%M')
-                    is_morning = "09:30" <= time_str <= "12:00"
-                    is_afternoon = "13:00" <= time_str <= "16:00"
-                    
-                    if is_morning or is_afternoon:
-                        results.append(row.to_dict())
+                    results.append(row.to_dict())
                 except Exception as e:
                     logging.error(f"Error processing signal row: {e}")
                     results.append(row.to_dict()) # Fallback
@@ -272,7 +259,50 @@ class WebTerminalManager:
             return results
         except Exception as e:
             logging.error(f"Error fetching signals from DB: {e}")
-            return []
+            
+            # --- Fallback to discovered_signals.json if DB is unavailable (e.g., ext drive unplugged) ---
+            print(f"DEBUG: Attempting to load fallback signals from discovered_signals.json due to DB error.")
+            import json
+            import os
+            
+            fallback_results = []
+            try:
+                if os.path.exists("discovered_signals.json"):
+                    with open("discovered_signals.json", "r") as f:
+                        data = json.load(f)
+                        # Extract signals
+                        for k, dt_str in data.items():
+                            # Typical key layout: STRICT_HK.00358_2026-03-20 15:30:00_1 or LOOSE_HK.02580_1p
+                            # We can just extract the symbol by splitting '.' and '_'
+                            parts = k.split('.')
+                            if len(parts) >= 2:
+                                code_part = parts[-1].split('_')[0]
+                                prefix = parts[-2].split('_')[-1]
+                                stock_code = f"{prefix}.{code_part}"
+                                
+                                bstype = "1"
+                                if "_1p" in k: bstype = "1p"
+                                elif "_2s" in k: bstype = "2s"
+                                elif "_2" in k: bstype = "2"
+                                elif "_3a" in k: bstype = "3a"
+                                elif "_3b" in k: bstype = "3b"
+                                
+                                fallback_results.append({
+                                    "stock_code": stock_code,
+                                    "add_date": dt_str,
+                                    "bstype": bstype,
+                                    "lv": "30M",         
+                                    "open_price": 0.0,
+                                    "model_score_before": 85 if "STRICT" in k else 65,
+                                    "status": "pending",
+                                    "ml_score": 85 if "STRICT" in k else 65
+                                })
+            except Exception as j_err:
+                print(f"ERROR: Fallback JSON parsing failed: {j_err}")
+                
+            # Sort by date descending
+            fallback_results.sort(key=lambda x: x["add_date"], reverse=True)
+            return fallback_results[:limit]
 
     def generate_analysis_chart(self, symbol: str, lv_str: str = '30M'):
         """Generate a Chanlun chart with high-precision bottleneck diagnostics."""

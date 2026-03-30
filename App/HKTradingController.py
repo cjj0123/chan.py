@@ -2228,17 +2228,17 @@ class HKTradingController(QObject):
         if not TRADING_CONFIG.get('enable_stop_loss', True):
             return
             
-        if not hasattr(self, 'position_trackers') or not self.position_trackers:
-            return
-
         # 周期性显示追踪信息保护心跳
         if not hasattr(self, '_last_atr_summary_time'):
             self._last_atr_summary_time = time.time() - 3600 # 初始立刻触发
             
-        import time
-        if time.time() - self._last_atr_summary_time >= 1800 and self.position_trackers:
-            self.log_message.emit(f"🔍 [港股-风控] ATR心跳: 正在为 {len(self.position_trackers)} 只标的提供动态止损监控。")
+        if time.time() - self._last_atr_summary_time >= 60:
+            tracker_count = len(getattr(self, 'position_trackers', {}))
+            self.log_message.emit(f"🔍 [港股-风控] ATR心跳: 正在为 {tracker_count} 只标的提供动态止损监控。")
             self._last_atr_summary_time = time.time()
+
+        if not hasattr(self, 'position_trackers') or not self.position_trackers:
+            return
 
         codes_to_check = list(self.position_trackers.keys())
         for code in codes_to_check:
@@ -2498,7 +2498,8 @@ class HKTradingController(QObject):
                                 'qty': qty,
                                 'mkt_value': mkt_val,
                                 'pnl_ratio': safe_float(row.get('pl_ratio', 0.0)),
-                                'avg_cost': safe_float(row.get('cost_price', 0.0))
+                                'avg_cost': safe_float(row.get('cost_price', 0.0)),
+                                'mkt_price': safe_float(row.get('nominal_price', 0.0))
                             })
             else:
                 # 💡 [影子账本自愈] API 失败时，保留之前的影子缓存
@@ -2512,7 +2513,8 @@ class HKTradingController(QObject):
                             'qty': ghost_qty,
                             'mkt_value': 0.0,
                             'pnl_ratio': 0.0,
-                            'avg_cost': 0.0
+                            'avg_cost': 0.0,
+                            'mkt_price': 0.0
                         })
             
             # 🛡️ [影子账本 - 强制隔离区穿透]
@@ -2531,7 +2533,8 @@ class HKTradingController(QObject):
                         'qty': m_info['qty'],
                         'mkt_value': m_info['qty'] * m_info['cost'],
                         'pnl_ratio': 0.0,
-                        'avg_cost': m_info['cost']
+                        'avg_cost': m_info['cost'],
+                        'mkt_price': m_info['cost']
                     })
                     self.log_message.emit(f"🛡️ [影子账本-HK] 已从内存加载硬核底仓: {m_code}")
 
@@ -2561,13 +2564,15 @@ class HKTradingController(QObject):
                     self.log_message.emit(f"⚠️ [HK-行情] 获取实时快照失败: {snap_e}")
             
             # 发射信号同步 UI
-            available = 0.0; total = 0.0; today_pl = 0.0
+            if not hasattr(self, '_cached_acc_funds'):
+                self._cached_acc_funds = {'available': 0.0, 'total': 0.0, 'today_pl': 0.0}
+
             if ret_acc == RET_OK and not acc_data.empty:
-                available = float(acc_data['cash'].iloc[0])
-                total = float(acc_data['total_assets'].iloc[0])
-                today_pl = float(acc_data.iloc[0].get('today_pl', 0.0))
+                self._cached_acc_funds['available'] = float(acc_data['cash'].iloc[0])
+                self._cached_acc_funds['total'] = float(acc_data['total_assets'].iloc[0])
+                self._cached_acc_funds['today_pl'] = float(acc_data.iloc[0].get('today_pl', 0.0))
             
-            self.funds_updated.emit(available, total, today_pl, positions_list)
+            self.funds_updated.emit(self._cached_acc_funds['available'], self._cached_acc_funds['total'], self._cached_acc_funds['today_pl'], positions_list)
                 
             # 🧹 [持仓大扫除] 清理 position_trackers 中的僵尸代码
             if hasattr(self, 'position_trackers'):
