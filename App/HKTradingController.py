@@ -160,6 +160,9 @@ class HKTradingController(QObject):
         self.position_trackers = {}
         self.position_cache = {} # { 'HK.00700': 100 }
         self.last_pos_sync_time = 0
+        self._account_snapshot_cache = None
+        self._account_snapshot_cache_ts = 0.0
+        self._account_snapshot_cache_ttl = 12.0
         self.structure_barrier = {}  # 🛡️ [风控锁区 Phase 8] 用于防止同一大下行笔延续段多次止损重复下单损耗
         
         # --- 队列缓冲与风控加固 ---
@@ -220,7 +223,7 @@ class HKTradingController(QObject):
                     self._trd_acc_id = int(filtered.iloc[0]['acc_id'])
                     self.log_message.emit(f"🎯 [HK-账户自检] 已锁定账户: {self._trd_acc_id} ({env_str})")
             
-            # 🚀 [核心补强] 绑定成交与成交明细异步推送监听器 (影子账本)
+            # 绑定成交与成交明细推送监听器，用于成交后触发真实持仓刷新
             if self._trd_ctx:
                 from futu import TradeOrderHandlerBase, TradeDealHandlerBase
                 class HKTradePushHandler(TradeOrderHandlerBase):
@@ -245,24 +248,14 @@ class HKTradingController(QObject):
                     def on_recv_rsp(self, rsp_str):
                         ret, data = super().on_recv_rsp(rsp_str)
                         if ret == RET_OK:
-                            for _, row in data.iterrows():
-                                code = row['code']
-                                side = row['trd_side']
-                                qty = int(row['qty'])
-                                with self.controller.futu_api_lock:
-                                    old_val = self.controller.position_cache.get(code, 0)
-                                    if side == TrdSide.BUY:
-                                        self.controller.position_cache[code] = old_val + qty
-                                    elif side == TrdSide.SELL:
-                                        self.controller.position_cache[code] = max(0, old_val - qty)
-                                    self.controller.log_message.emit(f"✅ [HK-影子账本] {code} {side} {qty}股，更新仓位: {old_val} -> {self.controller.position_cache[code]}")
+                            asyncio.run_coroutine_threadsafe(self.controller._sync_positions_async(), asyncio.get_event_loop())
                         return ret, data
                 
                 self._trade_handler = HKTradePushHandler(self)
                 self._deal_handler = HKTradeDealHandler(self)
                 self._trd_ctx.set_handler(self._trade_handler)
                 self._trd_ctx.set_handler(self._deal_handler)
-                self.log_message.emit("🛡️ [HK-推送] 影子账本双监听服务已开启")
+                self.log_message.emit("🛡️ [HK-推送] 成交监听服务已开启")
         return self._trd_ctx
 
     def _subscribe_stock_quote(self, code: str):
@@ -2432,88 +2425,62 @@ class HKTradingController(QObject):
             return 0.0
 
     def get_position_quantity(self, code: str) -> int:
-        """
-        🚀 [影子账本查询] 获取股票持仓数量
-        耗时 0ms，彻底避开 API 限频与结算延迟。
-        """
+        """获取股票持仓数量，优先使用最近一次真实同步缓存。"""
         return self.position_cache.get(code, 0)
-             
-        try:
-            with self.futu_api_lock:
-                refresh = (self.trd_env == TrdEnv.SIMULATE)
-                # 💡 [核心修复] 先刷新账户信息唤醒后端
-                if refresh:
-                    self.trd_ctx.accinfo_query(acc_id=self._trd_acc_id, trd_env=self.trd_env, refresh_cache=True)
-                    time.sleep(1.0) # ⏳ [Resilience] 给予后端同步持仓列表的缓冲时间
-                
-                # 💡 [补强] 尝试带 refresh 抓取，若失败且是模拟盘，重试一次
-                ret, data = self.trd_ctx.position_list_query(acc_id=self._trd_acc_id, trd_env=self.trd_env, refresh_cache=refresh)
-                if ret != RET_OK and refresh:
-                    time.sleep(1.0)
-                    ret, data = self.trd_ctx.position_list_query(acc_id=self._trd_acc_id, trd_env=self.trd_env, refresh_cache=True)
-
-                if ret == RET_OK and not data.empty:
-                    position = data[data['code'] == code]
-                    if not position.empty:
-                        qty = int(position.iloc[0]['qty'])
-                        self.position_cache[code] = qty
-                        return qty
-                elif ret != RET_OK:
-                    logger.warning(f"获取持仓 API 返回异常 {code}: {data}, 将返回内存缓存值")
-            return self.position_cache.get(code, 0)
-        except Exception as e:
-            logger.error(f"获取持仓异常 {code}: {e}")
-            return self.position_cache.get(code, 0)
 
     async def _sync_positions_async(self):
         """主动从柜台同步全量持仓快照到内存缓存，并清理僵尸追踪标的"""
         try:
             from futu import RET_OK
             loop = asyncio.get_event_loop()
-            
-            def query_positions_and_funds():
-                with self.futu_api_lock:
-                    refresh = (self.trd_env == TrdEnv.SIMULATE)
-                    # 💡 [核心修复] 强制双重刷新：accinfo 唤醒 -> position_list 同步
-                    ret_acc, acc_data = self.trd_ctx.accinfo_query(acc_id=self._trd_acc_id, trd_env=self.trd_env, refresh_cache=refresh)
-                    
-                    if refresh:
-                        time.sleep(1.0) # ⏳ [Resilience] 模拟盘必须等待，否则持仓列表大概率不刷新
-                    
-                    # 💡 [核心补强] position_list 也使用 refresh_cache=refresh，但需处理“未准备好”的报错
-                    ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=self._trd_acc_id, trd_env=self.trd_env, refresh_cache=refresh)
-                    
-                    # 💡 [容错自愈] 若 refresh 模式下 pos 报错“未准备好”，等待并重试一次 refresh
-                    if ret_pos != RET_OK and refresh:
-                        self.log_message.emit("⌛ [HK-同步] 持仓数据尚未就绪，正在重试强制刷新...")
-                        time.sleep(1.0)
-                        ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=self._trd_acc_id, trd_env=self.trd_env, refresh_cache=True)
-                        
-                    # 💡 [最终兜底] 若 refresh 依旧失败，尝试读一次本地缓存模式
-                    if ret_pos != RET_OK and refresh:
-                        ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=self._trd_acc_id, trd_env=self.trd_env, refresh_cache=False)
-                    
-                    return (ret_pos, pos_data), (ret_acc, acc_data)
-            
-            # 🚀 [影子账本-HK-预览] 在同步前先加载底仓，确保 UI 响应极速
-            manual_hk_pos = {
-                'HK.00699': {'qty': 5000, 'cost': 14.31, 'name': '均胜电子'}
-            }
-            preview_positions = []
-            for m_code, m_info in manual_hk_pos.items():
-                preview_positions.append({
-                    'symbol': m_code.split('.')[-1],
-                    'code': m_code,
-                    'name': m_info['name'],
-                    'qty': m_info['qty'],
-                    'mkt_value': m_info['qty'] * m_info['cost'],
-                    'pnl_ratio': 0.0,
-                    'avg_cost': m_info['cost']
-                })
-            # 发射一次预览信号，防止 API 挂起导致 UI 长时间黑屏
-            self.funds_updated.emit(0.0, 0.0, 0.0, preview_positions)
+            now_ts = time.time()
+            snapshot_source = "live"
 
-            (ret_pos, pos_data), (ret_acc, acc_data) = await loop.run_in_executor(None, query_positions_and_funds)
+            if self._account_snapshot_cache and (now_ts - self._account_snapshot_cache_ts) < self._account_snapshot_cache_ttl:
+                ret_pos, pos_data = self._account_snapshot_cache['ret_pos'], self._account_snapshot_cache['pos_data']
+                ret_acc, acc_data = self._account_snapshot_cache['ret_acc'], self._account_snapshot_cache['acc_data']
+                snapshot_source = "cache"
+            else:
+                def query_positions_and_funds():
+                    with self.futu_api_lock:
+                        refresh = (self.trd_env == TrdEnv.SIMULATE)
+                        # 💡 [核心修复] 强制双重刷新：accinfo 唤醒 -> position_list 同步
+                        ret_acc, acc_data = self.trd_ctx.accinfo_query(acc_id=self._trd_acc_id, trd_env=self.trd_env, refresh_cache=refresh)
+                        
+                        if refresh:
+                            time.sleep(1.0) # ⏳ [Resilience] 模拟盘必须等待，否则持仓列表大概率不刷新
+                        
+                        # 💡 [核心补强] position_list 也使用 refresh_cache=refresh，但需处理“未准备好”的报错
+                        ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=self._trd_acc_id, trd_env=self.trd_env, refresh_cache=refresh)
+                        
+                        # 💡 [容错自愈] 若 refresh 模式下 pos 报错“未准备好”，等待并重试一次 refresh
+                        if ret_pos != RET_OK and refresh:
+                            self.log_message.emit("⌛ [HK-同步] 持仓数据尚未就绪，正在重试强制刷新...")
+                            time.sleep(1.0)
+                            ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=self._trd_acc_id, trd_env=self.trd_env, refresh_cache=True)
+                            
+                        # 💡 [最终兜底] 若 refresh 依旧失败，尝试读一次本地缓存模式
+                        if ret_pos != RET_OK and refresh:
+                            ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=self._trd_acc_id, trd_env=self.trd_env, refresh_cache=False)
+                        
+                        return (ret_pos, pos_data), (ret_acc, acc_data)
+                
+                (ret_pos, pos_data), (ret_acc, acc_data) = await loop.run_in_executor(None, query_positions_and_funds)
+
+                if ret_pos == RET_OK and ret_acc == RET_OK:
+                    self._account_snapshot_cache = {
+                        'ret_pos': ret_pos,
+                        'pos_data': pos_data.copy(deep=True),
+                        'ret_acc': ret_acc,
+                        'acc_data': acc_data.copy(deep=True),
+                    }
+                    self._account_snapshot_cache_ts = now_ts
+                elif self._account_snapshot_cache:
+                    cached_age = round(now_ts - self._account_snapshot_cache_ts, 1)
+                    self.log_message.emit(f"⚠️ [HK-同步] 柜台查询受限，已回退最近真实缓存 ({cached_age:.1f}s)")
+                    ret_pos, pos_data = self._account_snapshot_cache['ret_pos'], self._account_snapshot_cache['pos_data']
+                    ret_acc, acc_data = self._account_snapshot_cache['ret_acc'], self._account_snapshot_cache['acc_data']
+                    snapshot_source = "cache_fallback"
             
             def safe_float(v, default=0.0):
                 try:
@@ -2526,7 +2493,7 @@ class HKTradingController(QObject):
             positions_list = []
             total_pos_mkt_val = 0.0
 
-            if ret_pos == RET_OK:
+            if ret_pos == RET_OK and not pos_data.empty:
                 if not pos_data.empty:
                     for _, row in pos_data.iterrows():
                         code = row['code']
@@ -2545,47 +2512,17 @@ class HKTradingController(QObject):
                                 'avg_cost': safe_float(row.get('cost_price', 0.0)),
                                 'mkt_price': safe_float(row.get('nominal_price', 0.0))
                             })
-            else:
-                # 💡 [影子账本自愈] API 失败时，保留之前的影子缓存
-                for ghost_code, ghost_qty in self.position_cache.items():
-                    if ghost_qty > 0:
-                        new_cache[ghost_code] = ghost_qty
-                        positions_list.append({
-                            'symbol': ghost_code.split('.')[-1],
-                            'code': ghost_code,
-                            'name': '影子持仓保持',
-                            'qty': ghost_qty,
-                            'mkt_value': 0.0,
-                            'pnl_ratio': 0.0,
-                            'avg_cost': 0.0,
-                            'mkt_price': 0.0
-                        })
-            
-            # 🛡️ [影子账本 - 强制隔离区穿透]
-            # 即使 API 返回空，也根据 hard-coded 的底仓进行补齐展示
-            manual_hk_pos = {
-                'HK.00699': {'qty': 5000, 'cost': 14.31, 'name': '均胜电子'}
-            }
-            for m_code, m_info in manual_hk_pos.items():
-                # 检查是否已在列表中 (避免重复)
-                if not any(p['code'] == m_code for p in positions_list):
-                    new_cache[m_code] = m_info['qty']
-                    positions_list.append({
-                        'symbol': m_code.split('.')[-1],
-                        'code': m_code,
-                        'name': m_info['name'],
-                        'qty': m_info['qty'],
-                        'mkt_value': m_info['qty'] * m_info['cost'],
-                        'pnl_ratio': 0.0,
-                        'avg_cost': m_info['cost'],
-                        'mkt_price': m_info['cost']
-                    })
-                    self.log_message.emit(f"🛡️ [影子账本-HK] 已从内存加载硬核底仓: {m_code}")
-
             self.position_cache = new_cache
             self.last_pos_sync_time = time.time()
+            if snapshot_source == "live":
+                self.log_message.emit("📦 [HK-同步] 本次资金与持仓来自 Futu 柜台实时查询")
+            elif snapshot_source == "cache":
+                cache_age = round(now_ts - self._account_snapshot_cache_ts, 1)
+                self.log_message.emit(f"📦 [HK-同步] 本次资金与持仓来自最近真实缓存 ({cache_age:.1f}s)")
+            elif snapshot_source == "cache_fallback":
+                self.log_message.emit("📦 [HK-同步] 本次资金与持仓来自最近真实缓存回退")
             
-            # 🚀 [行情实时刷新] 为所有持仓获取最新的 Futu 市场快照 (含影子账本)
+            # 🚀 [行情实时刷新] 为所有持仓获取最新的 Futu 市场快照
             all_codes = [p['code'] for p in positions_list]
             if all_codes and self.quote_ctx:
                 try:
@@ -2696,65 +2633,6 @@ class HKTradingController(QObject):
                                 self.log_message.emit(f"🛡️ {code} 已加载移动止损监控: 现价={current_price:.3f}, ATR={atr_value:.3f}")
                     except Exception as e:
                         logger.error(f"Error calculating ATR for existing position {code}: {e}")
-
-            # 🛡️ [影子账本-ATR注入] 将硬编码底仓也纳入风控监控
-            manual_hk_pos = {
-                'HK.00699': {'qty': 5000, 'cost': 14.31, 'name': '均胜电子'}
-            }
-            for m_code, m_info in manual_hk_pos.items():
-                if m_code in self.position_trackers:
-                    continue  # 已由 API 数据建立追踪器，跳过
-                try:
-                    current_price = m_info['cost']  # 兜底：使用成本价
-                    if self.quote_ctx:
-                        ret_snap, snap_data = self.quote_ctx.get_market_snapshot([m_code])
-                        if ret_snap == RET_OK and not snap_data.empty:
-                            last_price = float(snap_data.iloc[0].get('last_done', 0))
-                            if last_price > 0:
-                                current_price = last_price
-
-                    atr_value = 0.0
-                    try:
-                        now_t = datetime.now()
-                        end_time = now_t.replace(minute=(now_t.minute // 30) * 30, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
-                        start_time = (now_t - timedelta(days=15)).strftime("%Y-%m-%d")
-                        chan = CChan(
-                            code=m_code,
-                            begin_time=start_time,
-                            end_time=end_time,
-                            data_src=DATA_SRC.FUTU,
-                            lv_list=[KL_TYPE.K_30M],
-                            config=self.chan_config
-                        )
-                        if chan and len(chan[0]) > 0:
-                            kl_list = list(chan[0].klu_iter())
-                            atr_value = self._calculate_atr(kl_list, period=14)
-                    except Exception:
-                        pass
-
-                    if atr_value <= 0:
-                        atr_value = current_price * 0.02  # 兜底：2% 作为 ATR 估算
-
-                    self.position_trackers[m_code] = {
-                        'highest_price': current_price,
-                        'atr': atr_value,
-                        'entry_price': m_info['cost'],
-                        'trail_active': False,
-                        'bars_held': 0
-                    }
-                    self._subscribe_stock_quote(m_code)
-                    self.log_message.emit(f"🛡️ [影子账本-ATR] {m_code} ({m_info['name']}) 已注入风控追踪: 现价={current_price:.3f}, ATR={atr_value:.3f}")
-                except Exception as e_shadow:
-                    self.log_message.emit(f"⚠️ [影子账本-ATR] {m_code} 注入失败: {e_shadow}")
-                    # 兜底：即使报价/ATR 计算失败，也建立追踪器
-                    self.position_trackers[m_code] = {
-                        'highest_price': m_info['cost'],
-                        'atr': m_info['cost'] * 0.02,
-                        'entry_price': m_info['cost'],
-                        'trail_active': False,
-                        'bars_held': 0
-                    }
-                    self.log_message.emit(f"🛡️ [影子账本-ATR] {m_code} 已用兜底参数建立追踪器 (ATR=成本价×2%)")
 
             self.log_message.emit(f"✅ 风险监控初始化完成，共 {len(self.position_trackers)} 只标的纳入追踪。")
         except Exception as e:
@@ -3331,26 +3209,9 @@ class HKTradingController(QObject):
                                 "avg_cost": float(row.get("cost_price", 0.0))
                             })
 
-                # 🛡️ [影子账本 - 强制隔离区穿透]
-                # 即使 API 返回空，也根据 hard-coded 的底仓进行补齐展示
-                manual_hk_pos = {
-                    'HK.00699': {'qty': 5000, 'cost': 14.31, 'name': '均胜电子'}
-                }
-                for m_code, m_info in manual_hk_pos.items():
-                    # 检查是否已在列表中 (避免重复)
-                    if not any(p['code'] == m_code for p in positions):
-                        num_qty = m_info['qty']
-                        new_cache[m_code] = num_qty
-                        positions.append({
-                            'symbol': m_code.split('.')[-1],
-                            'code': m_code,
-                            'qty': num_qty,
-                            'mkt_value': num_qty * 14.86, # 假设参考价
-                            'pnl_ratio': round((14.86 - m_info['cost']) / m_info['cost'] * 100, 2),
-                            'avg_cost': m_info['cost']
-                        })
-                        self.log_message.emit(f"🛡️ [影子账本-HK-手动刷新] 已从内存加载底仓: {m_code}")
-                
+                if ret_pos == RET_OK and not pos_data.empty:
+                    self.position_cache = dict(new_cache)
+
                 # 3. 更新内存缓存 (确保 0ms 查询也能命中)
                 self.position_cache.update(new_cache)
                 self.last_pos_sync_time = time.time()

@@ -157,9 +157,10 @@ class MarketMonitorController(QObject):
         
         self.atr_stop_trail = cn_cfg.get('atr_stop_trail', TRADING_CONFIG.get('atr_stop_trail', 2.5))
         
-        # 🚀 [影子账本 - A股] 内存持仓字典，用于 0ms 延迟查询
-        # 格式: { 'SH.600519': 100 }
-        self.shadow_ledger = {}
+        self.position_cache = {}
+        self._account_snapshot_cache = None
+        self._account_snapshot_cache_ts = 0.0
+        self._account_snapshot_cache_ttl = 12.0
 
     # ============================= 交易时间判定 =============================
 
@@ -252,7 +253,7 @@ class MarketMonitorController(QObject):
                     self.trd_acc_id = int(filtered.iloc[0]['acc_id'])
                     self.log_message.emit(f"🎯 [A股-账户自检] 已锁定账户: {self.trd_acc_id} ({env_str})")
             
-            # 🚀 [核心补强] 绑定成交与成交明细异步推送监听器 (A股影子账本)
+            # 绑定成交与成交明细推送监听器，用于成交后触发真实持仓刷新
             if self.trd_ctx:
                 from futu import TradeOrderHandlerBase, TradeDealHandlerBase
                 class CNTradePushHandler(TradeOrderHandlerBase):
@@ -277,25 +278,14 @@ class MarketMonitorController(QObject):
                     def on_recv_rsp(self, rsp_str):
                         ret, data = super().on_recv_rsp(rsp_str)
                         if ret == RET_OK:
-                            for _, row in data.iterrows():
-                                code = row['code']
-                                side = row['trd_side']
-                                qty = int(row['qty'])
-                                old_qty = self.controller.shadow_ledger.get(code, 0)
-                                if side == TrdSide.BUY:
-                                    self.controller.shadow_ledger[code] = old_qty + qty
-                                elif side == TrdSide.SELL:
-                                    self.controller.shadow_ledger[code] = max(0, old_qty - qty)
-                                self.controller.log_message.emit(
-                                    f"✅ [A股-影子账本] {code} {side} {qty}股。本地仓位: {old_qty} -> {self.controller.shadow_ledger[code]}"
-                                )
+                            asyncio.run_coroutine_threadsafe(self.controller._do_query_funds_async(), asyncio.get_event_loop())
                         return ret, data
                 
                 self._trade_handler = CNTradePushHandler(self)
                 self._deal_handler = CNTradeDealHandler(self)
                 self.trd_ctx.set_handler(self._trade_handler)
                 self.trd_ctx.set_handler(self._deal_handler)
-                self.log_message.emit("🛡️ [A股-推送] 影子账本双监听服务启动成功")
+                self.log_message.emit("🛡️ [A股-推送] 成交监听服务启动成功")
             
             self.log_message.emit(f"💰 [A股] 交易接口已就绪 (环境: {'模拟' if self.trd_env == TrdEnv.SIMULATE else '实盘'})")
 
@@ -677,52 +667,48 @@ class MarketMonitorController(QObject):
         # Allow fund queries for status display even if trading is not enabled
         self._init_trd_ctx()
 
-        # 🚀 [影子账本-CN-预览] 在同步前先加载底仓，确保 UI 响应极速 (对齐港股)
-        manual_cn_pos = {
-            'SH.600644': {'qty': 900, 'cost': 11.99, 'name': '乐山电力'},
-            'SH.600505': {'qty': 1000, 'cost': 13.69, 'name': '西昌电力'},
-            'SZ.301517': {'qty': 500, 'cost': 52.09, 'name': '乖宝宠物'},
-            'SZ.301589': {'qty': 200, 'cost': 60.48, 'name': '诺瓦星云'},
-            'SZ.000063': {'qty': 1700, 'cost': 32.22, 'name': '中兴通讯'},
-            'SZ.000977': {'qty': 2400, 'cost': 56.21, 'name': '浪潮信息'},
-            'SZ.300288': {'qty': 1800, 'cost': 12.33, 'name': '朗玛信息'},
-            'SZ.300263': {'qty': 3700, 'cost': 9.87, 'name': '隆华科技'}
-        }
-        preview_positions = []
-        for m_code, m_info in manual_cn_pos.items():
-            preview_positions.append({
-                'code': m_code,
-                'symbol': m_code,
-                'name': m_info.get('name', 'A股持仓'),
-                'qty': m_info['qty'],
-                'mkt_value': m_info['qty'] * m_info['cost'],
-                'avg_cost': m_info['cost'],
-                'mkt_price': m_info['cost'],
-                'pnl_ratio': 0.0,
-                'can_sell_qty': m_info['qty'] if self.trd_env == TrdEnv.SIMULATE else 0
-            })
-        # 发送初步预览数据
-        self.funds_updated.emit(0.0, 0.0, 0.0, preview_positions)
         try:
-            refresh = (self.trd_env == TrdEnv.SIMULATE)
-            # 💡 [核心修复] 强制双重刷新：accinfo 唤醒 -> position_list 同步
-            ret_acc, acc_data = self.trd_ctx.accinfo_query(acc_id=self.trd_acc_id, trd_env=self.trd_env, refresh_cache=refresh)
-            
-            if refresh:
-                time.sleep(1.0) # ⏳ [Resilience] 给予后端同步持仓列表的缓冲时间
-            
-            # 💡 [核心补强] position_list 也使用 refresh_cache=refresh，但需处理“未准备好”的报错
-            ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=self.trd_acc_id, trd_env=self.trd_env, refresh_cache=refresh)
-            
-            # 💡 [容错自愈] 若 refresh 模式下 pos 报错“未准备好”，等待并最终重试
-            if ret_pos != RET_OK and refresh:
-                self.log_message.emit("⌛ [A股-同步] 持仓数据尚未就绪，正在重试强制刷新...")
-                time.sleep(1.0)
-                ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=self.trd_acc_id, trd_env=self.trd_env, refresh_cache=True)
-            
-            # 💡 [最终兜底] 若 refresh 依旧失败，尝试读一次本地缓存模式
-            if ret_pos != RET_OK and refresh:
-                ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=self.trd_acc_id, trd_env=self.trd_env, refresh_cache=False)
+            now_ts = time.time()
+            snapshot_source = "live"
+            if self._account_snapshot_cache and (now_ts - self._account_snapshot_cache_ts) < self._account_snapshot_cache_ttl:
+                ret_pos, pos_data = self._account_snapshot_cache['ret_pos'], self._account_snapshot_cache['pos_data']
+                ret_acc, acc_data = self._account_snapshot_cache['ret_acc'], self._account_snapshot_cache['acc_data']
+                snapshot_source = "cache"
+            else:
+                refresh = (self.trd_env == TrdEnv.SIMULATE)
+                # 💡 [核心修复] 强制双重刷新：accinfo 唤醒 -> position_list 同步
+                ret_acc, acc_data = self.trd_ctx.accinfo_query(acc_id=self.trd_acc_id, trd_env=self.trd_env, refresh_cache=refresh)
+                
+                if refresh:
+                    time.sleep(1.0) # ⏳ [Resilience] 给予后端同步持仓列表的缓冲时间
+                
+                # 💡 [核心补强] position_list 也使用 refresh_cache=refresh，但需处理“未准备好”的报错
+                ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=self.trd_acc_id, trd_env=self.trd_env, refresh_cache=refresh)
+                
+                # 💡 [容错自愈] 若 refresh 模式下 pos 报错“未准备好”，等待并最终重试
+                if ret_pos != RET_OK and refresh:
+                    self.log_message.emit("⌛ [A股-同步] 持仓数据尚未就绪，正在重试强制刷新...")
+                    time.sleep(1.0)
+                    ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=self.trd_acc_id, trd_env=self.trd_env, refresh_cache=True)
+                
+                # 💡 [最终兜底] 若 refresh 依旧失败，尝试读一次本地缓存模式
+                if ret_pos != RET_OK and refresh:
+                    ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=self.trd_acc_id, trd_env=self.trd_env, refresh_cache=False)
+
+                if ret_pos == RET_OK and ret_acc == RET_OK:
+                    self._account_snapshot_cache = {
+                        'ret_pos': ret_pos,
+                        'pos_data': pos_data.copy(deep=True),
+                        'ret_acc': ret_acc,
+                        'acc_data': acc_data.copy(deep=True),
+                    }
+                    self._account_snapshot_cache_ts = now_ts
+                elif self._account_snapshot_cache:
+                    cached_age = round(now_ts - self._account_snapshot_cache_ts, 1)
+                    self.log_message.emit(f"⚠️ [A股-同步] 柜台查询受限，已回退最近真实缓存 ({cached_age:.1f}s)")
+                    ret_pos, pos_data = self._account_snapshot_cache['ret_pos'], self._account_snapshot_cache['pos_data']
+                    ret_acc, acc_data = self._account_snapshot_cache['ret_acc'], self._account_snapshot_cache['acc_data']
+                    snapshot_source = "cache_fallback"
 
             available, total = 0.0, 0.0
             if ret_acc == RET_OK and not acc_data.empty:
@@ -747,13 +733,12 @@ class MarketMonitorController(QObject):
             positions = []
             total_pos_mkt_val = 0.0
             if ret_pos == RET_OK and not pos_data.empty:
-                # 🔄 [同步影子账本] 同步成功后，用真实数据覆盖内存快照
-                new_ledger = {}
+                new_cache = {}
                 for _, row in pos_data.iterrows():
                     code = row['code']
                     qty = int(row['qty'])
                     if qty > 0:
-                        new_ledger[code] = qty
+                        new_cache[code] = qty
                         
                     can_sell = int(row.get('can_sell_qty', qty))
                     mkt_val = safe_float(row.get('market_val', 0.0))
@@ -768,48 +753,7 @@ class MarketMonitorController(QObject):
                         'mkt_price': safe_float(row.get('nominal_price', 0.0)),
                         'can_sell_qty': can_sell
                     })
-                self.shadow_ledger = new_ledger
-            else:
-                # 💡 [影子账本自愈] 当 API 同步失败或空持仓时，从动态的影子账本复原部位进行预览
-                for ghost_code, ghost_qty in self.shadow_ledger.items():
-                    if ghost_qty > 0:
-                        positions.append({
-                            'symbol': ghost_code,
-                            'code': ghost_code,
-                            'qty': ghost_qty,
-                            'mkt_value': 0.0,
-                            'avg_cost': 0.0,
-                            'mkt_price': 0.0,
-                            'can_sell_qty': ghost_qty if self.trd_env == TrdEnv.SIMULATE else 0
-                        })
-
-            # 🛡️ [A股影子账本 - 强制隔离区穿透] (同步自港股逻辑)
-            manual_cn_pos = {
-                'SH.600644': {'qty': 900, 'cost': 11.99, 'name': '乐山电力'},
-                'SH.600505': {'qty': 1000, 'cost': 13.69, 'name': '西昌电力'},
-                'SZ.301517': {'qty': 500, 'cost': 52.09, 'name': '乖宝宠物'},
-                'SZ.301589': {'qty': 200, 'cost': 60.48, 'name': '诺瓦星云'},
-                'SZ.000063': {'qty': 1700, 'cost': 32.22, 'name': '中兴通讯'},
-                'SZ.000977': {'qty': 2400, 'cost': 56.21, 'name': '浪潮信息'},
-                'SZ.300288': {'qty': 1800, 'cost': 12.33, 'name': '朗玛信息'},
-                'SZ.300263': {'qty': 3700, 'cost': 9.87, 'name': '隆华科技'}
-            }
-            
-            for m_code, m_info in manual_cn_pos.items():
-                if not any(p.get('code') == m_code for p in positions):
-                    self.shadow_ledger[m_code] = m_info['qty']
-                    positions.append({
-                        'code': m_code,
-                        'symbol': m_code,
-                        'name': m_info.get('name', 'A股持仓'),
-                        'qty': m_info['qty'],
-                        'mkt_value': m_info['qty'] * m_info['cost'],
-                        'avg_cost': m_info['cost'],
-                        'mkt_price': m_info['cost'],
-                        'pnl_ratio': 0.0,
-                        'can_sell_qty': m_info['qty'] if self.trd_env == TrdEnv.SIMULATE else 0
-                    })
-                    self.log_message.emit(f"🛡️ [影子账本-CN] 已从内存召回底仓: {m_info['name']}")
+                self.position_cache = new_cache
 
             # 🛡️ [Refined Ghost Filter] A 股幽灵持仓对账逻辑
             if ret_acc == RET_OK and not acc_data.empty:
@@ -817,8 +761,7 @@ class MarketMonitorController(QObject):
                 if acc_mkt_val > 5000:
                     discrepancy = abs(acc_mkt_val - total_pos_mkt_val) / acc_mkt_val
                     if discrepancy > 0.3 and total_pos_mkt_val < 1:
-                        # 账户显示有市值但持仓为空，疑似同步延迟，仅打印日志提示，不再 return (对齐港股)
-                        self.log_message.emit(f"⚠️ [A股-对账警告] API 同步中，已自动激活影子账本保护模式。")
+                        self.log_message.emit(f"⚠️ [A股-对账警告] 账户显示有市值但持仓列表为空，请关注柜台同步状态。")
             
             # 🚀 [行情实时刷新] A 股全量持仓行情更新
             all_codes = list(set([p.get('code') or p.get('symbol') for p in positions]))
@@ -866,6 +809,14 @@ class MarketMonitorController(QObject):
                     self._cached_acc_funds['today_pl'] = float(today_pl_val) if today_pl_val is not None else 0.0
                 except (ValueError, TypeError):
                     self._cached_acc_funds['today_pl'] = 0.0
+
+            if snapshot_source == "live":
+                self.log_message.emit("📦 [A股-同步] 本次资金与持仓来自 Futu 柜台实时查询")
+            elif snapshot_source == "cache":
+                cache_age = round(now_ts - self._account_snapshot_cache_ts, 1)
+                self.log_message.emit(f"📦 [A股-同步] 本次资金与持仓来自最近真实缓存 ({cache_age:.1f}s)")
+            elif snapshot_source == "cache_fallback":
+                self.log_message.emit("📦 [A股-同步] 本次资金与持仓来自最近真实缓存回退")
 
             self.funds_updated.emit(self._cached_acc_funds['available'], self._cached_acc_funds['total'], self._cached_acc_funds['today_pl'], positions)
         except Exception as e:
@@ -917,11 +868,8 @@ class MarketMonitorController(QObject):
             self.subscribed_stocks.remove(code)
 
     def get_position_count(self) -> int:
-        """
-        🚀 [影子账本查询] 获取当前 A 股实际持仓数量 (去重)
-        直接读取内存 shadow_ledger，耗时 0ms。
-        """
-        return len([c for c, q in self.shadow_ledger.items() if q > 0])
+        """获取当前 A 股缓存持仓数量。"""
+        return len([c for c, q in self.position_cache.items() if q > 0])
 
     # ============================= ATR 移动止损监控 =============================
 
@@ -1829,49 +1777,7 @@ class MarketMonitorController(QObject):
                         self._subscribe_stock_quote(code) # 📡 [极速风控] 开启实时推送
                         count += 1
                         
-            # 🛡️ [影子账本-ATR注入-A股] 确保硬编码底仓也纳入风控监控池 (对齐港股)
-            manual_cn_pos = {
-                'SH.600644': {'qty': 900, 'cost': 11.99, 'name': '乐山电力'},
-                'SH.600505': {'qty': 1000, 'cost': 13.69, 'name': '西昌电力'},
-                'SZ.301517': {'qty': 500, 'cost': 52.09, 'name': '乖宝宠物'},
-                'SZ.301589': {'qty': 200, 'cost': 60.48, 'name': '诺瓦星云'},
-                'SZ.000063': {'qty': 1700, 'cost': 32.22, 'name': '中兴通讯'},
-                'SZ.000977': {'qty': 2400, 'cost': 56.21, 'name': '浪潮信息'},
-                'SZ.300288': {'qty': 1800, 'cost': 12.33, 'name': '朗玛信息'},
-                'SZ.300263': {'qty': 3700, 'cost': 9.87, 'name': '隆华科技'}
-            }
-            for m_code, m_info in manual_cn_pos.items():
-                if m_code in self.position_trackers:
-                    continue  # 已有 API 数据追踪，跳过
-                
-                try:
-                    # 优先获取实时报价
-                    current_price = m_info['cost']
-                    if self.quote_ctx:
-                        ret_sn, snap_data = self.quote_ctx.get_market_snapshot([m_code])
-                        if ret_sn == RET_OK and not snap_data.empty:
-                            last_p = float(snap_data.iloc[0].get('last_done', 0))
-                            if last_p > 0: current_price = last_p
-                    
-                    # 降级计算 ATR
-                    atr = self._calculate_atr(m_code)
-                    if atr <= 0:
-                        atr = current_price * 0.03  # A股波动大，兜底 3%
-
-                    self.position_trackers[m_code] = {
-                        'entry_price': m_info['cost'],
-                        'highest_price': max(m_info['cost'], current_price),
-                        'atr': atr,
-                        'trail_active': False
-                    }
-                    self.db.save_stop_loss_tracker(m_code, m_info['cost'], max(m_info['cost'], current_price), atr, 0)
-                    self.log_message.emit(f"🛡️ [A股-影子] 注入追踪器 {m_code} ({m_info['name']}): 成本={m_info['cost']:.2f}, ATR={atr:.3f}")
-                    self._subscribe_stock_quote(m_code)
-                    count += 1
-                except Exception as ex_m:
-                    self.log_message.emit(f"⚠️ [A股-影子] {m_code} 载入异常: {ex_m}")
-
             if count > 0:
-                self.log_message.emit(f"✅ [A股-风控] 初始化完成，共监控 {len(self.position_trackers)} 只个股 (含影子持仓)。")
+                self.log_message.emit(f"✅ [A股-风控] 初始化完成，共监控 {len(self.position_trackers)} 只个股。")
         except Exception as e:
             logger.error(f"A股初始化全仓位ATR止损异常: {e}")

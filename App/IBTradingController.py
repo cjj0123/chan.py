@@ -11,6 +11,7 @@ class IBTradingController(BaseUSTradingController):
     """
     def __init__(self, us_watchlist_group="美股", discord_bot=None):
         super().__init__(venue="IB", us_watchlist_group=us_watchlist_group, discord_bot=discord_bot)
+        self._last_assets_log_signature = None
         # IB 专属初始化 (如果有的话)
 
     async def get_account_assets_async(self):
@@ -91,7 +92,16 @@ class IBTradingController(BaseUSTradingController):
                             'avg_cost': round(item.averageCost, 2),
                             'mkt_price': item.marketPrice
                         })
-            self.log_message.emit(f"🔌 [IB-持仓自愈] 资产查询返回: 可用资金=${available:.2f}, 总资产=${total:.2f}, 持仓数=${len(positions_data)}")
+            log_signature = (
+                round(available, 2),
+                round(total, 2),
+                len(positions_data),
+            )
+            if log_signature != self._last_assets_log_signature:
+                self.log_message.emit(
+                    f"🔌 [IB-持仓自愈] 资产查询返回: 可用资金=${available:.2f}, 总资产=${total:.2f}, 持仓数=${len(positions_data)}"
+                )
+                self._last_assets_log_signature = log_signature
             return available, total, positions_data
         except Exception as e:
             self.log_message.emit(f"❌ IB 账户查询异常: {e}")

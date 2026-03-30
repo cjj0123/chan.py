@@ -37,6 +37,7 @@ class WebTerminalManager:
         self.MAX_CAPACITY = 300
         self.start_time = time.time()
         self.recent_logs = []
+        self._last_log_signature = None
         
         # Initialize HK Controller
         # Initialize HK Controller
@@ -213,6 +214,11 @@ class WebTerminalManager:
 
 
     def send_log(self, source: str, message: str):
+        log_signature = (source, message)
+        if log_signature == self._last_log_signature:
+            return
+        self._last_log_signature = log_signature
+
         time_str = datetime.now().strftime('%H:%M:%S')
         payload = {
             "type": "log",

@@ -66,7 +66,7 @@ from DataAPI.SchwabAPI import CSchwabAPI
 from Common.SchwabRateLimiter import get_schwab_limiter
 
 # 导入 Futu US 交易
-from futu import OpenSecTradeContext, TrdMarket, TrdSide, OrderType, RET_OK, TrdEnv
+from futu import OpenSecTradeContext, OpenQuoteContext, TrdMarket, TrdSide, OrderType, RET_OK, TrdEnv
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +84,25 @@ class BaseUSTradingController(QObject):
     
     def get_futu_watchlist(self):
         """支持多个分组合并同步 (如 '美股,热点_实盘')"""
+        now_ts = time.time()
+        cache_ttl = 35
+        if self._watchlist_cache and (now_ts - self._watchlist_cache_ts) < cache_ttl:
+            cached_meta = dict(self._watchlist_cache_meta or {})
+            cached_meta["source"] = "cache"
+            cached_meta["count"] = len(self._watchlist_cache)
+            cached_meta["cache_age_sec"] = round(now_ts - self._watchlist_cache_ts, 1)
+            self._last_watchlist_fetch_meta = cached_meta
+            return dict(self._watchlist_cache)
+
         all_dict = {}
+        groups = [g.strip() for g in self.watchlist_group.split(',') if g.strip()]
+        meta = {
+            "source": "unknown",
+            "groups": groups,
+            "count": 0,
+            "group_counts": {},
+            "error": None,
+        }
         try:
             import socket
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -102,22 +120,61 @@ class BaseUSTradingController(QObject):
                             if line and not line.startswith('#'):
                                 c = line if line.startswith("US.") else f"US.{line}"
                                 all_dict[c] = c.split('.')[-1]
+                meta["source"] = "local_file"
+                meta["count"] = len(all_dict)
+                if not all_dict:
+                    meta["error"] = "Futu OpenD 未连接，且本地 Config/us_watchlist.txt 为空"
+                self._last_watchlist_fetch_meta = meta
                 return all_dict
 
-            from futu import OpenQuoteContext, RET_OK
-            ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
-            groups = [g.strip() for g in self.watchlist_group.split(',') if g.strip()]
             for grp in groups:
-                ret, data = ctx.get_user_security(group_name=grp)
-                if ret == RET_OK and not data.empty:
+                last_err = None
+                for attempt in range(1, 4):
+                    with self.futu_api_lock:
+                        ret, data = self.quote_ctx.get_user_security(group_name=grp)
+                    if ret == RET_OK and data is not None and not data.empty:
+                        meta["group_counts"][grp] = int(len(data))
+                        break
+                    last_err = f"ret={ret}, data={data}"
+                    # 行情连接偶发失活时，主动重建 quote_ctx 再试一次
+                    if attempt < 3:
+                        self._reset_quote_ctx()
+                    if attempt < 3:
+                        time.sleep(0.3)
+                else:
+                    data = None
+                    meta["group_counts"][grp] = 0
+                    meta["error"] = f"分组 '{grp}' 读取失败: {last_err}"
+
+                if data is not None and not data.empty:
                     name_col = 'name' if 'name' in data.columns else 'stock_name'
                     for _, row in data.iterrows():
                         c = row['code']
                         if c.startswith("US."):
                             all_dict[c] = row.get(name_col, c)
-            ctx.close()
-        except Exception:
-            pass
+            meta["source"] = "futu_group"
+            meta["count"] = len(all_dict)
+            if not all_dict and not meta["error"]:
+                meta["error"] = f"Futu 分组 {groups} 返回为空"
+        except Exception as e:
+            meta["source"] = "error"
+            meta["error"] = str(e)
+            logger.warning(f"[美股] 读取 Futu 分组失败: {e}")
+
+        if all_dict:
+            self._watchlist_cache = dict(all_dict)
+            self._watchlist_cache_ts = now_ts
+            self._watchlist_cache_meta = dict(meta)
+        elif meta.get("error") and self._watchlist_cache:
+            cached_meta = dict(self._watchlist_cache_meta or {})
+            cached_meta["source"] = "cache_fallback"
+            cached_meta["error"] = meta["error"]
+            cached_meta["count"] = len(self._watchlist_cache)
+            cached_meta["cache_age_sec"] = round(now_ts - self._watchlist_cache_ts, 1)
+            self._last_watchlist_fetch_meta = cached_meta
+            return dict(self._watchlist_cache)
+
+        self._last_watchlist_fetch_meta = meta
         return all_dict
 
     def __init__(self, 
@@ -165,6 +222,8 @@ class BaseUSTradingController(QObject):
         # 信号历史，用于去重 (持久化到磁盘，防止重启后重复下单)
         self.notified_signals_file = os.path.join(self.charts_dir, f'us_{self.venue.lower()}_notified_signals.json')
         self.notified_signals = self._load_notified_signals()
+        self.startup_scan_state_file = os.path.join(self.charts_dir, f'us_{self.venue.lower()}_startup_scan_state.json')
+        self.startup_scan_state = self._load_startup_scan_state()
         self.visual_score_cache = {}
         
         # 线程池：用于执行耗时的 AI 评分和绘图任务，防止阻塞 IB 驱动循环
@@ -172,6 +231,7 @@ class BaseUSTradingController(QObject):
         
         # 图表生成锁，防止多线程 matplotlib 状态泄漏
         self.chart_generation_lock = threading.Lock()
+        self.futu_api_lock = threading.Lock()
 
         self.us_tz = pytz.timezone('America/New_York')
         
@@ -205,17 +265,49 @@ class BaseUSTradingController(QObject):
         
         self.atr_stop_trail = us_cfg.get('atr_stop_trail', TRADING_CONFIG.get('atr_stop_trail', 2.5))
 
+        self._quote_ctx = None
         self._trd_ctx = None
+        self._trd_acc_id = 0
         self._last_close_date = None
         self._last_reset_date = datetime.now().strftime("%Y-%m-%d") # 🛡️ 日期重置锚点
         self._trackers_initialized = False
         self._trackers_initializing = False
+        self._last_atr_heartbeat_slot = None
+        self._last_watchlist_fetch_meta = None
+        self._watchlist_cache = {}
+        self._watchlist_cache_ts = 0.0
+        self._watchlist_cache_meta = None
+
+    @property
+    def quote_ctx(self):
+        """延迟初始化 Futu 行情上下文，确保在控制器线程上创建并复用。"""
+        if self._quote_ctx is None:
+            self._quote_ctx = OpenQuoteContext(host='127.0.0.1', port=11111)
+        return self._quote_ctx
+
+    def _reset_quote_ctx(self):
+        """重建 Futu 行情上下文，用于处理偶发断线或失活。"""
+        try:
+            if self._quote_ctx is not None:
+                self._quote_ctx.close()
+        except Exception:
+            pass
+        self._quote_ctx = None
 
     @property
     def trd_ctx(self):
         """延迟初始化 Futu 交易上下文，确保在使用线程上创建"""
         if self._trd_ctx is None:
             self._trd_ctx = OpenSecTradeContext(filter_trdmarket=TrdMarket.US, host='127.0.0.1', port=11111)
+            ret, data = self._trd_ctx.get_acc_list()
+            if ret == RET_OK and data is not None and not data.empty:
+                env_str = 'SIMULATE' if self.trd_env == TrdEnv.SIMULATE else 'REAL'
+                filtered = data[data['trd_env'] == env_str]
+                if self.trd_env == TrdEnv.SIMULATE and 'sim_acc_type' in data.columns:
+                    filtered = filtered[filtered['sim_acc_type'] == 'STOCK']
+                if not filtered.empty:
+                    self._trd_acc_id = int(filtered.iloc[0]['acc_id'])
+                    self.log_message.emit(f"🎯 [美股-Futu] 已锁定账户: {self._trd_acc_id} ({env_str})")
         return self._trd_ctx
 
     def _load_notified_signals(self) -> dict:
@@ -238,6 +330,37 @@ class BaseUSTradingController(QObject):
                 json.dump(self.notified_signals, f, indent=2)
         except Exception as e:
             logger.error(f"保存 US 信号记录失败: {e}")
+
+    def _load_startup_scan_state(self) -> dict:
+        """加载每日首次启动补扫状态，避免同日重启重复扫描。"""
+        if os.path.exists(self.startup_scan_state_file):
+            try:
+                with open(self.startup_scan_state_file, 'r') as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+            except Exception as e:
+                logger.warning(f"加载 US 启动补扫状态失败: {e}")
+        return {}
+
+    def _save_startup_scan_state(self):
+        """持久化每日首次启动补扫状态。"""
+        try:
+            with open(self.startup_scan_state_file, 'w') as f:
+                json.dump(self.startup_scan_state, f, indent=2)
+        except Exception as e:
+            logger.warning(f"保存 US 启动补扫状态失败: {e}")
+
+    def _get_startup_scan_key(self) -> str:
+        """按美东日期记录每日首次启动补扫状态。"""
+        return self.get_us_now().strftime("%Y-%m-%d")
+
+    def _has_done_startup_scan_today(self) -> bool:
+        return bool(self.startup_scan_state.get(self._get_startup_scan_key(), False))
+
+    def _mark_startup_scan_done_today(self):
+        self.startup_scan_state = {self._get_startup_scan_key(): True}
+        self._save_startup_scan_state()
 
     def get_us_now(self) -> datetime:
         """获取当前美国东部时间 (New York)"""
@@ -381,10 +504,15 @@ class BaseUSTradingController(QObject):
         self.ib.execDetailsEvent += self._on_exec_details  # 💡 挂载成交触发，同步推送至 GUI
         self._poll_task = asyncio.create_task(self._poll_gui_commands())
         
-        # 避免启动时立即触发全量扫描，初始化为当前 30M Bar 时间，等待下一个周期再触发
         now_et = self.get_us_now()
-        # 💡 [策略修正] 引导启动时立即触发首次全量扫描（减去30分钟），不等待下一个周期
-        last_scan_bar = now_et.replace(minute=(now_et.minute // 30) * 30, second=0, microsecond=0) - timedelta(minutes=30)
+        current_bar_at_start = now_et.replace(minute=(now_et.minute // 30) * 30, second=0, microsecond=0)
+        if self._has_done_startup_scan_today():
+            last_scan_bar = current_bar_at_start
+            self._current_bar_scanned = True
+            self.log_message.emit("🗓️ [美股] 今日首次启动补扫已完成，本次重启将等待常规定时扫描")
+        else:
+            last_scan_bar = current_bar_at_start - timedelta(minutes=30)
+            self._current_bar_scanned = False
         last_heartbeat_min = -1
         last_reconnect_time = 0
         
@@ -508,14 +636,18 @@ class BaseUSTradingController(QObject):
                         should_scan = True
                         self._current_bar_scanned = True
                 elif not getattr(self, '_current_bar_scanned', False):
-                    # 💡 补偿刚启动时当前 30M 周期还未跑过扫描的情况 (启动前 8 分钟内允许补扫)
-                    if 1 <= (now_et.minute % 30) <= 8:
-                        self.log_message.emit("⚡ [美股] 触发启动窗口期补全扫描...")
+                    # 同一美东自然日仅允许首次启动补扫一次，后续重启等待常规定时扫描
+                    if self._has_done_startup_scan_today():
+                        self._current_bar_scanned = True
+                    elif 1 <= (now_et.minute % 30) <= 8:
+                        self.log_message.emit("⚡ [美股] 触发当日首次启动补全扫描...")
                         should_scan = True
                         self._current_bar_scanned = True
 
                 if should_scan:
                     try:
+                        if not self._has_done_startup_scan_today():
+                            self._mark_startup_scan_done_today()
                         # 放入后台任务执行，防止阻塞 GUI 指令队列（如查询资金）
                         if not hasattr(self, '_current_scan_task') or self._current_scan_task.done():
                             self._current_scan_task = asyncio.create_task(self._perform_strategy_scan_async())
@@ -569,9 +701,30 @@ class BaseUSTradingController(QObject):
         
         try:
             # 1. Fetch from Futu via executor (Sync -> Async)
-            loop = asyncio.get_running_loop()
-            futu_watchlist = await loop.run_in_executor(self.executor, self.get_futu_watchlist)
+            futu_watchlist = self.get_futu_watchlist()
             us_watchlist.update(futu_watchlist)
+            watchlist_meta = self._last_watchlist_fetch_meta or {}
+
+            source = watchlist_meta.get("source")
+            count = watchlist_meta.get("count", len(futu_watchlist))
+            group_counts = watchlist_meta.get("group_counts", {})
+            error = watchlist_meta.get("error")
+
+            if source == "futu_group" and count:
+                group_summary = ", ".join(f"{grp}={num}只" for grp, num in group_counts.items()) or f"{self.watchlist_group}={count}只"
+                self.log_message.emit(f"📋 [美股] Futu 分组读取完成: {group_summary}")
+            elif source == "cache":
+                age = watchlist_meta.get("cache_age_sec", 0)
+                self.log_message.emit(f"📋 [美股] 复用 Futu 分组缓存 (共 {count} 只, 缓存 {age:.1f}s)")
+            elif source == "cache_fallback":
+                age = watchlist_meta.get("cache_age_sec", 0)
+                self.log_message.emit(f"⚠️ [美股] Futu 分组读取受限，已回退缓存 (共 {count} 只, 缓存 {age:.1f}s)")
+            elif source == "local_file":
+                self.log_message.emit(f"📋 [美股] Futu OpenD 不可用，已回退本地股票池 Config/us_watchlist.txt (共 {count} 只)")
+            elif error:
+                self.log_message.emit(f"⚠️ [美股] Futu 分组读取失败: {error}")
+
+            portfolio_added = 0
 
             if self.venue == "IB" and self.ib and self.ib.isConnected():
                 for p in self.ib.positions():
@@ -579,6 +732,7 @@ class BaseUSTradingController(QObject):
                         c = f"US.{p.contract.symbol}"
                         if c not in us_watchlist:
                             us_watchlist[c] = p.contract.symbol
+                            portfolio_added += 1
             elif self.venue == "SCHWAB" and self.schwab_account_hash:
                  await self._update_schwab_cache_async()
                  for p in self.schwab_positions_cache:
@@ -586,12 +740,17 @@ class BaseUSTradingController(QObject):
                            c = f"US.{p['instrument']['symbol']}"
                            if c not in us_watchlist:
                                us_watchlist[c] = p['instrument']['symbol']
+                               portfolio_added += 1
 
             # [风控加固 Phase 8] 冷却隔离舱平移至后置 chan_30m K线计算内，以提高结构阻点判定精度
             filtered_codes = list(us_watchlist.keys())
             us_codes = sorted(filtered_codes)
 
-            if not us_codes: 
+            if portfolio_added:
+                self.log_message.emit(f"🧾 [美股] 已补入当前持仓标的 {portfolio_added} 只")
+
+            if not us_codes:
+                self.log_message.emit("⚠️ [美股] 分组和持仓股票池都为空，已回退默认扫描列表 AAPL/TSLA/NVDA")
                 us_codes = ['US.AAPL', 'US.TSLA', 'US.NVDA']
                 us_watchlist = {'US.AAPL': 'AAPL', 'US.TSLA': 'TSLA', 'US.NVDA': 'NVDA'}
             
@@ -1951,6 +2110,21 @@ class BaseUSTradingController(QObject):
 
             available, total, positions = await self.get_account_assets_async()
             current_held_codes = {f"US.{p['symbol']}": p for p in positions}
+
+            now_et = self.get_us_now()
+            heartbeat_slot = (
+                now_et.year,
+                now_et.month,
+                now_et.day,
+                now_et.hour,
+                now_et.minute // 15,
+            )
+            should_emit_heartbeat = heartbeat_slot != self._last_atr_heartbeat_slot
+            if should_emit_heartbeat:
+                self._last_atr_heartbeat_slot = heartbeat_slot
+                self.log_message.emit(
+                    f"🔍 [美股-风控] ATR心跳: 正在为 {len(self.position_trackers)} 只标的提供动态止损监控。(每15分钟播报)"
+                )
             
             # 🚀 [Phase 12] 统一使用 Schwab 作为美股价格“事实来源”，解决 IB 延迟问题
             schwab_prices = {}
@@ -2029,9 +2203,7 @@ class BaseUSTradingController(QObject):
                 else:
                     stop_price = entry_price - (atr * atr_init)
                     stop_type = "ATR初始止损"
-                
-                self.log_message.emit(f"🛡️ [ATR监测] {code}: 现价 ${current_price:.2f}, 止损位 ${stop_price:.2f} ({stop_type}) [最高价 ${highest:.2f}, ATR ${atr:.4f}]")
-                
+
                 # 5. 触发则立刻下平仓单
                 if current_price < stop_price:
                     # 🛡️ [单日平仓锁] 根本方案：今日已卖，绝不再卖
@@ -2078,9 +2250,10 @@ class BaseUSTradingController(QObject):
                 self.trd_ctx.get_acc_list()
 
             # 1. 自动探查账户环境
-            acc_id = 0
+            acc_id = self._trd_acc_id or 0
             actual_env = 'REAL'
-            ret_list, account_list = self.trd_ctx.get_acc_list()
+            with self.futu_api_lock:
+                ret_list, account_list = self.trd_ctx.get_acc_list()
             
             if ret_list == RET_OK and not account_list.empty:
                 # 📊 [修正选号] 过滤出与 self.trd_env 相符的账户 (SIMULATE / REAL)
@@ -2104,7 +2277,8 @@ class BaseUSTradingController(QObject):
 
             # 2. 查询账户资金
             refresh = (self.trd_env == TrdEnv.SIMULATE)
-            ret, data = self.trd_ctx.accinfo_query(acc_id=acc_id, trd_env=actual_env, refresh_cache=refresh)
+            with self.futu_api_lock:
+                ret, data = self.trd_ctx.accinfo_query(acc_id=acc_id, trd_env=actual_env, refresh_cache=refresh)
             available, total = 0.0, 0.0
             if ret == RET_OK and not data.empty:
                 row = data.iloc[0]
@@ -2123,7 +2297,8 @@ class BaseUSTradingController(QObject):
             
             # 3. 查询持仓
             positions = []
-            ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=acc_id, trd_env=actual_env, refresh_cache=refresh)
+            with self.futu_api_lock:
+                ret_pos, pos_data = self.trd_ctx.position_list_query(acc_id=acc_id, trd_env=actual_env, refresh_cache=refresh)
             if ret_pos == RET_OK and not pos_data.empty:
                 for _, row in pos_data.iterrows():
                     qty = int(row['qty'])
