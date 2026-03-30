@@ -843,6 +843,11 @@ class HKTradingController(QObject):
             return False
         
         try:
+            # 🛡️ [Phase 12] 价格为 0 硬拦截 —— 非交易时间现价可能为 0，绝对不能下单
+            if price is None or price <= 0:
+                self.log_message.emit(f"🚫 [安全拦截] {code} {action} 价格为 {price}，禁止下单 (可能为休市或数据源异常)")
+                return False
+
             # 📡 [实时报价修正] 交易执行前拉取最新的现价，杜绝跨期价格断层导致的穿透方向错配
             try:
                 ret_snap, snap_data = self.quote_ctx.get_market_snapshot([code])
@@ -853,6 +858,11 @@ class HKTradingController(QObject):
                         price = current_market_price
             except Exception as e_snap:
                 self.log_message.emit(f"⚠️ [实时报价] 刷新报价失败: {e_snap}")
+
+            # 再次检查修正后的价格
+            if price <= 0:
+                self.log_message.emit(f"🚫 [安全拦截] {code} {action} 报价修正后仍为 {price}，禁止下单")
+                return False
 
             is_cts = self.is_in_continuous_trading_session()
             is_buy = action.upper() == 'BUY'
@@ -2263,6 +2273,9 @@ class HKTradingController(QObject):
         if not hasattr(self, 'position_trackers') or not self.position_trackers:
             return
 
+        # 🛡️ [Phase 12] 非交易时间只更新最高价记录，不执行止损 (休市报价为 0 会触发误杀)
+        is_trading = self.is_trading_time()
+
         codes_to_check = list(self.position_trackers.keys())
         for code in codes_to_check:
             # 🚀 [性能优化 Phase 8] 移除循环内的 get_position_quantity 实时查询
@@ -2273,7 +2286,10 @@ class HKTradingController(QObject):
             current_price = getattr(self, 'live_prices', {}).get(code, 0.0)
             if current_price <= 0:
                 info = self.get_stock_info(code)  # 容错降级
+                # 🛡️ [Phase 12] 强化零价防护：info 不为 None 但 current_price=0 也要跳过
                 if not info or info.get('current_price', 0) <= 0:
+                    if not is_trading:
+                        pass  # 休市期间静默跳过，不报错
                     continue
                 current_price = info['current_price']
                 if not hasattr(self, 'live_prices'): self.live_prices = {}
@@ -2321,6 +2337,11 @@ class HKTradingController(QObject):
                 stop_type = "ATR初始止损"
                 
             if current_price < stop_price:
+                # 🛡️ [Phase 12] 非交易时间绝对禁止触发止损 (休市价格不可靠)
+                if not is_trading:
+                    self.log_message.emit(f"⏸️ [HK-风控] {code} 止损条件满足，但当前为休市，暂缓执行 (休市价={current_price:.3f})")
+                    continue
+
                 self.log_message.emit(f"🚨 [HK-风控] {code} 触发{stop_type}! 最高价={highest:.2f}, 现价={current_price:.2f}, 止损位={stop_price:.2f}")
                 
                 # 触发止损前，现场校验真实持仓数量
