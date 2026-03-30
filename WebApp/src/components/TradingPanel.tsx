@@ -7,18 +7,12 @@ import {
   AlertTriangle, 
   ArrowUpCircle, 
   ArrowDownCircle, 
-  CheckCircle2, 
-  XCircle,
   TrendingUp,
-  RefreshCw,
-  Wallet,
-  Settings2,
   Lock,
   Unlock,
   ChevronRight,
   Target
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
 
 interface MarketConfig {
   auto_trade: boolean;
@@ -28,10 +22,28 @@ interface MarketConfig {
 interface TradingConfig {
   HK: MarketConfig;
   CN: MarketConfig;
+  US: MarketConfig;
+}
+
+interface StatusCardProps {
+  label: string;
+  isActive: boolean;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  color: 'emerald' | 'rose';
+  onClick: () => void;
+  disabled: boolean;
+}
+
+interface InputGroupProps {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  type?: string;
 }
 
 export default function TradingPanel() {
-  const [activeMarket, setActiveMarket] = useState<'HK' | 'CN'>('HK');
+  const [activeMarket, setActiveMarket] = useState<'HK' | 'CN' | 'US'>('HK');
   const [configs, setConfigs] = useState<TradingConfig | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isUnlocked, setIsUnlocked] = useState(false);
@@ -131,12 +143,13 @@ export default function TradingPanel() {
   if (!configs) return <div className="animate-pulse bg-white/5 rounded-3xl h-full w-full"></div>;
 
   const currentCfg = configs[activeMarket];
+  const liveModeLabel = activeMarket === 'US' ? '实盘账户' : '实盘交易';
 
   return (
     <div className="flex flex-col h-full glass-pro rounded-[32px] overflow-hidden border border-white/[0.05] bg-[#0a0a0c]/40 backdrop-blur-3xl">
       {/* Header Tabs */}
       <div className="flex p-2 bg-white/[0.02] border-b border-white/[0.05]">
-        {(['HK', 'CN'] as const).map((market) => (
+        {(['HK', 'CN', 'US'] as const).map((market) => (
           <button
             key={market}
             onClick={() => setActiveMarket(market)}
@@ -147,7 +160,7 @@ export default function TradingPanel() {
             }`}
           >
             <Target size={14} className={activeMarket === market ? 'animate-spin-slow' : ''} />
-            {market === 'HK' ? 'Hong Kong' : 'China A'}
+            {market === 'HK' ? '港股' : market === 'CN' ? 'A股' : '美股'}
           </button>
         ))}
       </div>
@@ -156,7 +169,7 @@ export default function TradingPanel() {
         {/* Status Indicators */}
         <div className="grid grid-cols-2 gap-4">
           <StatusCard 
-            label="Auto Strategy" 
+            label="自动策略" 
             isActive={currentCfg.auto_trade} 
             icon={Zap} 
             color="emerald" 
@@ -164,7 +177,7 @@ export default function TradingPanel() {
             disabled={isLoading}
           />
           <StatusCard 
-            label="Live Trading" 
+            label={liveModeLabel} 
             isActive={currentCfg.live_mode} 
             icon={ShieldCheck} 
             color="rose" 
@@ -176,7 +189,7 @@ export default function TradingPanel() {
         {/* Manual Order Core */}
         <div className="space-y-6">
           <div className="flex items-center justify-between">
-             <h4 className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-500">Manual Execution Unit</h4>
+             <h4 className="text-[11px] font-black uppercase tracking-[0.2em] text-slate-500">手动下单面板</h4>
              <button 
                 onClick={() => setIsUnlocked(!isUnlocked)}
                 className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all ${
@@ -186,7 +199,7 @@ export default function TradingPanel() {
                 }`}
              >
                 {isUnlocked ? <Unlock size={14} /> : <Lock size={14} />}
-                <span className="text-[10px] font-black uppercase tracking-widest">{isUnlocked ? 'Unlocked' : 'Locked'}</span>
+                <span className="text-[10px] font-black uppercase tracking-widest">{isUnlocked ? '已解锁' : '已锁定'}</span>
              </button>
           </div>
 
@@ -201,7 +214,7 @@ export default function TradingPanel() {
                     }`}
                 >
                     <ArrowUpCircle size={20} />
-                    <span className="text-[10px] font-black uppercase tracking-widest">Long Position</span>
+                    <span className="text-[10px] font-black uppercase tracking-widest">买入开仓</span>
                 </button>
                 <button 
                     onClick={() => setAction('SELL')}
@@ -212,15 +225,15 @@ export default function TradingPanel() {
                     }`}
                 >
                     <ArrowDownCircle size={20} />
-                    <span className="text-[10px] font-black uppercase tracking-widest">Short Position</span>
+                    <span className="text-[10px] font-black uppercase tracking-widest">卖出平仓</span>
                 </button>
              </div>
 
              <div className="space-y-3">
-                <InputGroup label="Symbol" value={symbol} onChange={setSymbol} placeholder="e.g. HK.00700 or SH.600519" />
+                <InputGroup label="代码" value={symbol} onChange={setSymbol} placeholder="例如 HK.00700 或 SH.600519" />
                 <div className="grid grid-cols-2 gap-3">
-                    <InputGroup label="Price" value={price} onChange={setPrice} placeholder="Auto" type="number" />
-                    <InputGroup label="Quantity" value={qty} onChange={setQty} placeholder="Min Lot" type="number" />
+                    <InputGroup label="价格" value={price} onChange={setPrice} placeholder="自动" type="number" />
+                    <InputGroup label="数量" value={qty} onChange={setQty} placeholder="最小手数" type="number" />
                 </div>
              </div>
 
@@ -230,7 +243,7 @@ export default function TradingPanel() {
                 className={`w-full py-5 rounded-2xl bg-indigo-500 text-white font-black uppercase tracking-[0.2em] text-[12px] shadow-lg hover:bg-indigo-400 transition-all flex items-center justify-center gap-3 active:scale-[0.97]`}
              >
                 <TrendingUp size={18} />
-                Transmit Order to Exchange
+                提交订单到交易端
              </button>
           </div>
         </div>
@@ -244,8 +257,8 @@ export default function TradingPanel() {
             <div className="flex items-center gap-4">
                 <AlertTriangle size={20} className="group-hover:animate-bounce" />
                 <div className="flex flex-col items-start">
-                    <span className="text-[11px] font-black uppercase tracking-widest">Emergency Liquidate</span>
-                    <span className="text-[9px] opacity-60 font-medium">Cancel all orders & exit positions</span>
+                    <span className="text-[11px] font-black uppercase tracking-widest">紧急清仓</span>
+                    <span className="text-[9px] opacity-60 font-medium">撤销全部委托并退出持仓</span>
                 </div>
             </div>
             <ChevronRight size={16} />
@@ -256,8 +269,8 @@ export default function TradingPanel() {
   );
 }
 
-function StatusCard({ label, isActive, icon: Icon, color, onClick, disabled }: any) {
-  const colorMap: any = {
+function StatusCard({ label, isActive, icon: Icon, color, onClick, disabled }: StatusCardProps) {
+  const colorMap: Record<StatusCardProps['color'], string> = {
     emerald: isActive ? 'bg-emerald-500 text-black' : 'bg-white/5 text-slate-500 border-white/5',
     rose: isActive ? 'bg-rose-500 text-black' : 'bg-white/5 text-slate-500 border-white/5'
   };
@@ -273,7 +286,7 @@ function StatusCard({ label, isActive, icon: Icon, color, onClick, disabled }: a
       </div>
       <div className="flex flex-col items-start">
         <span className="text-[10px] font-black uppercase tracking-[0.1em] opacity-60">{label}</span>
-        <span className="text-[13px] font-black uppercase tracking-widest">{isActive ? 'Active' : 'Standby'}</span>
+        <span className="text-[13px] font-black uppercase tracking-widest">{isActive ? '启用中' : '待命中'}</span>
       </div>
       {isActive && (
         <div className={`absolute -right-2 -bottom-2 w-12 h-12 ${color === 'emerald' ? 'bg-emerald-400/20' : 'bg-rose-400/20'} blur-2xl rounded-full`} />
@@ -282,7 +295,7 @@ function StatusCard({ label, isActive, icon: Icon, color, onClick, disabled }: a
   );
 }
 
-function InputGroup({ label, value, onChange, placeholder, type = 'text' }: any) {
+function InputGroup({ label, value, onChange, placeholder, type = 'text' }: InputGroupProps) {
   return (
     <div className="space-y-1.5 flex-1">
       <label className="text-[9px] font-black uppercase tracking-[0.2em] text-slate-600 pl-2">{label}</label>

@@ -1,6 +1,5 @@
 import asyncio
 import logging
-from PyQt6.QtCore import pyqtSignal
 from App.BaseUSTradingController import BaseUSTradingController
 from ib_insync import Stock, LimitOrder
 

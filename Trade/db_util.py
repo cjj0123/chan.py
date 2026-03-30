@@ -260,7 +260,18 @@ class CChanDB:
             cursor.execute(query, params)
             conn.commit()
 
-    def save_signal(self, code: str, signal_type: str, score: float, chart_path: str, name: str = 'Unknown', is_buy: bool = True) -> int:
+    def save_signal(
+        self,
+        code: str,
+        signal_type: str,
+        score: float,
+        chart_path: str,
+        name: str = 'Unknown',
+        is_buy: bool = True,
+        open_price: Optional[float] = None,
+        ml_score: Optional[float] = None,
+        status: str = 'active',
+    ) -> int:
         """
         保存一个新的交易信号。
 
@@ -280,8 +291,22 @@ class CChanDB:
             from datetime import datetime
             add_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             cursor.execute(
-                "INSERT INTO trading_signals (add_date, stock_code, stock_name, lv, bstype, is_buy, model_score_before, open_image_url, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')",
-                (add_date, code, name, '30M', signal_type, 1 if is_buy else 0, score, chart_path)
+                """
+                INSERT INTO trading_signals (
+                    stock_code, add_date, bstype, open_price,
+                    model_score_before, status, lv, ml_score
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    code,
+                    add_date,
+                    signal_type,
+                    open_price,
+                    score,
+                    status,
+                    '30M',
+                    ml_score if ml_score is not None else 0.0,
+                )
             )
             conn.commit()
             return cursor.lastrowid

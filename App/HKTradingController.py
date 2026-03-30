@@ -1444,11 +1444,11 @@ class HKTradingController(QObject):
                 # Phase 4: 检查并热加载最新的优化的模型
                 self.signal_validator.check_and_reload()
                 
-                # 🔥 [Phase 12] ATR 心跳：无论是否交易时间都输出，证明进程存活
+                # 仅在盘中输出 ATR 心跳，避免休市期间日志刷屏
                 if time.time() - self._last_atr_heartbeat_time >= 60:
-                    tracker_count = len(getattr(self, 'position_trackers', {}))
-                    trading_status = '⏰ 盘中' if self.is_trading_time() else '💤 休市'
-                    self.log_message.emit(f"🔍 [港股-风控] ATR心跳: 正在为 {tracker_count} 只标的提供动态止损监控。({trading_status})")
+                    if self.is_trading_time():
+                        tracker_count = len(getattr(self, 'position_trackers', {}))
+                        self.log_message.emit(f"🔍 [港股-风控] ATR心跳: 正在为 {tracker_count} 只标的提供动态止损监控。(⏰ 盘中)")
                     self._last_atr_heartbeat_time = time.time()
                 
                 # 检查是否暂停
@@ -1669,12 +1669,6 @@ class HKTradingController(QObject):
                 self.discovered_signals[code] = bsp_time_str
                 self._save_discovered_signals()
                 
-                try:
-                    # 此时还没有视觉评分和正式图表，先存入基础原始信号（Pending 状态）
-                    self.db.save_signal(code, bsp_type, 0.0, "", name=name, is_buy=is_buy)
-                except Exception as e_db:
-                    logger.error(f"[HK-DB] 保存初步信号失败: {e_db}")
-            
             return [signal_data]
             
         except Exception as e:
@@ -2827,6 +2821,22 @@ class HKTradingController(QObject):
             # Assuming chart_path refers to the primary chart for notification,
             # taking the first one if chart_paths is a list.
             scored_signal['chart_path'] = chart_paths[0] if chart_paths else None
+
+            try:
+                relative_chart_path = scored_signal['chart_path'].replace(os.getcwd() + "/", "") if scored_signal['chart_path'] else ""
+                self.db.save_signal(
+                    code,
+                    bsp_type,
+                    score,
+                    relative_chart_path,
+                    name=signal.get('name', code),
+                    is_buy=signal['is_buy'],
+                    open_price=signal.get('current_price'),
+                    ml_score=round(ml_prob * 100, 2),
+                    status='active',
+                )
+            except Exception as e_db:
+                logger.error(f"[HK-DB] 保存评分信号失败: {e_db}")
 
             # --- Discord 推送 ---
             if self.discord_bot and score >= self.min_visual_score:

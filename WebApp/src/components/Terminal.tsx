@@ -1,18 +1,38 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Terminal as TerminalIcon, ShieldCheck, Activity, Cpu } from 'lucide-react';
+import { Activity, Cpu } from 'lucide-react';
 
 interface LogEntry {
   source: string;
   message: string;
   timestamp: string;
-  type?: 'info' | 'trade' | 'error' | 'warning';
+  type: 'info' | 'trade' | 'error' | 'warning';
+}
+
+interface RawLogPayload {
+  source: 'HK' | 'CN' | 'US';
+  message: string;
+  timestamp: number;
+  time_str?: string;
 }
 
 export default function Terminal() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const determineLogType = (msg: string): LogEntry['type'] => {
+    if (msg.includes('成交') || msg.includes('买入') || msg.includes('卖出')) return 'trade';
+    if (msg.includes('错误') || msg.includes('失败')) return 'error';
+    if (msg.includes('警告') || msg.includes('提醒')) return 'warning';
+    return 'info';
+  };
+
+  const getSourceLabel = (source: RawLogPayload['source']) => {
+    if (source === 'HK') return '港股';
+    if (source === 'US') return '美股';
+    return 'A股';
+  };
 
   useEffect(() => {
     let ws: WebSocket;
@@ -22,8 +42,8 @@ export default function Terminal() {
       .then(res => res.json())
       .then(data => {
         if (data.logs && Array.isArray(data.logs)) {
-          const historicalLogs = data.logs.map((log: any) => ({
-            source: log.source === 'HK' ? '港股' : 'A股',
+          const historicalLogs = data.logs.map((log: RawLogPayload) => ({
+            source: getSourceLabel(log.source),
             message: log.message,
             timestamp: log.time_str || new Date(log.timestamp * 1000).toLocaleTimeString('zh-CN', { hour12: false }),
             type: determineLogType(log.message)
@@ -34,11 +54,11 @@ export default function Terminal() {
         // Start WebSocket after fetching historical logs
         ws = new WebSocket('ws://localhost:8000/ws/logs');
         ws.onmessage = (event) => {
-          const wsData = JSON.parse(event.data);
+          const wsData: RawLogPayload & { type?: string } = JSON.parse(event.data);
           if (wsData.type === 'log') {
             const timestamp = wsData.time_str || new Date().toLocaleTimeString('zh-CN', { hour12: false });
             setLogs(prev => [...prev, {
-              source: wsData.source === 'HK' ? '港股' : 'A股',
+              source: getSourceLabel(wsData.source),
               message: wsData.message,
               timestamp: timestamp,
               type: determineLogType(wsData.message)
@@ -61,13 +81,6 @@ export default function Terminal() {
     }
   }, [logs]);
 
-  const determineLogType = (msg: string): any => {
-    if (msg.includes('成交') || msg.includes('买入') || msg.includes('卖出')) return 'trade';
-    if (msg.includes('错误') || msg.includes('失败')) return 'error';
-    if (msg.includes('警告') || msg.includes('提醒')) return 'warning';
-    return 'info';
-  };
-
   return (
     <div className="flex flex-col h-full bg-[#0a0a0c] rounded-2xl border border-white/[0.05] overflow-hidden shadow-2xl relative">
       <div className="scan-line-overlay pointer-events-none"></div>
@@ -76,12 +89,12 @@ export default function Terminal() {
           <div className="p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20">
             <Cpu size={16} className="text-emerald-400" />
           </div>
-          <span className="text-[11px] font-black uppercase tracking-[0.2em] text-white italic">Core Live Execution Shell</span>
+          <span className="text-[11px] font-black uppercase tracking-[0.2em] text-white italic">核心实时执行终端</span>
         </div>
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2 px-3 py-1 bg-emerald-500/5 rounded-full border border-emerald-500/10">
             <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
-            <span className="text-[9px] text-emerald-500/80 font-mono font-bold">STREAM_STABLE</span>
+            <span className="text-[9px] text-emerald-500/80 font-mono font-bold">流状态稳定</span>
           </div>
         </div>
       </div>
@@ -94,10 +107,10 @@ export default function Terminal() {
           <div className="flex flex-col items-center justify-center h-full gap-5 opacity-20 transition-opacity duration-1000 grayscale">
              <Activity size={48} className="animate-breath text-emerald-500" />
              <div className="flex flex-col items-center gap-2">
-                <p className="text-[11px] font-black uppercase tracking-[0.4em] italic">Awaiting Signal Stream</p>
+                <p className="text-[11px] font-black uppercase tracking-[0.4em] italic">等待信号流接入</p>
                 <div className="flex items-center gap-2">
                    <div className="w-8 h-[1px] bg-emerald-500/30"></div>
-                   <p className="text-[8px] font-mono uppercase tracking-widest">Connection: NOMINAL</p>
+                   <p className="text-[8px] font-mono uppercase tracking-widest">连接状态：正常</p>
                    <div className="w-8 h-[1px] bg-emerald-500/30"></div>
                 </div>
              </div>
@@ -109,9 +122,9 @@ export default function Terminal() {
               {log.timestamp}
             </span>
             <div className="shrink-0 flex items-center gap-2 w-14">
-               <div className={`w-[2px] h-3 rounded-full ${log.source === '港股' ? 'bg-blue-500' : 'bg-orange-500'}`} />
-               <span className={`font-black text-[9px] uppercase tracking-tighter ${log.source === '港股' ? 'text-blue-500' : 'text-orange-500'}`}>
-                 {log.source === '港股' ? 'HK_MKT' : 'CN_MKT'}
+               <div className={`w-[2px] h-3 rounded-full ${log.source === '港股' ? 'bg-blue-500' : log.source === '美股' ? 'bg-emerald-500' : 'bg-orange-500'}`} />
+               <span className={`font-black text-[9px] uppercase tracking-tighter ${log.source === '港股' ? 'text-blue-500' : log.source === '美股' ? 'text-emerald-500' : 'text-orange-500'}`}>
+                 {log.source === '港股' ? '港股市场' : log.source === '美股' ? '美股市场' : 'A股市场'}
                </span>
             </div>
             <span className={`flex-1 break-all tracking-tight font-medium ${

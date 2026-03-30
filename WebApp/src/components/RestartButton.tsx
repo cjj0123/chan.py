@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { RefreshCw, Power, AlertTriangle, CheckCircle2, Loader2 } from 'lucide-react';
+import React, { useState } from 'react';
+import { Power, AlertTriangle, CheckCircle2, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export default function RestartButton() {
@@ -23,7 +23,7 @@ export default function RestartButton() {
                 setStatus('idle');
                 alert('重启请求失败: ' + data.error);
             }
-        } catch (err) {
+        } catch {
             // Error is expected as the connection closes
             console.log('Backend connection closed for restart.');
             await checkBackendStatus();
@@ -47,7 +47,7 @@ export default function RestartButton() {
                     }, 1000);
                     return;
                 }
-            } catch (e) {
+            } catch {
                 // Still down
             }
             
@@ -125,7 +125,7 @@ export default function RestartButton() {
                                         </div>
                                     </div>
                                     <h4 className="text-white font-black tracking-widest text-sm uppercase mb-3">
-                                        {status === 'restarting_done' ? 'RESTART_SUCCESS' : 'SYSTEM_RESTARTING'}
+                                        {status === 'restarting_done' ? '重启成功' : '系统重启中'}
                                     </h4>
                                     <p className="text-slate-500 text-xs font-mono italic animate-pulse">
                                         {message}

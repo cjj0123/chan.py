@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from App.HKTradingController import HKTradingController
 from App.MonitorController import MarketMonitorController
+from App.IBTradingController import IBTradingController
 from Common.CEnum import KL_TYPE, DATA_SRC
 from Chan import CChan
 from Plot.PlotDriver import CPlotDriver
@@ -24,6 +25,7 @@ class WebTerminalManager:
         self.loop = loop or asyncio.get_event_loop()
         self.hk_status = {"available": 0.0, "total": 0.0, "today_pl": 0.0, "positions": []}
         self.cn_status = {"available": 0.0, "total": 0.0, "today_pl": 0.0, "positions": []}
+        self.us_status = {"available": 0.0, "total": 0.0, "today_pl": 0.0, "positions": []}
         self.system_summary = {
             "daily_pnl": 0.0,
             "daily_pnl_pct": 0.0,
@@ -56,16 +58,29 @@ class WebTerminalManager:
             parent=None
         )
         self._setup_cn_signals()
+
+        # Initialize US IB Controller
+        print("DEBUG: Setting up US IB Controller...")
+        us_group = TRADING_CONFIG.get('us_watchlist_group', '美股')
+        self.us_controller = IBTradingController(
+            us_watchlist_group=us_group,
+            discord_bot=None
+        )
+        self._setup_us_signals()
         
         # Trading State (Initial Sync)
         self.trading_config = {
             "HK": {
-                "auto_trade": not self.hk_controller.dry_run, # Inverted logic for simplicity in UI
+                "auto_trade": not getattr(self.hk_controller, '_is_paused', False),
                 "live_mode": not self.hk_controller.dry_run
             },
             "CN": {
                 "auto_trade": self.cn_monitor.trading_enabled,
                 "live_mode": self.cn_monitor.trd_env == 1 # TrdEnv.REAL is 1
+            },
+            "US": {
+                "auto_trade": not getattr(self.us_controller, '_is_paused', False),
+                "live_mode": self.us_controller.is_live_account_mode()
             }
         }
         
@@ -103,6 +118,36 @@ class WebTerminalManager:
         )
         self.cn_monitor.funds_updated.connect(on_funds)
 
+    def _setup_us_signals(self):
+        def on_funds(avail, total, pos):
+            self.us_status = {
+                "available": avail,
+                "total": total,
+                "positions": [self._normalize_us_position(p) for p in pos],
+                "today_pl": 0.0
+            }
+            self.send_status("US_FUNDS", self.us_status)
+            self._update_system_summary()
+
+        self.us_controller.log_message.connect(
+            lambda msg: self.send_log("US", msg)
+        )
+        self.us_controller.funds_updated.connect(on_funds)
+
+    def _normalize_us_position(self, pos: Dict[str, Any]) -> Dict[str, Any]:
+        symbol = str(pos.get("symbol") or pos.get("code") or "").upper()
+        code = symbol if symbol.startswith("US.") else f"US.{symbol}" if symbol else "US.UNKNOWN"
+        return {
+            "code": code,
+            "name": pos.get("name") or symbol or code,
+            "market": "US",
+            "qty": int(pos.get("qty", 0)),
+            "mkt_value": float(pos.get("mkt_value", 0.0) or 0.0),
+            "avg_cost": float(pos.get("avg_cost", pos.get("cost_price", 0.0)) or 0.0),
+            "mkt_price": float(pos.get("mkt_price", pos.get("last_price", 0.0)) or 0.0),
+            "currency": "USD",
+        }
+
     def _update_system_summary(self):
         # Calculate consolidated daily P&L (HKD to CNY conversion)
         hk_pnl_cny = self.hk_status.get("today_pl", 0.0) * self.HKD_TO_CNY
@@ -110,20 +155,31 @@ class WebTerminalManager:
         total_pnl = hk_pnl_cny + cn_pnl_cny
         
         # Calculate total assets in CNY
-        total_assets_cny = (self.hk_status.get("total", 0.0) * self.HKD_TO_CNY) + self.cn_status.get("total", 0.0)
+        usd_to_cny = 7.2
+        total_assets_cny = (
+            (self.hk_status.get("total", 0.0) * self.HKD_TO_CNY)
+            + self.cn_status.get("total", 0.0)
+            + (self.us_status.get("total", 0.0) * usd_to_cny)
+        )
         pnl_pct = (total_pnl / total_assets_cny * 100) if total_assets_cny > 0 else 0.0
         
-        # Active symbols from both HK and CN watchlists
+        # Active symbols from HK / CN / US watchlists
         active_count = 0
         try:
             hk_watchlist = self.hk_controller.get_watchlist_data()
             cn_watchlist = {}
             if hasattr(self.cn_monitor, 'get_watchlist_data'):
                 cn_watchlist = self.cn_monitor.get_watchlist_data()
-            active_count = len(hk_watchlist) + len(cn_watchlist)
+            us_watchlist = {}
+            if hasattr(self.us_controller, 'get_watchlist_data'):
+                us_watchlist = self.us_controller.get_watchlist_data()
+            active_count = len(hk_watchlist) + len(cn_watchlist) + len(us_watchlist)
             
             if active_count == 0:
-                print(f"DEBUG: Watchlist count is 0. HK Group: {self.hk_controller.hk_watchlist_group}, CN Group: {self.cn_monitor.watchlist_group}")
+                print(
+                    f"DEBUG: Watchlist count is 0. HK Group: {self.hk_controller.hk_watchlist_group}, "
+                    f"CN Group: {self.cn_monitor.watchlist_group}, US Group: {self.us_controller.watchlist_group}"
+                )
         except Exception as e:
             print(f"ERROR: Failed to fetch watchlist: {e}")
             active_count = 0
@@ -137,6 +193,8 @@ class WebTerminalManager:
             total_mkt_val_cny += p.get("mkt_value", 0.0) * self.HKD_TO_CNY
         for p in self.cn_status.get("positions", []):
             total_mkt_val_cny += p.get("mkt_value", 0.0)
+        for p in self.us_status.get("positions", []):
+            total_mkt_val_cny += p.get("mkt_value", 0.0) * usd_to_cny
             
         exposure_ratio = (total_mkt_val_cny / total_assets_cny) if total_assets_cny > 0 else 0.0
         if exposure_ratio > 0.8: risk = "HIGH"
@@ -232,6 +290,15 @@ class WebTerminalManager:
             self.cn_monitor.run_monitor_loop()
             
         threading.Thread(target=start_cn, daemon=True).start()
+
+        # 3. Start US IB Controller
+        def start_us():
+            print("DEBUG: US thread started.")
+            self.us_controller.query_account_funds()
+            print("DEBUG: US initial fund query scheduled.")
+            self.us_controller.run_trading_loop()
+
+        threading.Thread(target=start_us, daemon=True).start()
         print("DEBUG: Monitor threads spawned.")
 
     def get_recent_signals(self, limit=100):
@@ -251,6 +318,11 @@ class WebTerminalManager:
                 cn_watchlist = self.cn_monitor.get_watchlist_data()
             if cn_watchlist: code_to_name.update(cn_watchlist)
             
+            us_watchlist = {}
+            if hasattr(self.us_controller, 'get_watchlist_data'):
+                us_watchlist = self.us_controller.get_watchlist_data()
+            if us_watchlist: code_to_name.update(us_watchlist)
+            
             # Additional names from HKTradingController watchlist
             if hasattr(self.hk_controller, 'watchlist'):
                 for code, info in self.hk_controller.watchlist.items():
@@ -267,9 +339,19 @@ class WebTerminalManager:
             hours_back = 24 # 平日窗口扩大到 24h 保证覆盖
 
         cutoff_time = (now - timedelta(hours=hours_back)).strftime('%Y-%m-%d %H:%M:%S')
-        combined_signals = []
-        seen_keys = set()
-        
+        signal_map = {}
+
+        def signal_rank(sig: dict) -> tuple:
+            open_price = sig.get('open_price')
+            ml_score = sig.get('ml_score')
+            visual_score = sig.get('visual_score')
+            return (
+                1 if open_price not in (None, 0, 0.0) else 0,
+                1 if ml_score not in (None, 0, 0.0) else 0,
+                1 if visual_score not in (None, 0, 0.0) else 0,
+                1 if sig.get('status') == 'active' else 0,
+            )
+
         # Helper to format signal
         def format_signal(s):
             code = s.get('stock_code')
@@ -289,34 +371,49 @@ class WebTerminalManager:
             bstype_display = prefix + bstype_raw if not bstype_raw.startswith(('b', 's')) else bstype_raw
             
             # Scoring
-            ml_score = s.get('ml_score') or s.get('model_score_before') or 0
-            visual_score = s.get('visual_score') or s.get('model_score_before') or 0
+            ml_score = s.get('ml_score')
+            if isinstance(ml_score, (int, float)) and 0 < ml_score <= 1:
+                ml_score = round(ml_score * 100, 2)
+            elif ml_score is None:
+                ml_score = 0
+
+            visual_score = s.get('visual_score')
+            if visual_score is None:
+                visual_score = s.get('model_score_before') or 0
+
+            open_price = s.get('open_price')
+            if open_price in (0, 0.0, ''):
+                open_price = None
             
             # Stock Name
             name = s.get('stock_name')
             if not name or name == 'TEST' or name == 'A股股票' or name == 'HK Stock':
                 name = code_to_name.get(code, code)
             
-            # Unique Key for deduplication: (code, timestamp, type, ml_score, visual_score)
-            # We want to display signals with same point but different scores
-            unique_key = f"{code}_{dt}_{bstype_display}_{ml_score}_{visual_score}"
-            if unique_key in seen_keys:
-                return None
-            seen_keys.add(unique_key)
-            
+            unique_key = f"{code}_{dt}_{bstype_display}"
+
             return {
+                "unique_key": unique_key,
                 "stock_code": code,
                 "stock_name": name,
                 "add_date": dt,
                 "bstype": bstype_display,
                 "lv": s.get('lv', '30M'),
-                "open_price": s.get('open_price', 0.0),
-                "model_score_before": ml_score, # For UI compatibility
+                "open_price": open_price,
+                "model_score_before": visual_score,
                 "ml_score": ml_score,
                 "visual_score": visual_score,
                 "status": s.get('status', 'active'),
                 "chart_url": s.get('open_image_url', '')
             }
+
+        def add_signal(sig):
+            if not sig:
+                return
+            unique_key = sig["unique_key"]
+            existing = signal_map.get(unique_key)
+            if existing is None or signal_rank(sig) > signal_rank(existing):
+                signal_map[unique_key] = sig
 
         # 1. Load from DB
         try:
@@ -326,8 +423,7 @@ class WebTerminalManager:
             df_signals = db.execute_query(query_signals, (cutoff_time,))
             if not df_signals.empty:
                 for _, row in df_signals.iterrows():
-                    sig = format_signal(row.to_dict())
-                    if sig: combined_signals.append(sig)
+                    add_signal(format_signal(row.to_dict()))
 
             # Also check live_trades for recent entries (Phase 12 addition)
             query_live = "SELECT code as stock_code, entry_time as add_date, signal_type as bstype, entry_price as open_price, ml_prob as ml_score, visual_score, name as stock_name FROM live_trades WHERE entry_time >= ? ORDER BY entry_time DESC"
@@ -336,8 +432,7 @@ class WebTerminalManager:
                 for _, row in df_live.iterrows():
                     d = row.to_dict()
                     d['ml_score'] = int(d.get('ml_score', 0) * 100) if d.get('ml_score', 0) < 1 else d.get('ml_score', 0)
-                    sig = format_signal(d)
-                    if sig: combined_signals.append(sig)
+                    add_signal(format_signal(d))
         except Exception as e:
             logging.error(f"Error fetching signals from DB: {e}")
 
@@ -349,32 +444,29 @@ class WebTerminalManager:
                     data = json.load(f)
                 for k, dt_str in data.items():
                     if dt_str < cutoff_time: continue
-                    parts = k.split('.')
-                    if len(parts) >= 2:
-                        code_part = parts[-1].split('_')[0]
-                        prefix_market = parts[-2].split('_')[-1]
-                        stock_code = f"{prefix_market}.{code_part}"
-                        
-                        bstype = "1"
-                        if "_1p" in k: bstype = "1p"
-                        elif "_2s" in k: bstype = "2s"
-                        elif "_2" in k: bstype = "2"
-                        elif "_3a" in k: bstype = "3a"
-                        elif "_3b" in k: bstype = "3b"
-                        
-                        sig_dict = {
-                            "stock_code": stock_code,
-                            "add_date": dt_str,
-                            "bstype": bstype,
-                            "lv": "30M",
-                            "model_score_before": 85 if "STRICT" in k else 65
-                        }
-                        sig = format_signal(sig_dict)
-                        if sig: combined_signals.append(sig)
+                    if not k.startswith("STRICT_"):
+                        continue
+
+                    raw_key = k[len("STRICT_"):]
+                    try:
+                        code_part, remainder = raw_key.split("_", 1)
+                        signal_time, bstype = remainder.rsplit("_", 1)
+                    except ValueError:
+                        continue
+
+                    sig_dict = {
+                        "stock_code": code_part,
+                        "add_date": signal_time,
+                        "bstype": bstype,
+                        "lv": "30M",
+                        "status": "pending",
+                    }
+                    add_signal(format_signal(sig_dict))
         except Exception as j_err:
             logging.error(f"Fallback JSON parsing failed: {j_err}")
 
         # Final Sort and Limit
+        combined_signals = list(signal_map.values())
         combined_signals.sort(key=lambda x: x.get("add_date", ""), reverse=True)
         return combined_signals[:limit]
 
@@ -473,8 +565,15 @@ class WebTerminalManager:
     def stop_monitors(self):
         self.hk_controller.stop()
         self.cn_monitor.stop()
+        self.us_controller.stop()
 
     def get_trading_config(self):
+        self.trading_config["HK"]["auto_trade"] = not getattr(self.hk_controller, '_is_paused', False)
+        self.trading_config["HK"]["live_mode"] = not self.hk_controller.dry_run
+        self.trading_config["CN"]["auto_trade"] = self.cn_monitor.trading_enabled
+        self.trading_config["CN"]["live_mode"] = self.cn_monitor.trd_env == 1
+        self.trading_config["US"]["auto_trade"] = not getattr(self.us_controller, '_is_paused', False)
+        self.trading_config["US"]["live_mode"] = self.us_controller.is_live_account_mode()
         return self.trading_config
 
     def set_trading_config(self, market: str, auto_trade: bool = None, live_mode: bool = None):
@@ -482,10 +581,7 @@ class WebTerminalManager:
         from futu import TrdEnv
         if market == "HK":
             if auto_trade is not None:
-                # For HK, we use dry_run to control both. 
-                # If auto_trade is True, we might want live_mode to be configurable.
-                # Project's existing logic: dry_run=True means Simulate.
-                pass 
+                self.hk_controller.toggle_pause(not auto_trade)
             
             if live_mode is not None:
                 new_env = TrdEnv.REAL if live_mode else TrdEnv.SIMULATE
@@ -496,12 +592,6 @@ class WebTerminalManager:
                     # Reset context to force re-login/re-init
                     self.hk_controller._trd_ctx = None
                     self.hk_controller._quote_ctx = None
-            
-            # HK auto_trade mapping
-            if auto_trade is not None:
-                # We'll use a custom property if needed, but for now align with dry_run
-                # If they want "auto" but "sim", it's still dry_run=True in this codebase's current state
-                pass
 
         elif market == "CN":
             if live_mode is not None:
@@ -515,6 +605,11 @@ class WebTerminalManager:
             
             if auto_trade is not None:
                 self.cn_monitor.trading_enabled = auto_trade
+        elif market == "US":
+            if auto_trade is not None:
+                self.us_controller.toggle_pause(not auto_trade)
+            if live_mode is not None:
+                self.us_controller.set_live_account_mode(live_mode)
 
         # Update local state
         if auto_trade is not None: self.trading_config[market]["auto_trade"] = auto_trade
@@ -530,6 +625,8 @@ class WebTerminalManager:
             self.hk_controller.execute_manual_order(symbol, action, price, qty)
         elif market == "CN":
             self.cn_monitor.execute_manual_order(symbol, action, price, qty)
+        elif market == "US":
+            self.us_controller.execute_manual_order(symbol, action, price, qty)
         return {"success": True, "message": "Order queued"}
 
     def emergency_stop(self, market: str):
@@ -542,4 +639,6 @@ class WebTerminalManager:
                 self.send_log("HK", "Emergency Stop: close_all_positions not implemented for HK")
         elif market == "CN":
             self.cn_monitor.close_all_positions()
+        elif market == "US":
+            self.us_controller.close_all_positions()
         return {"success": True, "message": f"Emergency stop initiated for {market}"}

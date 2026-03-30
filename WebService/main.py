@@ -91,7 +91,8 @@ async def get_portfolio():
     if terminal_manager:
         return {
             "hk": terminal_manager.hk_status,
-            "cn": terminal_manager.cn_status
+            "cn": terminal_manager.cn_status,
+            "us": terminal_manager.us_status
         }
     return {"message": "Initializing controllers..."}
 

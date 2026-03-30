@@ -15,6 +15,7 @@ load_dotenv()
 TRADING_CONFIG = {
     # 富途相关配置
     'hk_watchlist_group': os.getenv('HK_WATCHLIST_GROUP', '港股'),
+    'us_watchlist_group': os.getenv('US_WATCHLIST_GROUP', '美股'),
     'min_visual_score': int(os.getenv('MIN_VISUAL_SCORE', '70')),
     'hk_dry_run': os.getenv('HK_DRY_RUN', 'True').lower() in ('true', '1', 'yes'),
     'us_dry_run': os.getenv('US_DRY_RUN', 'False').lower() in ('true', '1', 'yes'), # 默认开通（对应 IB 模拟端口 4002）

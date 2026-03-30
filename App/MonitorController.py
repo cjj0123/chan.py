@@ -1212,11 +1212,11 @@ class MarketMonitorController(QObject):
                 # 热加载 ML 模型
                 self.signal_validator.check_and_reload()
 
-                # 🔥 [Phase 12] ATR 心跳：无论是否交易时间都输出，证明进程存活
+                # 仅在盘中输出 ATR 心跳，避免休市期间日志刷屏
                 if time.time() - self._last_atr_heartbeat_time >= 60:
-                    tracker_count = len(getattr(self, 'position_trackers', {}))
-                    trading_status = '⏰ 盘中' if self.is_trading_time() else '💤 休市'
-                    self.log_message.emit(f"🔍 [A股-风控] ATR心跳: 正在为 {tracker_count} 只标的提供动态止损监控。({trading_status})")
+                    if self.is_trading_time():
+                        tracker_count = len(getattr(self, 'position_trackers', {}))
+                        self.log_message.emit(f"🔍 [A股-风控] ATR心跳: 正在为 {tracker_count} 只标的提供动态止损监控。(⏰ 盘中)")
                     self._last_atr_heartbeat_time = time.time()
 
                 # 心跳逻辑 (仅更新内部变量)
@@ -1690,8 +1690,17 @@ class MarketMonitorController(QObject):
                 # 🛡️ 尝试从图表路径映射相对路径，方便 Web 访问
                 relative_chart_path = chart_path.replace(os.getcwd() + "/", "")
                 
-                # CChanDB.save_signal(code, signal_type, score, chart_path, name, is_buy)
-                self.db.save_signal(code, bsp_type_str, score, relative_chart_path, name=stock_name, is_buy=bsp.is_buy)
+                self.db.save_signal(
+                    code,
+                    bsp_type_str,
+                    score,
+                    relative_chart_path,
+                    name=stock_name,
+                    is_buy=bsp.is_buy,
+                    open_price=bsp.klu.close,
+                    ml_score=round(prob * 100, 2),
+                    status='active',
+                )
                 
                 # 2. 同步到 discovered_signals.json (Fallback 兼容)
                 now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

@@ -25,7 +25,13 @@ import sqlite3
 from Trade.MemorySummarizer import MemorySummarizer
 import requests
 
-from PyQt6.QtCore import QObject, pyqtSignal
+if os.environ.get('WEB_MODE') == '1':
+    from App.WebControllerAdapter import WebSignal as pyqtSignal, WebObject as QObject
+else:
+    try:
+        from PyQt6.QtCore import QObject, pyqtSignal
+    except ImportError:
+        from App.WebControllerAdapter import WebSignal as pyqtSignal, WebObject as QObject
 
 # 将项目根目录加入路径
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -51,9 +57,7 @@ from ib_insync import IB, Stock, MarketOrder, LimitOrder, util
 from visual_judge import VisualJudge
 # 导入 信号验证
 from ML.SignalValidator import SignalValidator
-from visual_judge import VisualJudge
-from DiscordBot import DiscordBot
-from Trade.db_util import CChanDB
+from App.DiscordBot import DiscordBot
 
 
 # --- 配置导入 ---
@@ -73,6 +77,10 @@ class BaseUSTradingController(QObject):
     log_message = pyqtSignal(str)
     scan_finished = pyqtSignal(int, int, int, int)
     funds_updated = pyqtSignal(float, float, list) # (available, total, positions)
+
+    def get_watchlist_data(self) -> Dict[str, str]:
+        """返回当前美股监控股票池，供 GUI/Web 汇总展示。"""
+        return self.get_futu_watchlist()
     
     def get_futu_watchlist(self):
         """支持多个分组合并同步 (如 '美股,热点_实盘')"""
@@ -130,7 +138,9 @@ class BaseUSTradingController(QObject):
         
         self.ib = None
         self.host = os.getenv("IB_HOST", "127.0.0.1")
-        self.port = int(os.getenv("IB_PORT", "4002"))
+        self.paper_port = int(os.getenv("IB_PAPER_PORT", "4002"))
+        self.real_port = int(os.getenv("IB_REAL_PORT", "4001"))
+        self.port = int(os.getenv("IB_PORT", str(self.paper_port)))
         self.client_id = 10 # 彻底隔离：交易使用 10-20，扫描使用 50-450
         
         self.charts_dir = f"charts_us_{self.venue.lower()}"
@@ -198,6 +208,8 @@ class BaseUSTradingController(QObject):
         self._trd_ctx = None
         self._last_close_date = None
         self._last_reset_date = datetime.now().strftime("%Y-%m-%d") # 🛡️ 日期重置锚点
+        self._trackers_initialized = False
+        self._trackers_initializing = False
 
     @property
     def trd_ctx(self):
@@ -242,6 +254,29 @@ class BaseUSTradingController(QObject):
     def stop(self):
         self._is_running = False
         self.log_message.emit("🛑 [美股] 正在停止交易进程...")
+
+    def is_live_account_mode(self) -> bool:
+        """当前是否连接到 IB 实盘账户端口。"""
+        return self.port == self.real_port
+
+    def set_live_account_mode(self, live_mode: bool):
+        """切换 IB 账户模式：实盘(4001) / 模拟盘(4002)。"""
+        target_port = self.real_port if live_mode else self.paper_port
+        if self.port == target_port:
+            return
+
+        self.port = target_port
+        self._trackers_initialized = False
+        self._trackers_initializing = False
+        mode_label = "实盘账户" if live_mode else "模拟盘账户"
+        self.log_message.emit(f"🔁 [美股] 正在切换到 {mode_label} (端口: {target_port})")
+
+        if self.ib and self.ib.isConnected():
+            try:
+                self.ib.disconnect()
+                self.log_message.emit("🔌 [美股] 已断开当前 IB 会话，等待按新账户模式重连...")
+            except Exception as e:
+                self.log_message.emit(f"⚠️ [美股] 切换账户模式时断开连接失败: {e}")
 
     def toggle_pause(self, paused: bool):
         self._is_paused = paused
@@ -392,7 +427,9 @@ class BaseUSTradingController(QObject):
                             try: self.ib.reqMarketDataType(3)
                             except: pass
                             # 异步进行仓位风控初始化 (方案丙)
-                            asyncio.create_task(self._initialize_position_trackers())
+                            if not self._trackers_initialized and not self._trackers_initializing:
+                                self._trackers_initializing = True
+                                asyncio.create_task(self._initialize_position_trackers())
                         except asyncio.TimeoutError:
                             self.log_message.emit("⚠️ [美股] IB 连接超时 (12s)")
                         except Exception as e:
@@ -417,8 +454,8 @@ class BaseUSTradingController(QObject):
                     continue
 
                 if self.venue == "IB" and self.ib.isConnected():
-                    if not getattr(self, '_trackers_initialized', False):
-                        setattr(self, '_trackers_initialized', True)
+                    if not self._trackers_initialized and not self._trackers_initializing:
+                        self._trackers_initializing = True
                         asyncio.create_task(self._initialize_position_trackers())
 
                 # (指令处理已迁移至 _poll_gui_commands 后台协程)
@@ -1811,14 +1848,35 @@ class BaseUSTradingController(QObject):
             # 安全均值（加入保底：防止极端平盘或买卖点差造成的秒抛）
                 atr_val = sum(tr_list[-10:]) / 10 if len(tr_list) >= 10 else (current * 0.02)
                 atr_val = max(atr_val, current * 0.015)  # 🛡️ 强制 1.5% 现价的安全垫底限
+
+                signal_type = '未知'
+                try:
+                    with sqlite3.connect(self.db.db_path) as conn:
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            """
+                            SELECT signal_type
+                            FROM live_trades
+                            WHERE code = ? AND market = 'US' AND status = 'open'
+                            ORDER BY entry_time DESC
+                            LIMIT 1
+                            """,
+                            (code,)
+                        )
+                        row = cursor.fetchone()
+                        if row and row[0]:
+                            signal_type = row[0]
+                except Exception as db_ex:
+                    self.log_message.emit(f"⚠️ {code} 恢复 signal_type 失败，使用默认风控参数: {db_ex}")
                 
                 self.position_trackers[code] = {
                     'entry_price': p['avg_cost'],
                     'highest_price': max(current, p['avg_cost']),
                     'atr': atr_val,
-                    'trail_active': False
+                    'trail_active': False,
+                    'signal_type': signal_type
                 }
-                self.log_message.emit(f"✅ {code} 风控载入: 成本=${p['avg_cost']:.2f}, ATR=${atr_val:.3f}")
+                self.log_message.emit(f"✅ {code} 风控载入: 成本=${p['avg_cost']:.2f}, ATR=${atr_val:.3f}, 信号类型={signal_type}")
         except Exception as ex:
              self.log_message.emit(f"⚠️ 初始化 {code} ATR失败: {ex}")
 
@@ -1871,11 +1929,14 @@ class BaseUSTradingController(QObject):
                 
             # 自动查询资金以刷新 GUI
             self.cmd_queue.put(('QUERY_FUNDS', None))
+            self._trackers_initialized = True
                 
         except Exception as e:
             self.log_message.emit(f"🚨 [美股] ATR/持仓监控初始化引发致命异常: {e}")
             import traceback
             print(traceback.format_exc())
+        finally:
+            self._trackers_initializing = False
 
     async def _check_trailing_stops(self):
         """活性持仓止损检查算法 (方案丙) - 异步高频安全哨兵"""

@@ -13,8 +13,8 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Chanlun Trade Terminal - Professional Edition",
-  description: "Advanced Agentic Trading Terminal for Chanlun Strategies",
+  title: "缠论交易终端 - 专业版",
+  description: "面向缠论策略的高级智能交易终端",
 };
 
 export default function RootLayout({

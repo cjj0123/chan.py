@@ -2,7 +2,6 @@
 
 import React, { useState, useEffect } from 'react';
 import { 
-  ShieldCheck, 
   Search,
   Activity,
   AlertCircle,
@@ -11,8 +10,22 @@ import {
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
+interface Signal {
+  unique_key?: string;
+  stock_code?: string;
+  bstype?: string;
+  add_date?: string;
+  lv?: string;
+  open_price?: number;
+  ml_score?: number;
+  ml_prob?: number;
+  model_score_before?: number;
+  visual_score?: number;
+  status?: string;
+}
+
 export default function Scanner() {
-  const [signals, setSignals] = useState<any[]>([]);
+  const [signals, setSignals] = useState<Signal[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('');
 
@@ -46,16 +59,16 @@ export default function Scanner() {
         <div className="flex flex-col gap-2">
             <h2 className="text-[20px] font-black italic uppercase tracking-tighter text-white flex items-center gap-4">
                 <Activity size={24} className="text-emerald-500" />
-                Alpha Signal Pipeline
+                信号扫描总线
             </h2>
-            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">Real-time Cross-Market Scanning / Neural Ranker</p>
+            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-500">跨市场实时扫描 / 智能评分排序</p>
         </div>
         
         <div className="relative w-72 group">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-600 group-focus-within:text-emerald-500 transition-colors" size={16} />
             <input 
                 type="text" 
-                placeholder="FILTER SIGNALS..."
+                placeholder="筛选信号..."
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
                 className="w-full bg-[#050507] border border-white/[0.05] rounded-xl py-3 pl-12 pr-4 text-[13px] font-bold text-slate-200 placeholder:text-slate-800 focus:outline-none focus:border-emerald-500/30 focus:shadow-[0_0_20px_rgba(16,185,129,0.05)] transition-all"
@@ -67,35 +80,38 @@ export default function Scanner() {
         {loading ? (
             <div className="flex flex-col items-center justify-center h-80 gap-6 grayscale opacity-50">
                 <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin shadow-[0_0_15px_rgba(16,185,129,0.1)]" />
-                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Indexing Alpha Stream...</p>
+                <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">正在索引信号流...</p>
             </div>
         ) : filteredSignals.length > 0 ? (
             <table className="w-full text-left border-separate border-spacing-y-1.5">
                 <thead className="text-label opacity-40">
                     <tr>
-                        <th className="px-6 py-2">Timestamp</th>
-                        <th className="px-6 py-2">Symbol</th>
-                        <th className="px-6 py-2 text-center">Interval</th>
-                        <th className="px-6 py-2 text-center">Type</th>
-                        <th className="px-6 py-2 text-right">Price</th>
-                        <th className="px-6 py-2 text-center">Neural Matrix</th>
-                        <th className="px-6 py-2 text-center">State</th>
+                        <th className="px-6 py-2">时间</th>
+                        <th className="px-6 py-2">标的</th>
+                        <th className="px-6 py-2 text-center">周期</th>
+                        <th className="px-6 py-2 text-center">信号类型</th>
+                        <th className="px-6 py-2 text-right">价格</th>
+                        <th className="px-6 py-2 text-center">评分矩阵</th>
+                        <th className="px-6 py-2 text-center">状态</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {filteredSignals.map((signal: any, i: number) => {
-                        const bstype = signal.bstype || 'UNKNOWN';
+                    {filteredSignals.map((signal, i: number) => {
+                        const bstype = signal.bstype || '未知';
                         const isBuy = !bstype.startsWith('S') && !bstype.startsWith('s');
                         let mlScore = signal.ml_score ?? signal.ml_prob ?? 0;
                         if (mlScore <= 1.0 && mlScore > 0) mlScore = Math.round(mlScore * 100);
-                        const visualScore = Math.round(signal.model_score_before ?? signal.visual_score ?? 0);
+                        const visualScore = Math.round(signal.visual_score ?? signal.model_score_before ?? 0);
+                        const priceLabel = typeof signal.open_price === 'number' && signal.open_price > 0
+                          ? `¥${signal.open_price.toFixed(2)}`
+                          : '--';
                         
                         return (
                             <motion.tr 
                                 initial={{ opacity: 0, y: 5 }}
                                 animate={{ opacity: 1, y: 0 }}
                                 transition={{ delay: i * 0.03 }}
-                                key={i} 
+                                key={signal.unique_key || `${signal.stock_code}-${signal.add_date}-${signal.bstype}-${i}`}
                                 className="group hover:bg-white/[0.03] transition-all"
                             >
                                 <td className="px-6 py-4 bg-white/[0.015] rounded-l-xl border-y border-l border-white/[0.05] text-[11px] font-mono text-slate-600">
@@ -115,7 +131,7 @@ export default function Scanner() {
                                     </span>
                                 </td>
                                 <td className="px-6 py-4 bg-white/[0.015] border-y border-white/[0.05] text-right font-mono text-slate-300 font-bold text-[13px]">
-                                    ¥{signal.open_price?.toFixed(2) || '0.00'}
+                                    {priceLabel}
                                 </td>
                                 <td className="px-6 py-4 bg-white/[0.015] border-y border-white/[0.05] text-center">
                                     <div className="flex items-center gap-6 justify-center">
@@ -141,7 +157,7 @@ export default function Scanner() {
                                 </td>
                                 <td className="px-6 py-4 bg-white/[0.015] rounded-r-xl border-y border-r border-white/[0.05] text-center">
                                     <span className="text-[10px] font-black text-slate-600 uppercase italic opacity-60 tracking-[0.2em]">
-                                        {signal.status === 'active' ? 'STREAMING' : signal.status === 'executed' ? 'FILLED' : 'VERIFIED'}
+                                        {signal.status === 'active' ? '推送中' : signal.status === 'executed' ? '已成交' : signal.status === 'pending' ? '待补全' : '已验证'}
                                     </span>
                                 </td>
                             </motion.tr>
@@ -153,7 +169,7 @@ export default function Scanner() {
             <div className="flex flex-col items-center justify-center py-40 gap-8 bg-white/[0.01] rounded-[32px] border border-dashed border-white/[0.05]">
                 <AlertCircle size={48} className="text-slate-800" />
                 <div className="text-center">
-                    <p className="text-[12px] font-black uppercase tracking-[0.4em] text-slate-700">No active signals in broadcast buffer</p>
+                    <p className="text-[12px] font-black uppercase tracking-[0.4em] text-slate-700">当前广播缓冲区没有活动信号</p>
                 </div>
             </div>
         )}
