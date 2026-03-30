@@ -260,15 +260,17 @@ class CChanDB:
             cursor.execute(query, params)
             conn.commit()
 
-    def save_signal(self, code: str, signal_type: str, score: float, chart_path: str) -> int:
+    def save_signal(self, code: str, signal_type: str, score: float, chart_path: str, name: str = 'Unknown', is_buy: bool = True) -> int:
         """
         保存一个新的交易信号。
 
         Args:
             code: 股票代码。
-            signal_type: 信号类型 (e.g., 'buy', 'sell')。
-            score: 视觉评分。
+            signal_type: 信号类型 (e.g., '1', '2s')。
+            score: 视觉/模型评分。
             chart_path: 图表文件路径。
+            name: 股票中文名称。
+            is_buy: 是否为买点。
 
         Returns:
             新插入信号的ID。
@@ -279,7 +281,7 @@ class CChanDB:
             add_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             cursor.execute(
                 "INSERT INTO trading_signals (add_date, stock_code, stock_name, lv, bstype, is_buy, model_score_before, open_image_url, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')",
-                (add_date, code, 'TEST', '30M', signal_type, 1 if signal_type == 'buy' else 0, score, chart_path)
+                (add_date, code, name, '30M', signal_type, 1 if is_buy else 0, score, chart_path)
             )
             conn.commit()
             return cursor.lastrowid

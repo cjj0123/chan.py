@@ -234,97 +234,149 @@ class WebTerminalManager:
         threading.Thread(target=start_cn, daemon=True).start()
         print("DEBUG: Monitor threads spawned.")
 
-    def get_recent_signals(self, limit=50):
+    def get_recent_signals(self, limit=100):
         """Fetch signals - extended window for weekends/holidays, with robust fallback."""
         from Trade.db_util import CChanDB
         import os
         import json
         
+        # 🚀 [Scanner Enhancement] Fetch combined watchlist for name mapping
+        code_to_name = {}
+        try:
+            hk_watchlist = self.hk_controller.get_watchlist_data()
+            if hk_watchlist: code_to_name.update(hk_watchlist)
+            
+            cn_watchlist = {}
+            if hasattr(self.cn_monitor, 'get_watchlist_data'):
+                cn_watchlist = self.cn_monitor.get_watchlist_data()
+            if cn_watchlist: code_to_name.update(cn_watchlist)
+            
+            # Additional names from HKTradingController watchlist
+            if hasattr(self.hk_controller, 'watchlist'):
+                for code, info in self.hk_controller.watchlist.items():
+                    if code not in code_to_name:
+                        code_to_name[code] = info.get('name', 'HK Stock')
+        except Exception as e:
+            logging.error(f"Failed to fetch watchlist for name mapping: {e}")
+
         # 🔥 [Phase 12] 动态时间窗口：周末扩大到 72h，平日 12h
         now = datetime.now()
         if now.weekday() >= 5:  # 周末
             hours_back = 72
         else:
-            hours_back = 12
-        
+            hours_back = 24 # 平日窗口扩大到 24h 保证覆盖
+
         cutoff_time = (now - timedelta(hours=hours_back)).strftime('%Y-%m-%d %H:%M:%S')
-        query = "SELECT * FROM trading_signals WHERE add_date >= ? ORDER BY add_date DESC LIMIT ?"
+        combined_signals = []
+        seen_keys = set()
         
-        db_results = []
-        try:
-            # 🔥 [Phase 12] 检查数据库文件是否存在且可访问
-            db = CChanDB()
-            db_path = getattr(db, 'db_path', 'chan_trading.db')
-            if os.path.islink(db_path) and not os.path.exists(db_path):
-                raise FileNotFoundError(f"Database symlink broken: {db_path}")
+        # Helper to format signal
+        def format_signal(s):
+            code = s.get('stock_code')
+            if not code: return None
             
-            df = db.execute_query(query, (cutoff_time, limit))
-            if not df.empty:
-                for _, row in df.iterrows():
-                    try:
-                        d = row.to_dict()
-                        # 确保关键字段存在且有效
-                        if not d.get('stock_code') and d.get('code'):
-                            d['stock_code'] = d['code']
-                        if not d.get('bstype'):
-                            d['bstype'] = d.get('bs_type', 'UNKNOWN')
-                        db_results.append(d)
-                    except Exception as e:
-                        logging.error(f"Error processing signal row: {e}")
-                
-                print(f"DEBUG: [Scanner] Fetched {len(db_results)} signals from DB (cutoff: {cutoff_time})")
-                return db_results
-            else:
-                print(f"DEBUG: [Scanner] DB query returned empty (cutoff: {cutoff_time}). Falling through to JSON fallback.")
+            dt = s.get('add_date', 'Unknown Time')
+            bstype_raw = str(s.get('bstype', '1'))
+            
+            # Determine buy/sell prefix
+            is_buy = s.get('is_buy')
+            if is_buy is None:
+                # Fallback based on type: 1, 1p, 2, 2p, 3a, 3b are Buy; 1s, 2s, 3s are Sell
+                low_type = bstype_raw.lower()
+                is_buy = not any(v in low_type for v in ['s', 'sell'])
+            
+            prefix = 'b' if is_buy else 's'
+            bstype_display = prefix + bstype_raw if not bstype_raw.startswith(('b', 's')) else bstype_raw
+            
+            # Scoring
+            ml_score = s.get('ml_score') or s.get('model_score_before') or 0
+            visual_score = s.get('visual_score') or s.get('model_score_before') or 0
+            
+            # Stock Name
+            name = s.get('stock_name')
+            if not name or name == 'TEST' or name == 'A股股票' or name == 'HK Stock':
+                name = code_to_name.get(code, code)
+            
+            # Unique Key for deduplication: (code, timestamp, type, ml_score, visual_score)
+            # We want to display signals with same point but different scores
+            unique_key = f"{code}_{dt}_{bstype_display}_{ml_score}_{visual_score}"
+            if unique_key in seen_keys:
+                return None
+            seen_keys.add(unique_key)
+            
+            return {
+                "stock_code": code,
+                "stock_name": name,
+                "add_date": dt,
+                "bstype": bstype_display,
+                "lv": s.get('lv', '30M'),
+                "open_price": s.get('open_price', 0.0),
+                "model_score_before": ml_score, # For UI compatibility
+                "ml_score": ml_score,
+                "visual_score": visual_score,
+                "status": s.get('status', 'active'),
+                "chart_url": s.get('open_image_url', '')
+            }
+
+        # 1. Load from DB
+        try:
+            db = CChanDB()
+            # Try both tables for maximum coverage
+            query_signals = "SELECT * FROM trading_signals WHERE add_date >= ? ORDER BY add_date DESC"
+            df_signals = db.execute_query(query_signals, (cutoff_time,))
+            if not df_signals.empty:
+                for _, row in df_signals.iterrows():
+                    sig = format_signal(row.to_dict())
+                    if sig: combined_signals.append(sig)
+
+            # Also check live_trades for recent entries (Phase 12 addition)
+            query_live = "SELECT code as stock_code, entry_time as add_date, signal_type as bstype, entry_price as open_price, ml_prob as ml_score, visual_score, name as stock_name FROM live_trades WHERE entry_time >= ? ORDER BY entry_time DESC"
+            df_live = db.execute_query(query_live, (cutoff_time,))
+            if not df_live.empty:
+                for _, row in df_live.iterrows():
+                    d = row.to_dict()
+                    d['ml_score'] = int(d.get('ml_score', 0) * 100) if d.get('ml_score', 0) < 1 else d.get('ml_score', 0)
+                    sig = format_signal(d)
+                    if sig: combined_signals.append(sig)
         except Exception as e:
             logging.error(f"Error fetching signals from DB: {e}")
-            print(f"DEBUG: [Scanner] DB error: {e}. Attempting JSON fallback.")
-        
-        # --- Fallback: 永远尝试从 discovered_signals.json 加载 ---
-        print(f"DEBUG: [Scanner] Loading fallback signals from discovered_signals.json")
-        fallback_results = []
+
+        # 2. Try JSON Fallback
         try:
             json_path = "discovered_signals.json"
             if os.path.exists(json_path):
                 with open(json_path, "r") as f:
                     data = json.load(f)
-                    
                 for k, dt_str in data.items():
-                    try:
-                        # 解析 key: STRICT_HK.00358_2026-03-20 15:30:00_1 或 LOOSE_HK.02580_1p
-                        parts = k.split('.')
-                        if len(parts) >= 2:
-                            code_part = parts[-1].split('_')[0]
-                            prefix = parts[-2].split('_')[-1]
-                            stock_code = f"{prefix}.{code_part}"
-                            
-                            bstype = "1"
-                            if "_1p" in k: bstype = "1p"
-                            elif "_2s" in k: bstype = "2s"
-                            elif "_2" in k: bstype = "2"
-                            elif "_3a" in k: bstype = "3a"
-                            elif "_3b" in k: bstype = "3b"
-                            
-                            fallback_results.append({
-                                "stock_code": stock_code,
-                                "add_date": dt_str,
-                                "bstype": bstype,
-                                "lv": "30M",         
-                                "open_price": 0.0,
-                                "model_score_before": 85 if "STRICT" in k else 65,
-                                "status": "pending",
-                                "ml_score": 85 if "STRICT" in k else 65
-                            })
-                    except Exception:
-                        continue
+                    if dt_str < cutoff_time: continue
+                    parts = k.split('.')
+                    if len(parts) >= 2:
+                        code_part = parts[-1].split('_')[0]
+                        prefix_market = parts[-2].split('_')[-1]
+                        stock_code = f"{prefix_market}.{code_part}"
                         
-                print(f"DEBUG: [Scanner] Loaded {len(fallback_results)} signals from JSON fallback.")
+                        bstype = "1"
+                        if "_1p" in k: bstype = "1p"
+                        elif "_2s" in k: bstype = "2s"
+                        elif "_2" in k: bstype = "2"
+                        elif "_3a" in k: bstype = "3a"
+                        elif "_3b" in k: bstype = "3b"
+                        
+                        sig_dict = {
+                            "stock_code": stock_code,
+                            "add_date": dt_str,
+                            "bstype": bstype,
+                            "lv": "30M",
+                            "model_score_before": 85 if "STRICT" in k else 65
+                        }
+                        sig = format_signal(sig_dict)
+                        if sig: combined_signals.append(sig)
         except Exception as j_err:
-            print(f"ERROR: Fallback JSON parsing failed: {j_err}")
-        
-        # 按日期降序
-        fallback_results.sort(key=lambda x: x.get("add_date", ""), reverse=True)
-        return fallback_results[:limit]
+            logging.error(f"Fallback JSON parsing failed: {j_err}")
+
+        # Final Sort and Limit
+        combined_signals.sort(key=lambda x: x.get("add_date", ""), reverse=True)
+        return combined_signals[:limit]
 
     def generate_analysis_chart(self, symbol: str, lv_str: str = '30M'):
         """Generate a Chanlun chart with high-precision bottleneck diagnostics."""

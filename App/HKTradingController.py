@@ -1669,10 +1669,9 @@ class HKTradingController(QObject):
                 self.discovered_signals[code] = bsp_time_str
                 self._save_discovered_signals()
                 
-                # 🔥 [Phase 12] 同时落库中心数据库 (Alpha Scanner 优先从此处读取)
                 try:
                     # 此时还没有视觉评分和正式图表，先存入基础原始信号（Pending 状态）
-                    self.db.save_signal(code, bsp_type, 0.0, "")
+                    self.db.save_signal(code, bsp_type, 0.0, "", name=name, is_buy=is_buy)
                 except Exception as e_db:
                     logger.error(f"[HK-DB] 保存初步信号失败: {e_db}")
             

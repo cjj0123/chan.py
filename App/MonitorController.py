@@ -1680,13 +1680,18 @@ class MarketMonitorController(QObject):
             # 🔥 [Phase 12] 信号全域同步 (Alpha Scanner)
             try:
                 # 1. 保存到中心数据库 (trading_signals 表)
-                # 注意: 这里的 bsp.type 可能是一个对象，需要取 .value 或转换
+                # 注意: 这里的 bsp.is_buy 直接可用
                 bstype_val = str(bsp.type)
+                
+                # 获取股票名称
+                watchlist = self.get_watchlist_data()
+                stock_name = watchlist.get(code, "A股股票")
+                
                 # 🛡️ 尝试从图表路径映射相对路径，方便 Web 访问
                 relative_chart_path = chart_path.replace(os.getcwd() + "/", "")
                 
-                # CChanDB.save_signal(code, signal_type, score, chart_path)
-                self.db.save_signal(code, bsp_type_str, score, relative_chart_path)
+                # CChanDB.save_signal(code, signal_type, score, chart_path, name, is_buy)
+                self.db.save_signal(code, bsp_type_str, score, relative_chart_path, name=stock_name, is_buy=bsp.is_buy)
                 
                 # 2. 同步到 discovered_signals.json (Fallback 兼容)
                 now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
