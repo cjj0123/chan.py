@@ -99,6 +99,10 @@ class MarketMonitorController(QObject):
         # 信号历史记录，用于去重
         self.notified_signals_file = "monitor_notified_signals.json"
         self.notified_signals = self._load_notified_signals()
+        
+        # 🔥 [Phase 12] 全局信号发现文件 (用于 Web 终端同步)
+        self.discovered_signals_file = "discovered_signals.json"
+        self.discovered_signals = self._load_discovered_signals()
 
         # 实例化工具组件
         self.signal_validator = SignalValidator()
@@ -1475,6 +1479,25 @@ class MarketMonitorController(QObject):
 
         return None
 
+    def _load_discovered_signals(self):
+        """加载全域信号发现记录"""
+        if os.path.exists(self.discovered_signals_file):
+            try:
+                with open(self.discovered_signals_file, 'r') as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.error(f"加载全域信号发现记录失败: {e}")
+        return {}
+
+    def _save_discovered_signals(self):
+        """保存全域信号发现记录"""
+        try:
+            # TODO: 在多进程环境下应考虑文件锁
+            with open(self.discovered_signals_file, 'w') as f:
+                json.dump(self.discovered_signals, f, indent=4)
+        except Exception as e:
+            logger.error(f"保存全域信号发现记录失败: {e}")
+
     def _process_signal_sync(self, code: str, bsp, chan, name: str = ""):
         """同步处理单个信号 (ML → 绘图 → 视觉 → 交易) 在线程池中运行"""
         try:
@@ -1653,6 +1676,30 @@ class MarketMonitorController(QObject):
                 return
 
             self.log_message.emit(f"✅ [A股] {code} {sig_type} {bsp_type_str} 准入 [ML:{prob:.2f}, Visual:{score}]")
+
+            # 🔥 [Phase 12] 信号全域同步 (Alpha Scanner)
+            try:
+                # 1. 保存到中心数据库 (trading_signals 表)
+                # 注意: 这里的 bsp.type 可能是一个对象，需要取 .value 或转换
+                bstype_val = str(bsp.type)
+                # 🛡️ 尝试从图表路径映射相对路径，方便 Web 访问
+                relative_chart_path = chart_path.replace(os.getcwd() + "/", "")
+                
+                # CChanDB.save_signal(code, signal_type, score, chart_path)
+                self.db.save_signal(code, bsp_type_str, score, relative_chart_path)
+                
+                # 2. 同步到 discovered_signals.json (Fallback 兼容)
+                now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                bsp_time_str = str(bsp.klu.time)
+                # 组装与 HK 一致的 Key 结构
+                sig_key_strict = f"STRICT_{code}_{bsp_time_str}_{bsp_type_str}"
+                
+                self.discovered_signals[sig_key_strict] = now_str
+                self.discovered_signals[code] = bsp_time_str
+                self._save_discovered_signals() # 调用持久化
+                
+            except Exception as e_sync:
+                self.log_message.emit(f"⚠️ [A股] 同步信号到 Web 扫描仪失败: {e_sync}")
 
             # --- 5. Discord 推送 ---
             min_score = TRADING_CONFIG.get('min_visual_score', 70)
