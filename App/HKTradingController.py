@@ -2648,7 +2648,67 @@ class HKTradingController(QObject):
                                 self.log_message.emit(f"🛡️ {code} 已加载移动止损监控: 现价={current_price:.3f}, ATR={atr_value:.3f}")
                     except Exception as e:
                         logger.error(f"Error calculating ATR for existing position {code}: {e}")
-            self.log_message.emit("✅ 风险监控初始化完成")
+
+            # 🛡️ [影子账本-ATR注入] 将硬编码底仓也纳入风控监控
+            manual_hk_pos = {
+                'HK.00699': {'qty': 5000, 'cost': 14.31, 'name': '均胜电子'}
+            }
+            for m_code, m_info in manual_hk_pos.items():
+                if m_code in self.position_trackers:
+                    continue  # 已由 API 数据建立追踪器，跳过
+                try:
+                    current_price = m_info['cost']  # 兜底：使用成本价
+                    if self.quote_ctx:
+                        ret_snap, snap_data = self.quote_ctx.get_market_snapshot([m_code])
+                        if ret_snap == RET_OK and not snap_data.empty:
+                            last_price = float(snap_data.iloc[0].get('last_done', 0))
+                            if last_price > 0:
+                                current_price = last_price
+
+                    atr_value = 0.0
+                    try:
+                        now_t = datetime.now()
+                        end_time = now_t.replace(minute=(now_t.minute // 30) * 30, second=0, microsecond=0).strftime("%Y-%m-%d %H:%M:%S")
+                        start_time = (now_t - timedelta(days=15)).strftime("%Y-%m-%d")
+                        chan = CChan(
+                            code=m_code,
+                            begin_time=start_time,
+                            end_time=end_time,
+                            data_src=DATA_SRC.FUTU,
+                            lv_list=[KL_TYPE.K_30M],
+                            config=self.chan_config
+                        )
+                        if chan and len(chan[0]) > 0:
+                            kl_list = list(chan[0].klu_iter())
+                            atr_value = self._calculate_atr(kl_list, period=14)
+                    except Exception:
+                        pass
+
+                    if atr_value <= 0:
+                        atr_value = current_price * 0.02  # 兜底：2% 作为 ATR 估算
+
+                    self.position_trackers[m_code] = {
+                        'highest_price': current_price,
+                        'atr': atr_value,
+                        'entry_price': m_info['cost'],
+                        'trail_active': False,
+                        'bars_held': 0
+                    }
+                    self._subscribe_stock_quote(m_code)
+                    self.log_message.emit(f"🛡️ [影子账本-ATR] {m_code} ({m_info['name']}) 已注入风控追踪: 现价={current_price:.3f}, ATR={atr_value:.3f}")
+                except Exception as e_shadow:
+                    self.log_message.emit(f"⚠️ [影子账本-ATR] {m_code} 注入失败: {e_shadow}")
+                    # 兜底：即使报价/ATR 计算失败，也建立追踪器
+                    self.position_trackers[m_code] = {
+                        'highest_price': m_info['cost'],
+                        'atr': m_info['cost'] * 0.02,
+                        'entry_price': m_info['cost'],
+                        'trail_active': False,
+                        'bars_held': 0
+                    }
+                    self.log_message.emit(f"🛡️ [影子账本-ATR] {m_code} 已用兜底参数建立追踪器 (ATR=成本价×2%)")
+
+            self.log_message.emit(f"✅ 风险监控初始化完成，共 {len(self.position_trackers)} 只标的纳入追踪。")
         except Exception as e:
             self.log_message.emit(f"⚠️ 初始化风险监控失败: {e}")
 
