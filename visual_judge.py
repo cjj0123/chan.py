@@ -91,10 +91,10 @@ class ModelDispatcher:
     """模型调度员：负责分工和回退"""
     def __init__(self):
         # 🛡️ [对齐 2026] 使用稳定版模型名称，防止预览版不稳定导致的 504
-        # 如果环境变量有设置则用环境变量，否则用 1.5 系列稳定版
-        self.primary_model = os.getenv("GEMINI_PRIMARY_MODEL", "gemini-1.5-pro")
-        self.verifier_model = os.getenv("GEMINI_VERIFIER_MODEL", "gemini-1.5-flash")
-        self.expert_model = os.getenv("GEMINI_EXPERT_MODEL", "gemini-1.5-flash")
+        # 如果环境变量有设置则用环境变量，否则用 2.5 系列稳定版
+        self.primary_model = os.getenv("GEMINI_PRIMARY_MODEL", "gemini-2.5-pro")
+        self.verifier_model = os.getenv("GEMINI_VERIFIER_MODEL", "gemini-2.5-flash")
+        self.expert_model = os.getenv("GEMINI_EXPERT_MODEL", "gemini-2.5-flash")
 
 class VisualJudge:
     def __init__(self):
@@ -214,10 +214,10 @@ class VisualJudge:
                         time.sleep(wait_time)
                         continue
                 
-                # 如果是模型名称错误 (404)，尝试切换到 1.5-pro 兜底
-                if "404" in error_str and model_id != "gemini-1.5-pro":
-                    print(f"      🔄 模型 {model_id} 不可用，尝试使用 gemini-1.5-pro 兜底...")
-                    model_id = "gemini-1.5-pro"
+                # 如果是模型名称错误 (404)，尝试切换到 2.5-pro 兜底
+                if "404" in error_str and model_id != "gemini-2.5-pro":
+                    print(f"      🔄 模型 {model_id} 不可用，尝试使用 gemini-2.5-pro 兜底...")
+                    model_id = "gemini-2.5-pro"
                     if attempt < max_retries - 1:
                         continue
                 break

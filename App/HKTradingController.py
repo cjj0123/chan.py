@@ -2231,7 +2231,15 @@ class HKTradingController(QObject):
         if not hasattr(self, 'position_trackers') or not self.position_trackers:
             return
 
+        # 周期性显示追踪信息保护心跳
+        if not hasattr(self, '_last_atr_summary_time'):
+            self._last_atr_summary_time = time.time() - 3600 # 初始立刻触发
             
+        import time
+        if time.time() - self._last_atr_summary_time >= 1800 and self.position_trackers:
+            self.log_message.emit(f"🔍 [港股-风控] ATR心跳: 正在为 {len(self.position_trackers)} 只标的提供动态止损监控。")
+            self._last_atr_summary_time = time.time()
+
         codes_to_check = list(self.position_trackers.keys())
         for code in codes_to_check:
             # 🚀 [性能优化 Phase 8] 移除循环内的 get_position_quantity 实时查询
@@ -2493,7 +2501,19 @@ class HKTradingController(QObject):
                                 'avg_cost': safe_float(row.get('cost_price', 0.0))
                             })
             else:
-                pass
+                # 💡 [影子账本自愈] API 失败时，保留之前的影子缓存
+                for ghost_code, ghost_qty in self.position_cache.items():
+                    if ghost_qty > 0:
+                        new_cache[ghost_code] = ghost_qty
+                        positions_list.append({
+                            'symbol': ghost_code.split('.')[-1],
+                            'code': ghost_code,
+                            'name': '影子持仓保持',
+                            'qty': ghost_qty,
+                            'mkt_value': 0.0,
+                            'pnl_ratio': 0.0,
+                            'avg_cost': 0.0
+                        })
             
             # 🛡️ [影子账本 - 强制隔离区穿透]
             # 即使 API 返回空，也根据 hard-coded 的底仓进行补齐展示

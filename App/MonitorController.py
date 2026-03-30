@@ -737,6 +737,7 @@ class MarketMonitorController(QObject):
                     
                     positions.append({
                         'symbol': code,
+                        'code': code,
                         'qty': qty,
                         'mkt_value': mkt_val,
                         'avg_cost': safe_float(row.get('cost_price', 0.0)),
@@ -744,6 +745,19 @@ class MarketMonitorController(QObject):
                         'can_sell_qty': can_sell
                     })
                 self.shadow_ledger = new_ledger
+            else:
+                # 💡 [影子账本自愈] 当 API 同步失败或空持仓时，从动态的影子账本复原部位进行预览
+                for ghost_code, ghost_qty in self.shadow_ledger.items():
+                    if ghost_qty > 0:
+                        positions.append({
+                            'symbol': ghost_code,
+                            'code': ghost_code,
+                            'qty': ghost_qty,
+                            'mkt_value': 0.0,
+                            'avg_cost': 0.0,
+                            'mkt_price': 0.0,
+                            'can_sell_qty': ghost_qty if self.trd_env == TrdEnv.SIMULATE else 0
+                        })
 
             # 🛡️ [A股影子账本 - 强制隔离区穿透] (同步自港股逻辑)
             manual_cn_pos = {
@@ -877,6 +891,14 @@ class MarketMonitorController(QObject):
         # 查询当前实际持仓
         self._init_trd_ctx()
         try:
+            # 周期性显示追踪信息保护心跳
+            if not hasattr(self, '_last_atr_summary_time'):
+                self._last_atr_summary_time = time.time() - 3600 # 初始立刻触发
+                
+            if time.time() - self._last_atr_summary_time >= 1800 and getattr(self, 'position_trackers', {}):
+                self.log_message.emit(f"🔍 [A股-风控] ATR心跳: 正在为 {len(self.position_trackers)} 只标的提供动态止损监控。")
+                self._last_atr_summary_time = time.time()
+
             refresh = (self.trd_env == TrdEnv.SIMULATE)
             ret, pos_data = self.trd_ctx.position_list_query(acc_id=self.trd_acc_id, trd_env=self.trd_env, refresh_cache=False)
             current_positions = {}

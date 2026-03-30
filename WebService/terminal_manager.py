@@ -203,8 +203,13 @@ class WebTerminalManager:
             print("DEBUG: HK thread started.")
             # Initial fund sync to populate shadow ledger / positions
             # This is an async method, need to run it in the thread's event loop
-            asyncio.run(self.hk_controller._sync_positions_async())
-            print("DEBUG: HK initial fund query done.")
+            try:
+                asyncio.run(asyncio.wait_for(self.hk_controller._sync_positions_async(), timeout=30.0))
+                print("DEBUG: HK initial fund query done.")
+            except Exception as e:
+                print(f"DEBUG: HK initial fund query failed or timed out: {e}")
+                self.hk_controller.log_message.emit(f"⚠️ 港股初始持仓同步未完成，可能是 OpenD 连接问题。后台将继续尝试。({e})")
+            
             # Start main trading loop
             self.hk_controller.run_scan_and_trade()
             
@@ -224,12 +229,12 @@ class WebTerminalManager:
         print("DEBUG: Monitor threads spawned.")
 
     def get_recent_signals(self, limit=50):
-        """Fetch signals from the last 72h that occurred during trading hours."""
+        """Fetch signals from the last 12h that occurred during trading hours."""
         from Trade.db_util import CChanDB
         db = CChanDB()
         
         # Use Python to get the local cutoff time to avoid SQLite timezone mismatch
-        cutoff_time = (datetime.now() - timedelta(hours=96)).strftime('%Y-%m-%d %H:%M:%S')
+        cutoff_time = (datetime.now() - timedelta(hours=12)).strftime('%Y-%m-%d %H:%M:%S')
         query = "SELECT * FROM trading_signals WHERE add_date >= ? ORDER BY add_date DESC LIMIT ?"
         
         try:
