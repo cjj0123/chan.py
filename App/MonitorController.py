@@ -824,8 +824,16 @@ class MarketMonitorController(QObject):
                     if ret_snap == RET_OK and not snap_data.empty:
                         for _, s_row in snap_data.iterrows():
                             s_code = s_row['code']
-                            last_price = safe_float(s_row.get('last_done', 0.0))
-                            if last_price <= 0: continue
+                            # 🚦 [Phase 12] 字段层级穿透: last_price(Futu快照主字段) -> last_done -> prev_close_price(休市居尛)
+                            last_price = safe_float(s_row.get('last_price', 0.0))
+                            if last_price <= 0:
+                                last_price = safe_float(s_row.get('last_done', 0.0))
+                            if last_price <= 0:
+                                last_price = safe_float(s_row.get('prev_close_price', 0.0))
+                            if last_price <= 0:
+                                last_price = safe_float(s_row.get('nominal_price', 0.0))
+                            if last_price <= 0:
+                                continue  # 所有字段均为 0，跳过
                             
                             for p in positions:
                                 if (p.get('code') == s_code or p.get('symbol') == s_code):
