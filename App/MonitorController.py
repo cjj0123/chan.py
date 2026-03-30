@@ -821,9 +821,19 @@ class MarketMonitorController(QObject):
                 self._cached_acc_funds = {'available': 0.0, 'total': 0.0, 'today_pl': 0.0}
 
             if ret_acc == RET_OK and not acc_data.empty:
-                self._cached_acc_funds['available'] = float(acc_data['cash'].iloc[0])
-                self._cached_acc_funds['total'] = float(acc_data['total_assets'].iloc[0])
-                self._cached_acc_funds['today_pl'] = float(acc_data.iloc[0].get('today_pl', 0.0))
+                row = acc_data.iloc[0]
+                self._cached_acc_funds['available'] = float(row.get('cash', 0.0))
+                self._cached_acc_funds['total'] = float(row.get('total_assets', row.get('power', 0.0)))
+                # 🔥 [Phase 12] today_pl 多字段穿透
+                today_pl_val = row.get('today_pl', None)
+                if today_pl_val is None or today_pl_val == 'N/A' or today_pl_val == '':
+                    today_pl_val = row.get('realized_pl', None)
+                if today_pl_val is None or today_pl_val == 'N/A' or today_pl_val == '':
+                    today_pl_val = row.get('unrealized_pl', 0.0)
+                try:
+                    self._cached_acc_funds['today_pl'] = float(today_pl_val) if today_pl_val is not None else 0.0
+                except (ValueError, TypeError):
+                    self._cached_acc_funds['today_pl'] = 0.0
 
             self.funds_updated.emit(self._cached_acc_funds['available'], self._cached_acc_funds['total'], self._cached_acc_funds['today_pl'], positions)
         except Exception as e:
@@ -893,14 +903,7 @@ class MarketMonitorController(QObject):
         # 查询当前实际持仓
         self._init_trd_ctx()
         try:
-            # 周期性显示追踪信息保护心跳
-            if not hasattr(self, '_last_atr_summary_time'):
-                self._last_atr_summary_time = time.time() - 3600 # 初始立刻触发
-                
-            if time.time() - self._last_atr_summary_time >= 60:
-                tracker_count = len(getattr(self, 'position_trackers', {}))
-                self.log_message.emit(f"🔍 [A股-风控] ATR心跳: 正在为 {tracker_count} 只标的提供动态止损监控。")
-                self._last_atr_summary_time = time.time()
+            # 心跳已移至主循环 _async_main 中，此处不再重复输出
 
             refresh = (self.trd_env == TrdEnv.SIMULATE)
             ret, pos_data = self.trd_ctx.position_list_query(acc_id=self.trd_acc_id, trd_env=self.trd_env, refresh_cache=False)
@@ -1159,6 +1162,10 @@ class MarketMonitorController(QObject):
         last_heartbeat_min = -1
         last_stop_check_time = time.time()
 
+        # 🔥 [Phase 12 修复] ATR 心跳独立于交易时间，始终运行
+        if not hasattr(self, '_last_atr_heartbeat_time'):
+            self._last_atr_heartbeat_time = time.time() - 3600  # 启动时立即触发
+
         while self._is_running:
             try:
                 now = datetime.now()
@@ -1173,8 +1180,14 @@ class MarketMonitorController(QObject):
                 # 热加载 ML 模型
                 self.signal_validator.check_and_reload()
 
-                # 心跳日志 (每分钟一次)
-                # 心跳逻辑 (仅更新内部变量，不再打印日志以减少刷屏)
+                # 🔥 [Phase 12] ATR 心跳：无论是否交易时间都输出，证明进程存活
+                if time.time() - self._last_atr_heartbeat_time >= 60:
+                    tracker_count = len(getattr(self, 'position_trackers', {}))
+                    trading_status = '⏰ 盘中' if self.is_trading_time() else '💤 休市'
+                    self.log_message.emit(f"🔍 [A股-风控] ATR心跳: 正在为 {tracker_count} 只标的提供动态止损监控。({trading_status})")
+                    self._last_atr_heartbeat_time = time.time()
+
+                # 心跳逻辑 (仅更新内部变量)
                 if now.minute != last_heartbeat_min:
                     last_heartbeat_min = now.minute
 

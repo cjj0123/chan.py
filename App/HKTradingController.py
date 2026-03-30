@@ -1392,6 +1392,10 @@ class HKTradingController(QObject):
         last_stop_check_time = time.time()
         last_escape_check_time = 0  # 设置为 0 强制启动时立即跑一次 5M 逃顶检测
         
+        # 🔥 [Phase 12 修复] ATR 心跳独立于交易时间，始终运行，保证前端知道进程存活
+        if not hasattr(self, '_last_atr_heartbeat_time'):
+            self._last_atr_heartbeat_time = time.time() - 3600  # 启动时立即触发
+
         while self._is_running:
             try:
                 now = datetime.now()
@@ -1410,6 +1414,13 @@ class HKTradingController(QObject):
                 
                 # Phase 4: 检查并热加载最新的优化的模型
                 self.signal_validator.check_and_reload()
+                
+                # 🔥 [Phase 12] ATR 心跳：无论是否交易时间都输出，证明进程存活
+                if time.time() - self._last_atr_heartbeat_time >= 60:
+                    tracker_count = len(getattr(self, 'position_trackers', {}))
+                    trading_status = '⏰ 盘中' if self.is_trading_time() else '💤 休市'
+                    self.log_message.emit(f"🔍 [港股-风控] ATR心跳: 正在为 {tracker_count} 只标的提供动态止损监控。({trading_status})")
+                    self._last_atr_heartbeat_time = time.time()
                 
                 # 检查是否暂停
                 if self._is_paused:
@@ -2228,14 +2239,7 @@ class HKTradingController(QObject):
         if not TRADING_CONFIG.get('enable_stop_loss', True):
             return
             
-        # 周期性显示追踪信息保护心跳
-        if not hasattr(self, '_last_atr_summary_time'):
-            self._last_atr_summary_time = time.time() - 3600 # 初始立刻触发
-            
-        if time.time() - self._last_atr_summary_time >= 60:
-            tracker_count = len(getattr(self, 'position_trackers', {}))
-            self.log_message.emit(f"🔍 [港股-风控] ATR心跳: 正在为 {tracker_count} 只标的提供动态止损监控。")
-            self._last_atr_summary_time = time.time()
+        # 心跳已移至主循环 _async_main 中，此处不再重复输出
 
         if not hasattr(self, 'position_trackers') or not self.position_trackers:
             return
@@ -2568,9 +2572,19 @@ class HKTradingController(QObject):
                 self._cached_acc_funds = {'available': 0.0, 'total': 0.0, 'today_pl': 0.0}
 
             if ret_acc == RET_OK and not acc_data.empty:
-                self._cached_acc_funds['available'] = float(acc_data['cash'].iloc[0])
-                self._cached_acc_funds['total'] = float(acc_data['total_assets'].iloc[0])
-                self._cached_acc_funds['today_pl'] = float(acc_data.iloc[0].get('today_pl', 0.0))
+                row = acc_data.iloc[0]
+                self._cached_acc_funds['available'] = float(row.get('cash', 0.0))
+                self._cached_acc_funds['total'] = float(row.get('total_assets', row.get('power', 0.0)))
+                # 🔥 [Phase 12] today_pl 多字段穿透：Futu 不同环境/账号类型可能使用不同字段名
+                today_pl_val = row.get('today_pl', None)
+                if today_pl_val is None or today_pl_val == 'N/A' or today_pl_val == '':
+                    today_pl_val = row.get('realized_pl', None)
+                if today_pl_val is None or today_pl_val == 'N/A' or today_pl_val == '':
+                    today_pl_val = row.get('unrealized_pl', 0.0)
+                try:
+                    self._cached_acc_funds['today_pl'] = float(today_pl_val) if today_pl_val is not None else 0.0
+                except (ValueError, TypeError):
+                    self._cached_acc_funds['today_pl'] = 0.0
             
             self.funds_updated.emit(self._cached_acc_funds['available'], self._cached_acc_funds['total'], self._cached_acc_funds['today_pl'], positions_list)
                 

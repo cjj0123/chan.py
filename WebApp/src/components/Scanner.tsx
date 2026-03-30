@@ -33,7 +33,9 @@ export default function Scanner() {
     return () => clearInterval(interval);
   }, []);
 
-  const filteredSignals = signals.filter(s => 
+  // 🔥 [Phase 12] 过滤掉缺少关键字段的信号，防止渲染崩溃
+  const validSignals = signals.filter(s => s.stock_code && s.bstype);
+  const filteredSignals = validSignals.filter(s => 
     (s.stock_code && s.stock_code.toLowerCase().includes(filter.toLowerCase())) ||
     (s.bstype && s.bstype.toLowerCase().includes(filter.toLowerCase()))
   );
@@ -82,7 +84,8 @@ export default function Scanner() {
                 </thead>
                 <tbody>
                     {filteredSignals.map((signal: any, i: number) => {
-                        const isBuy = !signal.bstype.startsWith('S');
+                        const bstype = signal.bstype || 'UNKNOWN';
+                        const isBuy = !bstype.startsWith('S') && !bstype.startsWith('s');
                         let mlScore = signal.ml_score ?? signal.ml_prob ?? 0;
                         if (mlScore <= 1.0 && mlScore > 0) mlScore = Math.round(mlScore * 100);
                         const visualScore = Math.round(signal.model_score_before ?? signal.visual_score ?? 0);
@@ -108,7 +111,7 @@ export default function Scanner() {
                                 </td>
                                 <td className="px-6 py-4 bg-white/[0.015] border-y border-white/[0.05] text-center">
                                     <span className={`px-4 py-1.5 rounded-lg text-[10px] font-black tracking-widest ${isBuy ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-500 border border-rose-500/20'}`}>
-                                        {signal.bstype}
+                                        {bstype}
                                     </span>
                                 </td>
                                 <td className="px-6 py-4 bg-white/[0.015] border-y border-white/[0.05] text-right font-mono text-slate-300 font-bold text-[13px]">

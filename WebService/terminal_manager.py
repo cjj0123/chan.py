@@ -235,74 +235,96 @@ class WebTerminalManager:
         print("DEBUG: Monitor threads spawned.")
 
     def get_recent_signals(self, limit=50):
-        """Fetch signals from the last 12h that occurred during trading hours."""
+        """Fetch signals - extended window for weekends/holidays, with robust fallback."""
         from Trade.db_util import CChanDB
-        db = CChanDB()
+        import os
+        import json
         
-        # Use Python to get the local cutoff time to avoid SQLite timezone mismatch
-        cutoff_time = (datetime.now() - timedelta(hours=12)).strftime('%Y-%m-%d %H:%M:%S')
+        # 🔥 [Phase 12] 动态时间窗口：周末扩大到 72h，平日 12h
+        now = datetime.now()
+        if now.weekday() >= 5:  # 周末
+            hours_back = 72
+        else:
+            hours_back = 12
+        
+        cutoff_time = (now - timedelta(hours=hours_back)).strftime('%Y-%m-%d %H:%M:%S')
         query = "SELECT * FROM trading_signals WHERE add_date >= ? ORDER BY add_date DESC LIMIT ?"
         
+        db_results = []
         try:
+            # 🔥 [Phase 12] 检查数据库文件是否存在且可访问
+            db = CChanDB()
+            db_path = getattr(db, 'db_path', 'chan_trading.db')
+            if os.path.islink(db_path) and not os.path.exists(db_path):
+                raise FileNotFoundError(f"Database symlink broken: {db_path}")
+            
             df = db.execute_query(query, (cutoff_time, limit))
-            if df.empty:
-                return []
-            
-            results = []
-            for _, row in df.iterrows():
-                try:
-                    results.append(row.to_dict())
-                except Exception as e:
-                    logging.error(f"Error processing signal row: {e}")
-                    results.append(row.to_dict()) # Fallback
-            
-            return results
+            if not df.empty:
+                for _, row in df.iterrows():
+                    try:
+                        d = row.to_dict()
+                        # 确保关键字段存在且有效
+                        if not d.get('stock_code') and d.get('code'):
+                            d['stock_code'] = d['code']
+                        if not d.get('bstype'):
+                            d['bstype'] = d.get('bs_type', 'UNKNOWN')
+                        db_results.append(d)
+                    except Exception as e:
+                        logging.error(f"Error processing signal row: {e}")
+                
+                print(f"DEBUG: [Scanner] Fetched {len(db_results)} signals from DB (cutoff: {cutoff_time})")
+                return db_results
+            else:
+                print(f"DEBUG: [Scanner] DB query returned empty (cutoff: {cutoff_time}). Falling through to JSON fallback.")
         except Exception as e:
             logging.error(f"Error fetching signals from DB: {e}")
-            
-            # --- Fallback to discovered_signals.json if DB is unavailable (e.g., ext drive unplugged) ---
-            print(f"DEBUG: Attempting to load fallback signals from discovered_signals.json due to DB error.")
-            import json
-            import os
-            
-            fallback_results = []
-            try:
-                if os.path.exists("discovered_signals.json"):
-                    with open("discovered_signals.json", "r") as f:
-                        data = json.load(f)
-                        # Extract signals
-                        for k, dt_str in data.items():
-                            # Typical key layout: STRICT_HK.00358_2026-03-20 15:30:00_1 or LOOSE_HK.02580_1p
-                            # We can just extract the symbol by splitting '.' and '_'
-                            parts = k.split('.')
-                            if len(parts) >= 2:
-                                code_part = parts[-1].split('_')[0]
-                                prefix = parts[-2].split('_')[-1]
-                                stock_code = f"{prefix}.{code_part}"
-                                
-                                bstype = "1"
-                                if "_1p" in k: bstype = "1p"
-                                elif "_2s" in k: bstype = "2s"
-                                elif "_2" in k: bstype = "2"
-                                elif "_3a" in k: bstype = "3a"
-                                elif "_3b" in k: bstype = "3b"
-                                
-                                fallback_results.append({
-                                    "stock_code": stock_code,
-                                    "add_date": dt_str,
-                                    "bstype": bstype,
-                                    "lv": "30M",         
-                                    "open_price": 0.0,
-                                    "model_score_before": 85 if "STRICT" in k else 65,
-                                    "status": "pending",
-                                    "ml_score": 85 if "STRICT" in k else 65
-                                })
-            except Exception as j_err:
-                print(f"ERROR: Fallback JSON parsing failed: {j_err}")
-                
-            # Sort by date descending
-            fallback_results.sort(key=lambda x: x["add_date"], reverse=True)
-            return fallback_results[:limit]
+            print(f"DEBUG: [Scanner] DB error: {e}. Attempting JSON fallback.")
+        
+        # --- Fallback: 永远尝试从 discovered_signals.json 加载 ---
+        print(f"DEBUG: [Scanner] Loading fallback signals from discovered_signals.json")
+        fallback_results = []
+        try:
+            json_path = "discovered_signals.json"
+            if os.path.exists(json_path):
+                with open(json_path, "r") as f:
+                    data = json.load(f)
+                    
+                for k, dt_str in data.items():
+                    try:
+                        # 解析 key: STRICT_HK.00358_2026-03-20 15:30:00_1 或 LOOSE_HK.02580_1p
+                        parts = k.split('.')
+                        if len(parts) >= 2:
+                            code_part = parts[-1].split('_')[0]
+                            prefix = parts[-2].split('_')[-1]
+                            stock_code = f"{prefix}.{code_part}"
+                            
+                            bstype = "1"
+                            if "_1p" in k: bstype = "1p"
+                            elif "_2s" in k: bstype = "2s"
+                            elif "_2" in k: bstype = "2"
+                            elif "_3a" in k: bstype = "3a"
+                            elif "_3b" in k: bstype = "3b"
+                            
+                            fallback_results.append({
+                                "stock_code": stock_code,
+                                "add_date": dt_str,
+                                "bstype": bstype,
+                                "lv": "30M",         
+                                "open_price": 0.0,
+                                "model_score_before": 85 if "STRICT" in k else 65,
+                                "status": "pending",
+                                "ml_score": 85 if "STRICT" in k else 65
+                            })
+                    except Exception:
+                        continue
+                        
+                print(f"DEBUG: [Scanner] Loaded {len(fallback_results)} signals from JSON fallback.")
+        except Exception as j_err:
+            print(f"ERROR: Fallback JSON parsing failed: {j_err}")
+        
+        # 按日期降序
+        fallback_results.sort(key=lambda x: x.get("add_date", ""), reverse=True)
+        return fallback_results[:limit]
 
     def generate_analysis_chart(self, symbol: str, lv_str: str = '30M'):
         """Generate a Chanlun chart with high-precision bottleneck diagnostics."""
