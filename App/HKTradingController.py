@@ -150,6 +150,10 @@ class HKTradingController(QObject):
         # 视觉评分缓存 (code_time_type -> score_dict)
         self.visual_score_cache = {}
 
+        # 🚀 [Phase 12] 自选股分组缓存 (频率过高保护)
+        self._watchlist_cache = {}
+        self._last_watchlist_time = 0
+
         self.last_login_time = None
         
         # 记录持仓的追踪止损状态: { 'HK.00700': {'highest_price': 300.5, 'atr': 5.2, 'atr_multiplier': 2.0} }
@@ -379,7 +383,12 @@ class HKTradingController(QObject):
         self.log_message.emit(f"🕹️ [手动-港股] 指令已入队: {action} {code} {qty}股 @ ${price}")
 
     def get_watchlist_data(self) -> Dict[str, str]:
-        """获取所选自选股分组的代码和名称清单（支持港/美/A全市场自选股同步）"""
+        """获取所选自选股分组的代码和名称清单（带 120s 频率保护缓存）"""
+        # 🚀 [Phase 12] 增加频率保护缓存
+        now = time.time()
+        if self._watchlist_cache and (now - self._last_watchlist_time < 120):
+            return self._watchlist_cache
+
         try:
             # 支持多分组合并: "港股,热点_实盘" -> 分别拉取再合并
             # 如果配置为 "全部" 或 ""，则拉取全量自选股
@@ -398,12 +407,22 @@ class HKTradingController(QObject):
                         merged_watchlist.update(partial)
                         # self.log_message.emit(f"✅ 分组 [{group or '全量自选'}] 获取到 {len(partial)} 只证券")
                     else:
+                        # 💡 [Error Resilience] 如果报错的是频率过高，则强制返回旧缓存而不打断
+                        err_msg = str(data)
+                        if "频率太高" in err_msg and self._watchlist_cache:
+                            self.log_message.emit(f"⚠️ [HK-API限频] 获取分组频率受限，自动降级使用内存快照。")
+                            return self._watchlist_cache
                         self.log_message.emit(f"⚠️ 获取分组 [{group}] 失败: {data}")
             
+            # 更新缓存
+            if merged_watchlist:
+                self._watchlist_cache = merged_watchlist
+                self._last_watchlist_time = now
+                
             return merged_watchlist
         except Exception as e:
             self.log_message.emit(f"❌ 获取自选股列表异常: {e}")
-            return {}
+            return self._watchlist_cache or {}
 
     def get_stock_info(self, code: str) -> Optional[Dict]:
         """获取单个股票的详细信息 (受 API 锁保护)"""

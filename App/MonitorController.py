@@ -138,6 +138,10 @@ class MarketMonitorController(QObject):
         self.risk_manager = get_risk_manager()
         self.max_total_positions = TRADING_CONFIG.get('max_total_positions', 10)
 
+        # 🚀 [Phase 12] 自选股分组缓存 (频率过高保护)
+        self._watchlist_cache = {}
+        self._last_watchlist_time = 0
+
         # 🚀 [Phase 11] 应用针对 A 股优化的专属参数
         cn_cfg = MARKET_SPECIFIC_CONFIG.get('CN', {})
         self.chan_config = CChanConfig(CHAN_CONFIG)
@@ -367,6 +371,12 @@ class MarketMonitorController(QObject):
     # ============================= 数据获取 =============================
 
     def get_watchlist_data(self) -> Dict[str, str]:
+        """获取 A 股自选股分组数据（带 120s 频率保护缓存）"""
+        # 🚀 [Phase 12] 增加频率保护缓存
+        now = time.time()
+        if self._watchlist_cache and (now - self._last_watchlist_time < 120):
+            return self._watchlist_cache
+
         if not self.quote_ctx:
             self._init_futu()
 
@@ -374,10 +384,20 @@ class MarketMonitorController(QObject):
         ret, data = self.quote_ctx.get_user_security(group_name=group)
         if ret == RET_OK:
             name_col = 'name' if 'name' in data.columns else 'stock_name'
-            return dict(zip(data['code'].tolist(), data[name_col].tolist()))
+            res = dict(zip(data['code'].tolist(), data[name_col].tolist()))
+            # 更新缓存
+            if res:
+                self._watchlist_cache = res
+                self._last_watchlist_time = now
+            return res
         else:
+            # 💡 [Error Resilience] 如果报错的是频率过高，则强制返回旧缓存而不打断
+            err_msg = str(data)
+            if "频率太高" in err_msg and self._watchlist_cache:
+                self.log_message.emit(f"⚠️ [A股-API限频] 获取分组频率受限，自动降级使用内存快照。")
+                return self._watchlist_cache
             self.log_message.emit(f"❌ [A股] 获取分组 {self.watchlist_group} 失败: {data}")
-            return {}
+            return self._watchlist_cache or {}
 
     # ============================= 交易执行 =============================
 
@@ -1740,7 +1760,49 @@ class MarketMonitorController(QObject):
                         self._subscribe_stock_quote(code) # 📡 [极速风控] 开启实时推送
                         count += 1
                         
+            # 🛡️ [影子账本-ATR注入-A股] 确保硬编码底仓也纳入风控监控池 (对齐港股)
+            manual_cn_pos = {
+                'SH.600644': {'qty': 900, 'cost': 11.99, 'name': '乐山电力'},
+                'SH.600505': {'qty': 1000, 'cost': 13.69, 'name': '西昌电力'},
+                'SZ.301517': {'qty': 500, 'cost': 52.09, 'name': '乖宝宠物'},
+                'SZ.301589': {'qty': 200, 'cost': 60.48, 'name': '诺瓦星云'},
+                'SZ.000063': {'qty': 1700, 'cost': 32.22, 'name': '中兴通讯'},
+                'SZ.000977': {'qty': 2400, 'cost': 56.21, 'name': '浪潮信息'},
+                'SZ.300288': {'qty': 1800, 'cost': 12.33, 'name': '朗玛信息'},
+                'SZ.300263': {'qty': 3700, 'cost': 9.87, 'name': '隆华科技'}
+            }
+            for m_code, m_info in manual_cn_pos.items():
+                if m_code in self.position_trackers:
+                    continue  # 已有 API 数据追踪，跳过
+                
+                try:
+                    # 优先获取实时报价
+                    current_price = m_info['cost']
+                    if self.quote_ctx:
+                        ret_sn, snap_data = self.quote_ctx.get_market_snapshot([m_code])
+                        if ret_sn == RET_OK and not snap_data.empty:
+                            last_p = float(snap_data.iloc[0].get('last_done', 0))
+                            if last_p > 0: current_price = last_p
+                    
+                    # 降级计算 ATR
+                    atr = self._calculate_atr(m_code)
+                    if atr <= 0:
+                        atr = current_price * 0.03  # A股波动大，兜底 3%
+
+                    self.position_trackers[m_code] = {
+                        'entry_price': m_info['cost'],
+                        'highest_price': max(m_info['cost'], current_price),
+                        'atr': atr,
+                        'trail_active': False
+                    }
+                    self.db.save_stop_loss_tracker(m_code, m_info['cost'], max(m_info['cost'], current_price), atr, 0)
+                    self.log_message.emit(f"🛡️ [A股-影子] 注入追踪器 {m_code} ({m_info['name']}): 成本={m_info['cost']:.2f}, ATR={atr:.3f}")
+                    self._subscribe_stock_quote(m_code)
+                    count += 1
+                except Exception as ex_m:
+                    self.log_message.emit(f"⚠️ [A股-影子] {m_code} 载入异常: {ex_m}")
+
             if count > 0:
-                self.log_message.emit(f"✅ [A股-风控] 成功追溯开启了 {count} 只个股的原始 ATR 止损阀值。")
+                self.log_message.emit(f"✅ [A股-风控] 初始化完成，共监控 {len(self.position_trackers)} 只个股 (含影子持仓)。")
         except Exception as e:
             logger.error(f"A股初始化全仓位ATR止损异常: {e}")
